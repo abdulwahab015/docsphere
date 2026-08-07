@@ -10,6 +10,14 @@ class Organization(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
+    djstripe_customer = models.OneToOneField(
+        "djstripe.Customer",
+        on_delete=models.SET_NULL,
+        to_field="id",
+        null=True,
+        blank=True,
+        related_name="organization",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -18,11 +26,7 @@ class Organization(models.Model):
 
 
 class User(AbstractUser):
-    """A member of an organization, authenticated by email.
-
-    ``organization`` is nullable so platform superusers can be created
-    without being tied to a tenant; regular members always have one.
-    """
+    """A member of an organization, authenticated by email."""
 
     class OrgRole(models.TextChoices):
         ADMIN = "ADMIN", "Admin"
@@ -30,11 +34,7 @@ class User(AbstractUser):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
-        Organization,
-        on_delete=models.CASCADE,
-        related_name="users",
-        null=True,
-        blank=True,
+        Organization, on_delete=models.CASCADE, related_name="users"
     )
     email = models.EmailField(unique=True)
     org_role = models.CharField(
