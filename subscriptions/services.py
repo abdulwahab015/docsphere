@@ -5,6 +5,7 @@ def get_active_subscription(organization):
     flag on User — subscription status changes independently of any user
     record (renewal, cancellation, expiry all happen on Stripe's side).
     """
-    if organization.djstripe_customer_id is None:
+    customer = organization.djstripe_customer
+    if customer is None:
         return None
-    return organization.djstripe_customer.subscriptions.filter(status="active").first()
+    return customer.subscriptions.filter(status="active").first()

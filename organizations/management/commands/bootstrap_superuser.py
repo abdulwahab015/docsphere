@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from organizations.choices import OrgRole
 from organizations.models import Organization, User
 
 
@@ -14,13 +15,16 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         with transaction.atomic():
-            org, _ = Organization.objects.get_or_create(name=options["org_name"])
+            org, _ = Organization.objects.get_or_create(
+                name=options["org_name"],
+                defaults={"billing_email": options["email"]},
+            )
             user = User.objects.create_superuser(
                 email=options["email"],
                 username=options["email"],
                 password=options["password"],
                 organization=org,
-                org_role=User.OrgRole.ADMIN,
+                org_role=OrgRole.ADMIN,
             )
         self.stdout.write(
             self.style.SUCCESS(f"Created superuser {user.email} in {org.name}")

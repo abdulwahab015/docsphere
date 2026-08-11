@@ -1,38 +1,33 @@
-import uuid
 from typing import ClassVar
 
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+from core.models import TimeStampedModel
+from organizations.choices import InvitationStatus, OrgRole
+from subscriptions.models import OrganizationSubscriptionMixin
 
-class Organization(models.Model):
+
+class Organization(TimeStampedModel, OrganizationSubscriptionMixin):
     """A tenant that owns users, projects, and a subscription."""
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=255)
-    djstripe_customer = models.OneToOneField(
-        "djstripe.Customer",
-        on_delete=models.SET_NULL,
-        to_field="id",
-        null=True,
-        blank=True,
-        related_name="organization",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    name = models.CharField(max_length=100)
+    billing_email = models.EmailField(blank=True)
 
     def __str__(self):
         return self.name
+
+    @property
+    def email(self):
+        """Alias for dj-stripe, which requires its subscriber model
+        (DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization") to expose
+        an `email` attribute."""
+        return self.billing_email
 
 
 class User(AbstractUser):
     """A member of an organization, authenticated by email."""
 
-    class OrgRole(models.TextChoices):
-        ADMIN = "ADMIN", "Admin"
-        MEMBER = "MEMBER", "Member"
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
         Organization, on_delete=models.CASCADE, related_name="users"
     )
@@ -48,15 +43,9 @@ class User(AbstractUser):
         return self.email
 
 
-class Invitation(models.Model):
+class Invitation(TimeStampedModel):
     """A pending email invite for a user to join an organization."""
 
-    class Status(models.TextChoices):
-        PENDING = "PENDING", "Pending"
-        ACCEPTED = "ACCEPTED", "Accepted"
-        EXPIRED = "EXPIRED", "Expired"
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
         Organization, on_delete=models.CASCADE, related_name="invitations"
     )
@@ -66,9 +55,10 @@ class Invitation(models.Model):
     email = models.EmailField()
     token = models.CharField(max_length=64, unique=True)
     status = models.CharField(
-        max_length=10, choices=Status.choices, default=Status.PENDING
+        max_length=10,
+        choices=InvitationStatus.choices,
+        default=InvitationStatus.PENDING,
     )
-    created_at = models.DateTimeField(auto_now_add=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):

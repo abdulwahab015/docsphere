@@ -5,7 +5,7 @@ from .models import Invitation, Organization, User
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
-    list_display = ("name", "djstripe_customer", "created_at")
+    list_display = ("name", "billing_email", "created_at")
     search_fields = ("name",)
 
 
