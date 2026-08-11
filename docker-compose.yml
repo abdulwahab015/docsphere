@@ -1,10 +1,12 @@
 services:
   db:
     image: postgres:16-alpine
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: docsphere
-      POSTGRES_USER: docsphere
-      POSTGRES_PASSWORD: docsphere
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -20,7 +22,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://docsphere:docsphere@db:5432/docsphere
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     depends_on:
       - db
 
