@@ -22,7 +22,13 @@ class Project(TimeStampedModel):
     description = models.TextField(blank=True)
 
     class Meta:
-        unique_together = ("organization", "name")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "name"],
+                name="unique_organization_project_name",
+                violation_error_message="A project with this name already exists in your organization.",
+            )
+        ]
 
     def __str__(self):
         return self.name
@@ -62,7 +68,13 @@ class ProjectPermission(models.Model):
     access_level = models.CharField(max_length=10, choices=AccessLevel.choices)
 
     class Meta:
-        unique_together = ("project", "user")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "user"],
+                name="unique_project_user_permission",
+                violation_error_message="This user already has a permission assigned for this project.",
+            )
+        ]
 
     def __str__(self):
         return f"{self.user} - {self.project} ({self.access_level})"
@@ -82,7 +94,13 @@ class DocumentPermission(models.Model):
     access_level = models.CharField(max_length=10, choices=AccessLevel.choices)
 
     class Meta:
-        unique_together = ("document", "user")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "user"],
+                name="unique_document_user_permission",
+                violation_error_message="This user already has a permission assigned for this document.",
+            )
+        ]
 
     def __str__(self):
         return f"{self.user} - {self.document} ({self.access_level})"
