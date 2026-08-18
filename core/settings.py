@@ -30,7 +30,7 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 
-AUTH_USER_MODEL = "organizations.User"
+AUTH_USER_MODEL = "users.User"
 
 # Application definition
 
@@ -41,7 +41,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django_extensions",
     "organizations",
+    "users",
     "projects",
     "subscriptions",
     "djstripe",
@@ -112,7 +114,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "Asia/Karachi"
+TIME_ZONE = "UTC"
 
 USE_I18N = True
 

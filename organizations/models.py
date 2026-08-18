@@ -1,18 +1,15 @@
-from typing import ClassVar
+from functools import cached_property
 
-from django.contrib.auth.models import AbstractUser
 from django.db import models
-
-from core.models import TimeStampedModel
-from organizations.choices import InvitationStatus, OrgRole
-from subscriptions.models import OrganizationSubscriptionMixin
+from django_extensions.db.models import TimeStampedModel
+from djstripe.models import Customer
 
 
-class Organization(TimeStampedModel, OrganizationSubscriptionMixin):
+class Organization(TimeStampedModel):
     """A tenant that owns users, projects, and a subscription."""
 
     name = models.CharField(max_length=100)
-    billing_email = models.EmailField(blank=True)
+    billing_email = models.EmailField(blank=True, null=True, unique=True)
 
     def __str__(self):
         return self.name
@@ -24,42 +21,12 @@ class Organization(TimeStampedModel, OrganizationSubscriptionMixin):
         an `email` attribute."""
         return self.billing_email
 
+    @cached_property
+    def active_subscription(self):
+        """Returns the org's current active dj-stripe Subscription, or None."""
 
-class User(AbstractUser):
-    """A member of an organization, authenticated by email."""
+        customer = Customer.objects.filter(subscriber=self).first()
+        if customer is None:
+            return None
 
-    organization = models.ForeignKey(
-        Organization, on_delete=models.CASCADE, related_name="users"
-    )
-    email = models.EmailField(unique=True)
-    org_role = models.CharField(
-        max_length=10, choices=OrgRole.choices, default=OrgRole.MEMBER
-    )
-
-    USERNAME_FIELD = "email"
-    REQUIRED_FIELDS: ClassVar[list[str]] = ["username"]
-
-    def __str__(self):
-        return self.email
-
-
-class Invitation(TimeStampedModel):
-    """A pending email invite for a user to join an organization."""
-
-    organization = models.ForeignKey(
-        Organization, on_delete=models.CASCADE, related_name="invitations"
-    )
-    invited_by = models.ForeignKey(
-        User, on_delete=models.SET_NULL, null=True, related_name="sent_invitations"
-    )
-    email = models.EmailField()
-    token = models.CharField(max_length=64, unique=True)
-    status = models.CharField(
-        max_length=10,
-        choices=InvitationStatus.choices,
-        default=InvitationStatus.PENDING,
-    )
-    accepted_at = models.DateTimeField(null=True, blank=True)
-
-    def __str__(self):
-        return f"{self.email} ({self.status})"
+        return customer.subscriptions.filter(status="active").first()

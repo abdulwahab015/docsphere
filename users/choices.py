@@ -1,7 +1,7 @@
 from django.db import models
 
 
-class OrgRole(models.TextChoices):
+class OrganizationRole(models.TextChoices):
     ADMIN = "ADMIN", "Admin"
     MEMBER = "MEMBER", "Member"
 
