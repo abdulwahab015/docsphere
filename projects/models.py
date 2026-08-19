@@ -2,10 +2,11 @@ from django.conf import settings
 from django.db import models
 from django_extensions.db.models import TimeStampedModel
 
+from core.models import ActiveModel
 from projects.choices import AccessLevel
 
 
-class Project(TimeStampedModel):
+class Project(TimeStampedModel, ActiveModel):
     """A collection of documents scoped to a single organization."""
 
     organization = models.ForeignKey(
@@ -13,9 +14,7 @@ class Project(TimeStampedModel):
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.PROTECT,
         related_name="created_projects",
     )
 
@@ -35,7 +34,7 @@ class Project(TimeStampedModel):
         return self.name
 
 
-class Document(TimeStampedModel):
+class Document(TimeStampedModel, ActiveModel):
     """A text note/document that belongs to a project."""
 
     project = models.ForeignKey(
@@ -43,9 +42,7 @@ class Document(TimeStampedModel):
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.PROTECT,
         related_name="created_documents",
     )
 

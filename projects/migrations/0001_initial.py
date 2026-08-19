@@ -40,6 +40,7 @@ class Migration(migrations.Migration):
                         auto_now=True, verbose_name="modified"
                     ),
                 ),
+                ("is_active", models.BooleanField(default=True)),
                 (
                     "organization",
                     models.ForeignKey(
@@ -51,9 +52,7 @@ class Migration(migrations.Migration):
                 (
                     "created_by",
                     models.ForeignKey(
-                        blank=True,
-                        null=True,
-                        on_delete=django.db.models.deletion.SET_NULL,
+                        on_delete=django.db.models.deletion.PROTECT,
                         related_name="created_projects",
                         to=settings.AUTH_USER_MODEL,
                     ),
@@ -95,6 +94,7 @@ class Migration(migrations.Migration):
                         auto_now=True, verbose_name="modified"
                     ),
                 ),
+                ("is_active", models.BooleanField(default=True)),
                 (
                     "project",
                     models.ForeignKey(
@@ -106,9 +106,7 @@ class Migration(migrations.Migration):
                 (
                     "created_by",
                     models.ForeignKey(
-                        blank=True,
-                        null=True,
-                        on_delete=django.db.models.deletion.SET_NULL,
+                        on_delete=django.db.models.deletion.PROTECT,
                         related_name="created_documents",
                         to=settings.AUTH_USER_MODEL,
                     ),

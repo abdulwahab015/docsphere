@@ -5,15 +5,22 @@ from .models import Document, DocumentPermission, Project, ProjectPermission
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ("name", "organization", "created_by", "created")
-    list_filter = ("organization",)
+    list_display = ("name", "organization", "created_by", "is_active", "created")
+    list_filter = ("organization", "is_active")
     search_fields = ("name",)
 
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ("title", "project", "created_by", "created", "modified")
-    list_filter = ("project__organization",)
+    list_display = (
+        "title",
+        "project",
+        "created_by",
+        "is_active",
+        "created",
+        "modified",
+    )
+    list_filter = ("project__organization", "is_active")
     search_fields = ("title",)
 
 

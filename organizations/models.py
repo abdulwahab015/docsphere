@@ -29,4 +29,4 @@ class Organization(TimeStampedModel):
         if customer is None:
             return None
 
-        return customer.subscriptions.filter(status="active").first()
+        return customer.subscriptions.active().first()
