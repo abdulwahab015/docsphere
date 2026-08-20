@@ -2,7 +2,9 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
+from openpyxl.utils.exceptions import InvalidFileException
 from rest_framework import generics, status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -28,6 +30,11 @@ from users.api.v1.serializers import (
 from users.choices import InvitationStatus
 from users.models import Invitation
 from users.permissions import IsOrganizationAdmin
+from users.services import (
+    BulkInviteLimitExceeded,
+    bulk_create_invitations,
+    parse_invitation_emails,
+)
 from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 User = get_user_model()
@@ -56,6 +63,52 @@ class InvitationListCreateAPIView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         invitation = serializer.save()
         send_invitation_email_task.delay(invitation.pk)
+
+
+class InvitationBulkCreateAPIView(APIView):
+    """Creates invitations in bulk from an uploaded .xlsx file of email
+    addresses, scoped to the requesting admin's organization."""
+
+    permission_classes = [IsOrganizationAdmin]
+    parser_classes = [MultiPartParser]
+
+    @extend_schema(
+        request={
+            "multipart/form-data": {
+                "type": "object",
+                "properties": {"file": {"type": "string", "format": "binary"}},
+                "required": ["file"],
+            }
+        },
+        responses={
+            201: OpenApiResponse(description="Summary of created/skipped rows."),
+            400: OpenApiResponse(
+                description="Missing file, invalid .xlsx, or row-count cap exceeded."
+            ),
+        },
+    )
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response(
+                {"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            emails = parse_invitation_emails(upload)
+        except InvalidFileException:
+            return Response(
+                {"detail": "file must be a valid .xlsx workbook."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except BulkInviteLimitExceeded as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = bulk_create_invitations(emails, request)
+        return Response(
+            {"created": len(result["created"]), "skipped": result["skipped"]},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class InvitationAcceptAPIView(APIView):
