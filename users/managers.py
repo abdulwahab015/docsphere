@@ -1,4 +1,10 @@
 from django.contrib.auth.base_user import BaseUserManager
+from django.db import models
+
+
+class InvitationManager(models.Manager):
+    def for_organization(self, organization):
+        return self.filter(organization=organization)
 
 
 class UserManager(BaseUserManager):
