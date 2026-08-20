@@ -1,11 +1,13 @@
 from django.contrib.auth import get_user_model
+from django.shortcuts import get_object_or_404
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from users.permissions import IsOrgAdmin
 from users.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -75,3 +77,26 @@ class PasswordResetConfirmView(APIView):
         user.save(update_fields=["password"])
 
         return Response(status=status.HTTP_200_OK)
+
+
+class DeactivateUserView(APIView):
+    """Admin-only soft-removal of a user within the requesting admin's own
+    organization."""
+
+    permission_classes = [IsAuthenticated, IsOrgAdmin]
+
+    def delete(self, request, pk):
+        target = get_object_or_404(
+            get_user_model(), pk=pk, organization=request.user.organization
+        )
+
+        if target.id == request.user.id:
+            return Response(
+                {"detail": "You cannot deactivate your own account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        target.is_active = False
+        target.save(update_fields=["is_active"])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

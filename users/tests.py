@@ -8,6 +8,9 @@ from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from organizations.models import Organization
+from users.choices import OrganizationRole
+
 User = get_user_model()
 
 
@@ -119,3 +122,78 @@ class PasswordResetTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class DeactivateUserTests(APITestCase):
+    def setUp(self):
+        self.org = Organization.objects.create(name="Acme")
+        self.other_org = Organization.objects.create(name="Globex")
+
+        self.admin_password = "Admin-Pass-123!"
+        self.admin = User.objects.create_user(
+            email="admin@acme.example.com",
+            password=self.admin_password,
+            organization=self.org,
+            org_role=OrganizationRole.ADMIN,
+        )
+        self.member = User.objects.create_user(
+            email="member@acme.example.com",
+            password="Member-Pass-123!",
+            organization=self.org,
+            org_role=OrganizationRole.MEMBER,
+        )
+        self.other_org_user = User.objects.create_user(
+            email="member@globex.example.com",
+            password="Member-Pass-123!",
+            organization=self.other_org,
+            org_role=OrganizationRole.MEMBER,
+        )
+
+    def _deactivate_url(self, user):
+        return reverse("user-deactivate", kwargs={"pk": user.pk})
+
+    def test_admin_deactivates_user_in_own_org(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self._deactivate_url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_active)
+
+    def test_admin_cannot_deactivate_user_in_different_org(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self._deactivate_url(self.other_org_user))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.other_org_user.refresh_from_db()
+        self.assertTrue(self.other_org_user.is_active)
+
+    def test_admin_cannot_deactivate_self(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete(self._deactivate_url(self.admin))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_non_admin_forbidden(self):
+        self.client.force_authenticate(user=self.member)
+
+        response = self.client.delete(self._deactivate_url(self.other_org_user))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_deactivated_user_cannot_obtain_new_jwt(self):
+        self.client.force_authenticate(user=self.admin)
+        self.client.delete(self._deactivate_url(self.member))
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            reverse("auth-login"),
+            {"email": self.member.email, "password": "Member-Pass-123!"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
