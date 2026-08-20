@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -48,6 +49,8 @@ INSTALLED_APPS = [
     "subscriptions",
     "djstripe",
     "rest_framework",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
 ]
 
 MIDDLEWARE = [
@@ -154,3 +157,21 @@ STRIPE_LIVE_PUBLIC_KEY = config("STRIPE_LIVE_PUBLIC_KEY", default="")
 DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET", default="")
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
 DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
+
+
+# Django REST Framework / JWT auth
+# https://www.django-rest-framework.org/api-guide/settings/
+# https://django-rest-framework-simplejwt.readthedocs.io/en/latest/settings.html
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+}
