@@ -9,6 +9,10 @@ from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from organizations.models import Organization
+from users.choices import InvitationStatus, OrganizationRole
+from users.models import Invitation
+
 User = get_user_model()
 
 
@@ -129,5 +133,123 @@ class PasswordResetTests(APITestCase):
                     "new_password": "New-Strong-Pass!456",
                 },
             )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class InvitationTests(APITestCase):
+    def setUp(self):
+        self.org_a = Organization.objects.create(name="Org A")
+        self.org_b = Organization.objects.create(name="Org B")
+
+        self.admin_a = User.objects.create_user(
+            email="admin-a@example.com",
+            password="Admin-Pass-123!",
+            organization=self.org_a,
+            org_role=OrganizationRole.ADMIN,
+        )
+        self.member_a = User.objects.create_user(
+            email="member-a@example.com",
+            password="Member-Pass-123!",
+            organization=self.org_a,
+            org_role=OrganizationRole.MEMBER,
+        )
+        self.admin_b = User.objects.create_user(
+            email="admin-b@example.com",
+            password="Admin-Pass-123!",
+            organization=self.org_b,
+            org_role=OrganizationRole.ADMIN,
+        )
+
+    @patch("users.tasks.send_mail")
+    def test_admin_can_create_invitation_for_own_organization(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+
+        response = self.client.post(
+            reverse("invitation_list_create"), {"email": "invitee@example.com"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invitation = Invitation.objects.get(email="invitee@example.com")
+        self.assertEqual(invitation.organization, self.org_a)
+        self.assertEqual(invitation.invited_by, self.admin_a)
+        self.assertEqual(invitation.status, InvitationStatus.PENDING)
+        self.assertTrue(invitation.token)
+        mock_send_mail.assert_called_once()
+
+    def test_non_admin_cannot_create_invitation(self):
+        self.client.force_authenticate(self.member_a)
+
+        response = self.client.post(
+            reverse("invitation_list_create"), {"email": "invitee@example.com"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            Invitation.objects.filter(email="invitee@example.com").exists()
+        )
+
+    def test_admin_cannot_see_invitations_outside_own_organization(self):
+        Invitation.objects.create(
+            organization=self.org_b,
+            invited_by=self.admin_b,
+            email="other-org-invitee@example.com",
+            token="org-b-token",
+        )
+
+        self.client.force_authenticate(self.admin_a)
+        response = self.client.get(reverse("invitation_list_create"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        emails = [item["email"] for item in response.data]
+        self.assertNotIn("other-org-invitee@example.com", emails)
+
+    def test_accept_invitation_creates_user_and_logs_in(self):
+        invitation = Invitation.objects.create(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="new-user@example.com",
+            token="valid-token",
+        )
+
+        response = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "valid-token", "password": "Str0ng-New-Pass!"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+        user = User.objects.get(email="new-user@example.com")
+        self.assertEqual(user.organization, self.org_a)
+        self.assertTrue(user.check_password("Str0ng-New-Pass!"))
+
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, InvitationStatus.ACCEPTED)
+        self.assertIsNotNone(invitation.accepted_at)
+
+    def test_accept_invitation_twice_fails(self):
+        Invitation.objects.create(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="new-user@example.com",
+            token="valid-token",
+            status=InvitationStatus.ACCEPTED,
+        )
+
+        response = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "valid-token", "password": "Str0ng-New-Pass!"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_accept_invitation_with_invalid_token_fails(self):
+        response = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "nonexistent-token", "password": "Str0ng-New-Pass!"},
+        )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

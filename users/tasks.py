@@ -6,6 +6,26 @@ from django.core.mail import send_mail
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
+from users.models import Invitation
+
+
+@shared_task
+def send_invitation_email_task(invitation_id):
+    invitation = Invitation.objects.select_related("organization").get(
+        pk=invitation_id
+    )
+    accept_url = f"{settings.FRONTEND_URL}/accept-invite?token={invitation.token}"
+
+    send_mail(
+        subject=f"You've been invited to join {invitation.organization.name} on DocSphere",
+        message=(
+            f"You've been invited to join {invitation.organization.name} on DocSphere.\n\n"
+            f"Accept your invitation:\n\n{accept_url}"
+        ),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[invitation.email],
+    )
+
 
 @shared_task
 def send_password_reset_email_task(user_id):
