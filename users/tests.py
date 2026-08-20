@@ -1,11 +1,14 @@
+from io import BytesIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from openpyxl import Workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -14,6 +17,22 @@ from users.choices import InvitationStatus, OrganizationRole
 from users.models import Invitation
 
 User = get_user_model()
+
+XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def build_xlsx_upload(values, filename="invitees.xlsx"):
+    """Build an in-memory single-column .xlsx upload from a list of cell values."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    for value in values:
+        worksheet.append([value])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+
+    return SimpleUploadedFile(filename, buffer.read(), content_type=XLSX_CONTENT_TYPE)
 
 
 class JWTAuthTests(APITestCase):
@@ -253,3 +272,99 @@ class InvitationTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class InvitationBulkCreateTests(APITestCase):
+    def setUp(self):
+        self.org_a = Organization.objects.create(name="Org A")
+
+        self.admin_a = User.objects.create_user(
+            email="admin-a@example.com",
+            password="Admin-Pass-123!",
+            organization=self.org_a,
+            org_role=OrganizationRole.ADMIN,
+        )
+        self.member_a = User.objects.create_user(
+            email="member-a@example.com",
+            password="Member-Pass-123!",
+            organization=self.org_a,
+            org_role=OrganizationRole.MEMBER,
+        )
+
+    @patch("users.tasks.send_mail")
+    def test_valid_file_creates_invitations_and_sends_emails(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
+
+        response = self.client.post(
+            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 2)
+        self.assertEqual(response.data["skipped"], [])
+        self.assertEqual(mock_send_mail.call_count, 2)
+        self.assertTrue(Invitation.objects.filter(email="one@example.com").exists())
+        self.assertTrue(Invitation.objects.filter(email="two@example.com").exists())
+
+    @patch("users.tasks.send_mail")
+    def test_malformed_rows_are_skipped_without_failing_batch(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "not-an-email", "valid@example.com"])
+
+        response = self.client.post(
+            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        self.assertEqual(len(response.data["skipped"]), 1)
+        self.assertEqual(response.data["skipped"][0]["email"], "not-an-email")
+        self.assertEqual(response.data["skipped"][0]["reason"], "invalid email")
+        mock_send_mail.assert_called_once()
+
+    @patch("users.tasks.send_mail")
+    def test_existing_user_and_pending_invitation_are_skipped(self, mock_send_mail):
+        User.objects.create_user(
+            email="existing@example.com",
+            password="Existing-Pass-1!",
+            organization=self.org_a,
+        )
+        Invitation.objects.create(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="pending@example.com",
+            token="already-pending-token",
+        )
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(
+            ["Email", "existing@example.com", "pending@example.com", "new@example.com"]
+        )
+
+        response = self.client.post(
+            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        reasons = {item["email"]: item["reason"] for item in response.data["skipped"]}
+        self.assertEqual(
+            reasons["existing@example.com"], "user already exists in organization"
+        )
+        self.assertEqual(reasons["pending@example.com"], "invitation already pending")
+        mock_send_mail.assert_called_once()
+        self.assertTrue(Invitation.objects.filter(email="new@example.com").exists())
+
+    def test_non_admin_cannot_bulk_create_invitations(self):
+        self.client.force_authenticate(self.member_a)
+        upload = build_xlsx_upload(["Email", "someone@example.com"])
+
+        response = self.client.post(
+            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            Invitation.objects.filter(email="someone@example.com").exists()
+        )

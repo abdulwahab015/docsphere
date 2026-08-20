@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from openpyxl.utils.exceptions import InvalidFileException
 from rest_framework import generics, status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +18,7 @@ from users.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
 )
+from users.services import bulk_create_invitations, parse_invitation_emails
 from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 User = get_user_model()
@@ -33,6 +36,35 @@ class InvitationListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         invitation = serializer.save()
         send_invitation_email_task.delay(invitation.pk)
+
+
+class InvitationBulkCreateView(APIView):
+    """Creates invitations in bulk from an uploaded .xlsx file of email
+    addresses, scoped to the requesting admin's organization."""
+
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response(
+                {"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            emails = parse_invitation_emails(upload)
+        except InvalidFileException:
+            return Response(
+                {"detail": "file must be a valid .xlsx workbook."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = bulk_create_invitations(emails, request)
+        return Response(
+            {"created": len(result["created"]), "skipped": result["skipped"]},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class InvitationAcceptView(APIView):

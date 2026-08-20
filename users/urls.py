@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from users.views import (
     InvitationAcceptView,
+    InvitationBulkCreateView,
     InvitationListCreateView,
     LogoutView,
     PasswordResetConfirmView,
@@ -27,6 +28,11 @@ urlpatterns = [
         "invitations/",
         InvitationListCreateView.as_view(),
         name="invitation_list_create",
+    ),
+    path(
+        "invitations/bulk/",
+        InvitationBulkCreateView.as_view(),
+        name="invitation_bulk_create",
     ),
     path(
         "invitations/accept/", InvitationAcceptView.as_view(), name="invitation_accept"
