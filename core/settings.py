@@ -30,7 +30,7 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 
-AUTH_USER_MODEL = "organizations.User"
+AUTH_USER_MODEL = "users.User"
 
 # Application definition
 
@@ -41,7 +41,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django_extensions",
     "organizations",
+    "users",
     "projects",
     "subscriptions",
     "djstripe",
@@ -151,3 +153,4 @@ STRIPE_LIVE_SECRET_KEY = config("STRIPE_LIVE_SECRET_KEY", default="")
 STRIPE_LIVE_PUBLIC_KEY = config("STRIPE_LIVE_PUBLIC_KEY", default="")
 DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET", default="")
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
+DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"

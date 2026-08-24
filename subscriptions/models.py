@@ -1,1 +1,1 @@
-# Create your models here.
+# Subscriptions are managed by dj-stripe (djstripe.Customer / djstripe.Subscription).
