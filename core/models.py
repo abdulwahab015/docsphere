@@ -1,9 +1,13 @@
 from django.db import models
-from django_extensions.db.models import TimeStampedModel  # noqa: F401
+from django_extensions.db.models import (
+    TimeStampedModel as _DjangoExtensionsTimeStampedModel,
+)
 
 
-class ActiveModel(models.Model):
+class TimeStampedModel(_DjangoExtensionsTimeStampedModel):
+    """created/modified timestamps plus is_active, in one base class."""
+
     is_active = models.BooleanField(default=True)
 
-    class Meta:
+    class Meta(_DjangoExtensionsTimeStampedModel.Meta):
         abstract = True

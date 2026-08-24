@@ -1,8 +1,9 @@
 from functools import cached_property
 
 from django.db import models
-from django_extensions.db.models import TimeStampedModel
 from djstripe.models import Customer
+
+from core.models import TimeStampedModel
 
 
 class Organization(TimeStampedModel):
