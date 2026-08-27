@@ -6,18 +6,20 @@ from rest_framework import serializers as drf_serializers
 
 from users.api.v1.serializers import InvitationCreateSerializer
 from users.choices import InvitationStatus
+from users.constants import MAX_BULK_INVITE_ROWS
 from users.models import Invitation
 from users.tasks import send_invitation_email_task
 
 
-def parse_invitation_emails(file):
-    """Read a single-column .xlsx upload of email addresses.
+class BulkInviteLimitExceeded(Exception):
+    """Raised when an uploaded file has more rows than allowed."""
 
-    Returns the raw, stripped cell values in order. A header row is skipped
-    if the first cell isn't itself a valid email address. Validation beyond
-    that (malformed addresses, duplicates, existing users/invitations) is
-    left to `bulk_create_invitations`, which needs to report per-row reasons.
-    """
+
+def parse_invitation_emails(file):
+    """Read a single-column .xlsx upload into a list of raw email strings,
+    skipping a header row if present. Raises `BulkInviteLimitExceeded` if
+    there are more than `MAX_BULK_INVITE_ROWS` rows."""
+
     workbook = load_workbook(file, read_only=True, data_only=True)
     worksheet = workbook.active
 
@@ -29,6 +31,11 @@ def parse_invitation_emails(file):
 
     if values and not _is_valid_email(values[0]):
         values = values[1:]
+
+    if len(values) > MAX_BULK_INVITE_ROWS:
+        raise BulkInviteLimitExceeded(
+            f"file must contain at most {MAX_BULK_INVITE_ROWS} emails."
+        )
 
     return values
 

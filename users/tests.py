@@ -19,6 +19,7 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from organizations.factories import OrganizationFactory
 from users.choices import InvitationStatus
+from users.constants import MAX_BULK_INVITE_ROWS
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
@@ -666,3 +667,17 @@ class InvitationBulkCreateTests(APITestCase):
         self.assertFalse(
             Invitation.objects.filter(email="someone@example.com").exists()
         )
+
+    def test_file_over_row_limit_is_rejected(self):
+        self.client.force_authenticate(self.admin_a)
+        rows = ["Email"] + [
+            f"user{i}@example.com" for i in range(MAX_BULK_INVITE_ROWS + 1)
+        ]
+        upload = build_xlsx_upload(rows)
+
+        response = self.client.post(
+            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Invitation.objects.exists())
