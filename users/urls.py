@@ -24,7 +24,9 @@ urlpatterns = [
         name="auth_password_reset_confirm",
     ),
     path(
-        "invitations/", InvitationListCreateView.as_view(), name="invitation_list_create"
+        "invitations/",
+        InvitationListCreateView.as_view(),
+        name="invitation_list_create",
     ),
     path(
         "invitations/accept/", InvitationAcceptView.as_view(), name="invitation_accept"
