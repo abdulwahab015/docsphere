@@ -13,6 +13,6 @@ class IsOrganizationAdmin(BasePermission):
         return bool(
             user
             and user.is_authenticated
-            and user.organization_id is not None
+            and user.organization_id
             and user.org_role == OrganizationRole.ADMIN
         )

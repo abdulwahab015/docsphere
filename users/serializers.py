@@ -58,9 +58,7 @@ class InvitationAcceptSerializer(serializers.Serializer):
                 token=attrs["token"]
             )
         except Invitation.DoesNotExist:
-            raise serializers.ValidationError(
-                {"token": "Invalid invitation token."}
-            ) from None
+            raise serializers.ValidationError({"token": "Invalid invitation token."})
 
         if invitation.status != InvitationStatus.PENDING:
             raise serializers.ValidationError(

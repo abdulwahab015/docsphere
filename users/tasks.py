@@ -11,9 +11,7 @@ from users.models import Invitation
 
 @shared_task
 def send_invitation_email_task(invitation_id):
-    invitation = Invitation.objects.select_related("organization").get(
-        pk=invitation_id
-    )
+    invitation = Invitation.objects.select_related("organization").get(pk=invitation_id)
     accept_url = f"{settings.FRONTEND_URL}/accept-invite?token={invitation.token}"
 
     send_mail(
