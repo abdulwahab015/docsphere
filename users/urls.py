@@ -8,17 +8,17 @@ from users.views import (
 )
 
 urlpatterns = [
-    path("login/", TokenObtainPairView.as_view(), name="auth-login"),
-    path("refresh/", TokenRefreshView.as_view(), name="auth-refresh"),
-    path("logout/", LogoutView.as_view(), name="auth-logout"),
+    path("auth/login/", TokenObtainPairView.as_view(), name="auth_login"),
+    path("auth/refresh/", TokenRefreshView.as_view(), name="auth_refresh"),
+    path("auth/logout/", LogoutView.as_view(), name="auth_logout"),
     path(
-        "password-reset/",
+        "auth/password-reset/",
         PasswordResetRequestView.as_view(),
-        name="auth-password-reset",
+        name="auth_password_reset",
     ),
     path(
-        "password-reset/confirm/",
+        "auth/password-reset/confirm/",
         PasswordResetConfirmView.as_view(),
-        name="auth-password-reset-confirm",
+        name="auth_password_reset_confirm",
     ),
 ]

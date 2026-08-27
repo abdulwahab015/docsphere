@@ -10,7 +10,9 @@ from users.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
 )
-from users.services import send_password_reset_email
+from users.tasks import send_password_reset_email_task
+
+User = get_user_model()
 
 
 class LogoutView(APIView):
@@ -50,13 +52,9 @@ class PasswordResetRequestView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = (
-            get_user_model()
-            .objects.filter(email=serializer.validated_data["email"])
-            .first()
-        )
-        if user is not None:
-            send_password_reset_email(user)
+        matching_users = User.objects.filter(email=serializer.validated_data["email"])
+        if matching_users.exists():
+            send_password_reset_email_task.delay(matching_users.get().pk)
 
         return Response(status=status.HTTP_200_OK)
 

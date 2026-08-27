@@ -1,12 +1,16 @@
+from celery import shared_task
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
 
-def send_password_reset_email(user):
-    """Email the user a password-reset link built from Django's default token generator."""
+@shared_task
+def send_password_reset_email_task(user_id):
+    user = get_user_model().objects.get(pk=user_id)
+
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
     reset_url = f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
