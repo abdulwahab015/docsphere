@@ -18,7 +18,11 @@ from users.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
 )
-from users.services import bulk_create_invitations, parse_invitation_emails
+from users.services import (
+    BulkInviteLimitExceeded,
+    bulk_create_invitations,
+    parse_invitation_emails,
+)
 from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 User = get_user_model()
@@ -47,7 +51,7 @@ class InvitationBulkCreateView(APIView):
 
     def post(self, request):
         upload = request.FILES.get("file")
-        if upload is None:
+        if not upload:
             return Response(
                 {"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -59,6 +63,8 @@ class InvitationBulkCreateView(APIView):
                 {"detail": "file must be a valid .xlsx workbook."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except BulkInviteLimitExceeded as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         result = bulk_create_invitations(emails, request)
         return Response(
