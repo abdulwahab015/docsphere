@@ -1,12 +1,11 @@
 from django.conf import settings
 from django.db import models
-from django_extensions.db.models import TimeStampedModel
 
-from core.models import ActiveModel
+from core.models import TimeStampedModel
 from projects.choices import AccessLevel
 
 
-class Project(TimeStampedModel, ActiveModel):
+class Project(TimeStampedModel):
     """A collection of documents scoped to a single organization."""
 
     organization = models.ForeignKey(
@@ -19,7 +18,7 @@ class Project(TimeStampedModel, ActiveModel):
     )
 
     name = models.CharField(max_length=100, db_index=True)
-    description = models.TextField(blank=True)
+    description = models.TextField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -34,7 +33,7 @@ class Project(TimeStampedModel, ActiveModel):
         return self.name
 
 
-class Document(TimeStampedModel, ActiveModel):
+class Document(TimeStampedModel):
     """A text note/document that belongs to a project."""
 
     project = models.ForeignKey(
@@ -47,7 +46,7 @@ class Document(TimeStampedModel, ActiveModel):
     )
 
     title = models.CharField(max_length=100, db_index=True)
-    content = models.TextField(blank=True)
+    content = models.TextField(null=True, blank=True)
 
     def __str__(self):
         return self.title

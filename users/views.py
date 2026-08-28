@@ -1,18 +1,105 @@
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-from rest_framework import status
+from django.utils import timezone
+from openpyxl.utils.exceptions import InvalidFileException
+from rest_framework import generics, status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from users.permissions import IsOrgAdmin
+from users.choices import InvitationStatus
+from users.models import Invitation
+from users.permissions import IsOrganizationAdmin
 from users.serializers import (
+    InvitationAcceptSerializer,
+    InvitationCreateSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
 )
-from users.services import send_password_reset_email
+from users.services import (
+    BulkInviteLimitExceeded,
+    bulk_create_invitations,
+    parse_invitation_emails,
+)
+from users.tasks import send_invitation_email_task, send_password_reset_email_task
+
+User = get_user_model()
+
+
+class InvitationListCreateView(generics.ListCreateAPIView):
+    """Lists and creates invitations, scoped to the requesting admin's organization."""
+
+    serializer_class = InvitationCreateSerializer
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
+
+    def get_queryset(self):
+        return Invitation.objects.for_organization(self.request.user.organization)
+
+    def perform_create(self, serializer):
+        invitation = serializer.save()
+        send_invitation_email_task.delay(invitation.pk)
+
+
+class InvitationBulkCreateView(APIView):
+    """Creates invitations in bulk from an uploaded .xlsx file of email
+    addresses, scoped to the requesting admin's organization."""
+
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response(
+                {"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            emails = parse_invitation_emails(upload)
+        except InvalidFileException:
+            return Response(
+                {"detail": "file must be a valid .xlsx workbook."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except BulkInviteLimitExceeded as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = bulk_create_invitations(emails, request)
+        return Response(
+            {"created": len(result["created"]), "skipped": result["skipped"]},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class InvitationAcceptView(APIView):
+    """Creates the invitee's User account from a valid, pending invitation token
+    and logs them in immediately with a JWT pair."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = InvitationAcceptSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        invitation = serializer.validated_data["invitation"]
+
+        user = User.objects.create_user(
+            email=invitation.email,
+            password=serializer.validated_data["password"],
+            organization=invitation.organization,
+        )
+
+        invitation.status = InvitationStatus.ACCEPTED
+        invitation.accepted_at = timezone.now()
+        invitation.save(update_fields=["status", "accepted_at"])
+
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {"access": str(refresh.access_token), "refresh": str(refresh)},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LogoutView(APIView):
@@ -52,13 +139,9 @@ class PasswordResetRequestView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = (
-            get_user_model()
-            .objects.filter(email=serializer.validated_data["email"])
-            .first()
-        )
-        if user is not None:
-            send_password_reset_email(user)
+        matching_users = User.objects.filter(email=serializer.validated_data["email"])
+        if matching_users.exists():
+            send_password_reset_email_task.delay(matching_users.get().pk)
 
         return Response(status=status.HTTP_200_OK)
 
@@ -83,12 +166,10 @@ class DeactivateUserView(APIView):
     """Admin-only soft-removal of a user within the requesting admin's own
     organization."""
 
-    permission_classes = [IsAuthenticated, IsOrgAdmin]
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
 
     def delete(self, request, pk):
-        target = get_object_or_404(
-            get_user_model(), pk=pk, organization=request.user.organization
-        )
+        target = get_object_or_404(User, pk=pk, organization=request.user.organization)
 
         if target.id == request.user.id:
             return Response(

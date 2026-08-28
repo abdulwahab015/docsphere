@@ -3,10 +3,10 @@ from typing import ClassVar
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
-from django_extensions.db.models import TimeStampedModel
 
+from core.models import TimeStampedModel
 from users.choices import InvitationStatus, OrganizationRole
-from users.managers import UserManager
+from users.managers import InvitationManager, UserManager
 
 
 class User(AbstractUser, TimeStampedModel):
@@ -58,6 +58,8 @@ class Invitation(TimeStampedModel):
         default=InvitationStatus.PENDING,
     )
     accepted_at = models.DateTimeField(null=True, blank=True)
+
+    objects = InvitationManager()
 
     def __str__(self):
         return f"{self.email} ({self.status})"
