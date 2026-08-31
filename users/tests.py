@@ -2,12 +2,14 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework.throttling import ScopedRateThrottle
 
 User = get_user_model()
 
@@ -76,6 +78,7 @@ class JWTAuthTests(APITestCase):
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class PasswordResetTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             email="member@example.com", password="Old-Pass-123!"
         )
@@ -126,6 +129,38 @@ class PasswordResetTests(APITestCase):
                 {
                     "uid": uid,
                     "token": "invalid-token",
+                    "new_password": "New-Strong-Pass!456",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("users.tasks.send_mail")
+    def test_password_reset_request_is_throttled_after_limit(self, mock_send_mail):
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"password_reset": "2/min"}
+        ):
+            for _ in range(2):
+                response = self.client.post(
+                    reverse("auth_password_reset"), {"email": self.user.email}
+                )
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+            response = self.client.post(
+                reverse("auth_password_reset"), {"email": self.user.email}
+            )
+            self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_password_reset_confirm_fails_for_nonexistent_user(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk + 1000))
+        token = default_token_generator.make_token(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset_confirm"),
+                {
+                    "uid": uid,
+                    "token": token,
                     "new_password": "New-Strong-Pass!456",
                 },
             )

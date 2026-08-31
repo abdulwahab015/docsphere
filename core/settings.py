@@ -167,6 +167,9 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_THROTTLE_RATES": {
+        "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
+    },
 }
 
 SIMPLE_JWT = {

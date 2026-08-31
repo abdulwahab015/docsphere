@@ -20,9 +20,13 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     def validate(self, attrs):
         try:
             user_id = force_str(urlsafe_base64_decode(attrs["uid"]))
-            user = User.objects.get(pk=user_id)
         except Exception:
             raise serializers.ValidationError("Invalid reset link.")
+
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("User not found.")
 
         if not default_token_generator.check_token(user, attrs["token"]):
             raise serializers.ValidationError("Invalid or expired reset link.")
