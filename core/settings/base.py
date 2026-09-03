@@ -8,6 +8,10 @@ https://docs.djangoproject.com/en/6.1/topics/settings/
 
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
+
+Settings common to every environment live here. `DEBUG` and any other
+environment-specific values are set in `local.py` / `production.py`, which
+import everything from this module and override only what differs.
 """
 
 from datetime import timedelta
@@ -17,7 +21,7 @@ import dj_database_url
 from decouple import Csv, config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 # Quick-start development settings - unsuitable for production
@@ -25,9 +29,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = config("SECRET_KEY")
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config("DEBUG", default=False, cast=bool)
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 
@@ -43,6 +44,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_extensions",
+    "core",
     "organizations",
     "users",
     "projects",
@@ -51,16 +53,21 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
+    "corsheaders",
+    "drf_spectacular",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "core.middleware.logging.RequestLoggingMiddleware",
 ]
 
 ROOT_URLCONF = "core.urls"
@@ -104,10 +111,17 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
+        # Cap length so a multi-MB password can't burn CPU in the hasher.
+        "NAME": "users.password_validation.MaximumLengthValidator",
+    },
+    {
         "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+    },
+    {
+        "NAME": "users.password_validation.ComplexityValidator",
     },
 ]
 
@@ -126,8 +140,11 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
+# Served via WhiteNoise (see MIDDLEWARE) — `collectstatic` populates STATIC_ROOT;
+# `production.py` additionally enables compressed, cache-busted filenames.
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 
 # Email
@@ -144,6 +161,15 @@ EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="webmaster@localhost")
 
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
+
+
+# CORS
+# https://github.com/adamchainz/django-cors-headers
+# Browser clients (the SPA at FRONTEND_URL) call this API cross-origin. Auth is
+# a Bearer token in the Authorization header, so credentialed requests aren't
+# needed — keep an explicit allowlist, never CORS_ALLOW_ALL_ORIGINS.
+
+CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default=FRONTEND_URL, cast=Csv())
 
 
 # Stripe / dj-stripe
@@ -167,9 +193,33 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_PAGINATION_CLASS": "core.paginations.PageNumberPagination",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Baseline rate limiting on every endpoint; sensitive views add a tighter
+    # ScopedRateThrottle on top (see users/api/v1/views.py).
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
     "DEFAULT_THROTTLE_RATES": {
+        "anon": config("ANON_THROTTLE_RATE"),
+        "user": config("USER_THROTTLE_RATE"),
+        "login": config("LOGIN_THROTTLE_RATE"),
+        "invite_accept": config("INVITE_ACCEPT_THROTTLE_RATE"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
     },
+}
+
+# drf-spectacular — OpenAPI schema + Swagger UI (see core/urls.py).
+# Open to anyone here for convenient local/dev use; production.py locks
+# /api/schema/ and /api/docs/ to staff.
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "DocSphere API",
+    "VERSION": "v1",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
 }
 
 SIMPLE_JWT = {
@@ -182,6 +232,9 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+# How long an unaccepted invitation token stays usable.
+INVITATION_EXPIRY = timedelta(seconds=config("INVITATION_EXPIRY_SECONDS", cast=int))
 
 
 # Celery
@@ -196,3 +249,47 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
+
+
+# Logging
+# Structured JSON to stdout; RequestLoggingMiddleware emits one record per
+# request/response, correlated by `request_id`.
+
+MAX_LOG_BODY_CHARS = config("MAX_LOG_BODY_CHARS", default=2048, cast=int)
+
+# Paths the request logger skips entirely — health probes hit these every few
+# seconds and would otherwise dominate the logs.
+REQUEST_LOG_SKIP_PATHS = ["/healthz/"]
+
+# Only trust X-Forwarded-For for the logged client IP when actually behind a
+# proxy that appends it (production.py turns this on). Otherwise a client can
+# spoof the field. Log-only — never used for auth or throttling.
+REQUEST_LOG_TRUST_FORWARDED_FOR = False
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {
+            "()": "core.logging.formatters.JSONFormatter",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json",
+        },
+    },
+    "loggers": {
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "core": {
+            "handlers": ["console"],
+            "level": config("CORE_LOG_LEVEL", default="INFO"),
+            "propagate": False,
+        },
+    },
+}

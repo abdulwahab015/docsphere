@@ -1,13 +1,16 @@
+# Uses the black/ruff installed in the environment (see requirements/dev.txt)
+# rather than pinning a second set of versions here — keeps pre-commit, CI,
+# and `make lint`/`make format` on exactly the same tool versions.
 repos:
-  - repo: https://github.com/psf/black
-    rev: 24.2.0
+  - repo: local
     hooks:
       - id: black
-        exclude: ^.*/migrations/.*$
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.0
-    hooks:
+        name: black
+        entry: black
+        language: system
+        types: [python]
       - id: ruff
-        args: [ --fix ]
-        exclude: ^.*/migrations/.*$
+        name: ruff
+        entry: ruff check --fix
+        language: system
+        types: [python]
