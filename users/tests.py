@@ -582,9 +582,10 @@ class InvitationBulkCreateTests(APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
 
-        response = self.client.post(
-            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
-        )
+        with self.assertNumQueries(10):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["created"], 2)
@@ -594,13 +595,63 @@ class InvitationBulkCreateTests(APITestCase):
         self.assertTrue(Invitation.objects.filter(email="two@example.com").exists())
 
     @patch("core.email.send_mail")
+    def test_file_without_a_header_row_still_parses(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["one@example.com", "two@example.com"])
+
+        with self.assertNumQueries(10):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 2)
+        self.assertEqual(response.data["skipped"], [])
+
+    @patch("core.email.send_mail")
+    def test_duplicate_email_in_file_is_skipped(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "dupe@example.com", "DUPE@example.com"])
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        self.assertEqual(response.data["skipped"][0]["email"], "DUPE@example.com")
+        self.assertEqual(response.data["skipped"][0]["reason"], "duplicate in file")
+        mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_field_level_rejection_is_skipped_with_its_reason(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        overlong_email = ("a" * 250) + "@example.com"
+        upload = build_xlsx_upload(["Email", overlong_email])
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 0)
+        self.assertEqual(
+            response.data["skipped"][0]["reason"],
+            "Ensure this field has no more than 254 characters.",
+        )
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
     def test_malformed_rows_are_skipped_without_failing_batch(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "not-an-email", "valid@example.com"])
 
-        response = self.client.post(
-            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
-        )
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["created"], 1)
@@ -623,9 +674,10 @@ class InvitationBulkCreateTests(APITestCase):
             ["Email", "existing@example.com", "pending@example.com", "new@example.com"]
         )
 
-        response = self.client.post(
-            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
-        )
+        with self.assertNumQueries(8):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["created"], 1)
@@ -641,7 +693,10 @@ class InvitationBulkCreateTests(APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
 
-        with patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1):
+        with (
+            patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1),
+            self.assertNumQueries(8),
+        ):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -658,7 +713,7 @@ class InvitationBulkCreateTests(APITestCase):
         self.client.force_authenticate(self.member_a)
         upload = build_xlsx_upload(["Email", "someone@example.com"])
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(0):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -668,6 +723,35 @@ class InvitationBulkCreateTests(APITestCase):
             Invitation.objects.filter(email="someone@example.com").exists()
         )
 
+    def test_missing_file_is_rejected(self):
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "file is required.")
+
+    def test_invalid_file_is_rejected(self):
+        self.client.force_authenticate(self.admin_a)
+        not_xlsx = SimpleUploadedFile(
+            "bad.xlsx", b"not an xlsx file", content_type=XLSX_CONTENT_TYPE
+        )
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"),
+                {"file": not_xlsx},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"], "file must be a valid .xlsx workbook."
+        )
+
     def test_file_over_row_limit_is_rejected(self):
         self.client.force_authenticate(self.admin_a)
         rows = ["Email"] + [
@@ -675,9 +759,10 @@ class InvitationBulkCreateTests(APITestCase):
         ]
         upload = build_xlsx_upload(rows)
 
-        response = self.client.post(
-            reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
-        )
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Invitation.objects.exists())

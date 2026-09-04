@@ -2,9 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
-from openpyxl.utils.exceptions import InvalidFileException
 from rest_framework import generics, status
-from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -30,11 +28,7 @@ from users.api.v1.serializers import (
 from users.choices import InvitationStatus
 from users.models import Invitation
 from users.permissions import IsOrganizationAdmin
-from users.services import (
-    BulkInviteLimitExceeded,
-    bulk_create_invitations,
-    parse_invitation_emails,
-)
+from users.services import bulk_create_invitations, parse_invitation_emails
 from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 User = get_user_model()
@@ -70,7 +64,6 @@ class InvitationBulkCreateAPIView(APIView):
     addresses, scoped to the requesting admin's organization."""
 
     permission_classes = [IsOrganizationAdmin]
-    parser_classes = [MultiPartParser]
 
     @extend_schema(
         request={
@@ -96,12 +89,7 @@ class InvitationBulkCreateAPIView(APIView):
 
         try:
             emails = parse_invitation_emails(upload)
-        except InvalidFileException:
-            return Response(
-                {"detail": "file must be a valid .xlsx workbook."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except BulkInviteLimitExceeded as exc:
+        except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         result = bulk_create_invitations(emails, request)
