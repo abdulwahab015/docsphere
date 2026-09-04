@@ -9,22 +9,66 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    restart: unless-stopped
 
   web:
     build: .
-    command: python manage.py runserver 0.0.0.0:8000
-    volumes:
-      - .:/app
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     environment:
+      DJANGO_SETTINGS_MODULE: core.settings.production
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
+      # A real worker exists in this stack — never run tasks synchronously
+      # in-process, regardless of what .env's local-dev-convenience value is.
+      CELERY_TASK_ALWAYS_EAGER: "False"
+    ports:
+      - "8000:8000"
     depends_on:
       - db
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: celery -A core worker -l info
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.production
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_TASK_ALWAYS_EAGER: "False"
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  # Celery monitoring UI. No published port here — reach it over the compose
+  # network or a tunnel; the dev override publishes 5555 for local use.
+  # Auth comes from FLOWER_BASIC_AUTH ("user:password") in .env.
+  flower:
+    build: .
+    command: celery -A core flower --conf=core/settings/flowerconfig.py
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.production
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_TASK_ALWAYS_EAGER: "False"
+    depends_on:
+      - redis
+      - worker
+    restart: unless-stopped
 
 volumes:
   postgres_data:
