@@ -76,10 +76,11 @@ class JWTAuthTests(APITestCase):
     def test_login_is_rate_limited(self):
         cache.clear()
         with patch.object(ScopedRateThrottle, "THROTTLE_RATES", {"login": "1/min"}):
-            first = self.client.post(
-                reverse("auth_login"),
-                {"email": self.user.email, "password": "wrong-password"},
-            )
+            with self.assertNumQueries(1):
+                first = self.client.post(
+                    reverse("auth_login"),
+                    {"email": self.user.email, "password": "wrong-password"},
+                )
             self.assertEqual(first.status_code, status.HTTP_401_UNAUTHORIZED)
 
             with self.assertNumQueries(0):
@@ -90,10 +91,11 @@ class JWTAuthTests(APITestCase):
             self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
     def test_refresh_returns_new_access_token(self):
-        login_response = self.client.post(
-            reverse("auth_login"),
-            {"email": self.user.email, "password": self.password},
-        )
+        with self.assertNumQueries(2):
+            login_response = self.client.post(
+                reverse("auth_login"),
+                {"email": self.user.email, "password": self.password},
+            )
         refresh_token = login_response.data["refresh"]
 
         with self.assertNumQueries(13):
@@ -105,10 +107,11 @@ class JWTAuthTests(APITestCase):
         self.assertIn("access", response.data)
 
     def test_logout_blacklists_refresh_token(self):
-        login_response = self.client.post(
-            reverse("auth_login"),
-            {"email": self.user.email, "password": self.password},
-        )
+        with self.assertNumQueries(2):
+            login_response = self.client.post(
+                reverse("auth_login"),
+                {"email": self.user.email, "password": self.password},
+            )
         refresh_token = login_response.data["refresh"]
 
         with self.assertNumQueries(7):
@@ -286,7 +289,6 @@ class InvitationTests(APITestCase):
     def test_admin_can_create_invitation_for_own_organization(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
 
-        # pending-invitation count guard + INSERT.
         with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "invitee@example.com"}
@@ -433,10 +435,11 @@ class InvitationTests(APITestCase):
         with patch.object(
             ScopedRateThrottle, "THROTTLE_RATES", {"invite_accept": "1/min"}
         ):
-            self.client.post(
-                reverse("invitation_accept"),
-                {"token": "nope", "password": "Str0ng-New-Pass!"},
-            )
+            with self.assertNumQueries(1):
+                self.client.post(
+                    reverse("invitation_accept"),
+                    {"token": "nope", "password": "Str0ng-New-Pass!"},
+                )
             with self.assertNumQueries(0):
                 throttled = self.client.post(
                     reverse("invitation_accept"),
@@ -473,7 +476,7 @@ class InvitationTests(APITestCase):
 
 class UserManagerTests(TestCase):
     def test_create_user_requires_an_email(self):
-        with self.assertRaises(ValueError):
+        with self.assertNumQueries(0), self.assertRaises(ValueError):
             User.objects.create_user(email="", password="whatever")
 
     def test_create_superuser_sets_staff_and_superuser(self):
@@ -486,13 +489,13 @@ class UserManagerTests(TestCase):
         self.assertTrue(admin.is_superuser)
 
     def test_create_superuser_rejects_non_staff(self):
-        with self.assertRaises(ValueError):
+        with self.assertNumQueries(0), self.assertRaises(ValueError):
             User.objects.create_superuser(
                 email="root@example.com", password="R00t-Pass!", is_staff=False
             )
 
     def test_create_superuser_rejects_non_superuser(self):
-        with self.assertRaises(ValueError):
+        with self.assertNumQueries(0), self.assertRaises(ValueError):
             User.objects.create_superuser(
                 email="root@example.com", password="R00t-Pass!", is_superuser=False
             )
