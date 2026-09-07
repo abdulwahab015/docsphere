@@ -3,6 +3,7 @@ from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -232,3 +233,33 @@ class PasswordResetConfirmAPIView(APIView):
                 BlacklistedToken.objects.get_or_create(token=token)
 
         return Response(status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    responses={
+        204: OpenApiResponse(description="User deactivated."),
+        400: OpenApiResponse(
+            description="An admin cannot deactivate their own account."
+        ),
+        404: OpenApiResponse(description="No such user in your organization."),
+    }
+)
+class DeactivateUserAPIView(generics.DestroyAPIView):
+    """Admin-initiated soft-removal of a user within the requesting admin's own
+    organization: sets ``is_active=False``, never a hard delete.
+    Cross-organization targets are indistinguishable from missing ones.
+    """
+
+    permission_classes = [IsOrganizationAdmin]
+
+    def get_queryset(self):
+        return User.objects.filter(organization_id=self.request.user.organization_id)
+
+    def perform_destroy(self, instance):
+        """Soft-delete instead of the default hard ``instance.delete()``; an
+        admin may not deactivate their own account."""
+        if instance.pk == self.request.user.pk:
+            raise ValidationError({"detail": "You cannot deactivate your own account."})
+
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])

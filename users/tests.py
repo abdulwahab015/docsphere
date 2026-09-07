@@ -494,6 +494,82 @@ class InvitationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class DeactivateUserTests(APITestCase):
+    def setUp(self):
+        self.org = OrganizationFactory(name="Org A")
+        self.other_org = OrganizationFactory(name="Org B")
+
+        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.member = UserFactory(
+            email="member@example.com",
+            organization=self.org,
+            password="Member-Pass-123!",
+        )
+        self.other_org_user = UserFactory(
+            email="outsider@example.com", organization=self.other_org
+        )
+
+    def _url(self, user):
+        return reverse("user_deactivate", kwargs={"pk": user.pk})
+
+    def test_admin_deactivates_a_user_in_their_own_organization(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.delete(self._url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_active)
+
+    def test_admin_cannot_deactivate_a_user_in_another_organization(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(self._url(self.other_org_user))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.other_org_user.refresh_from_db()
+        self.assertTrue(self.other_org_user.is_active)
+
+    def test_admin_cannot_deactivate_themselves(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(self._url(self.admin))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_non_admin_cannot_deactivate_a_user(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.delete(self._url(self.other_org_user))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.delete(self._url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_deactivated_user_can_no_longer_log_in(self):
+        self.client.force_authenticate(self.admin)
+        self.client.delete(self._url(self.member))
+        self.client.force_authenticate(user=None)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_login"),
+                {"email": self.member.email, "password": "Member-Pass-123!"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class UserManagerTests(TestCase):
     def test_create_user_requires_an_email(self):
         with self.assertNumQueries(0), self.assertRaises(ValueError):
