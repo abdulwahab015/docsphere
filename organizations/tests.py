@@ -1,7 +1,10 @@
 from django.test import TestCase
-from djstripe.models import Customer
 
-from organizations.factories import OrganizationFactory
+from organizations.factories import (
+    OrganizationFactory,
+    StripeCustomerFactory,
+    StripeSubscriptionFactory,
+)
 
 
 class OrganizationModelTests(TestCase):
@@ -15,13 +18,31 @@ class OrganizationModelTests(TestCase):
 
         self.assertEqual(org.email, "billing@acme.test")
 
+    def test_active_subscription_returns_the_active_subscription(self):
+        org = OrganizationFactory()
+        subscription = StripeSubscriptionFactory(
+            customer__subscriber=org, status="active"
+        )
+
+        with self.assertNumQueries(2):
+            self.assertEqual(org.active_subscription, subscription)
+
     def test_active_subscription_is_none_without_a_customer(self):
         org = OrganizationFactory()
 
-        self.assertIsNone(org.active_subscription)
+        with self.assertNumQueries(1):
+            self.assertIsNone(org.active_subscription)
 
     def test_active_subscription_is_none_when_customer_has_no_active_sub(self):
         org = OrganizationFactory()
-        Customer.objects.create(id="cus_test_org", subscriber=org)
+        StripeCustomerFactory(subscriber=org)
 
-        self.assertIsNone(org.active_subscription)
+        with self.assertNumQueries(2):
+            self.assertIsNone(org.active_subscription)
+
+    def test_active_subscription_ignores_a_canceled_subscription(self):
+        org = OrganizationFactory()
+        StripeSubscriptionFactory(customer__subscriber=org, status="canceled")
+
+        with self.assertNumQueries(2):
+            self.assertIsNone(org.active_subscription)
