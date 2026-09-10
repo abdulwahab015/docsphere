@@ -1,26 +1,46 @@
 from datetime import timedelta
+from io import BytesIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from openpyxl import Workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 
 from organizations.factories import OrganizationFactory
 from users.choices import InvitationStatus
+from users.constants import MAX_BULK_INVITE_ROWS
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
 
 User = get_user_model()
+
+XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def build_xlsx_upload(values, filename="invitees.xlsx"):
+    """Build an in-memory single-column .xlsx upload from a list of cell values."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    for value in values:
+        worksheet.append([value])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+
+    return SimpleUploadedFile(filename, buffer.read(), content_type=XLSX_CONTENT_TYPE)
 
 
 class JWTAuthTests(APITestCase):
@@ -474,6 +494,82 @@ class InvitationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class DeactivateUserTests(APITestCase):
+    def setUp(self):
+        self.org = OrganizationFactory(name="Org A")
+        self.other_org = OrganizationFactory(name="Org B")
+
+        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.member = UserFactory(
+            email="member@example.com",
+            organization=self.org,
+            password="Member-Pass-123!",
+        )
+        self.other_org_user = UserFactory(
+            email="outsider@example.com", organization=self.other_org
+        )
+
+    def _url(self, user):
+        return reverse("user_deactivate", kwargs={"pk": user.pk})
+
+    def test_admin_deactivates_a_user_in_their_own_organization(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.delete(self._url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.is_active)
+
+    def test_admin_cannot_deactivate_a_user_in_another_organization(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(self._url(self.other_org_user))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.other_org_user.refresh_from_db()
+        self.assertTrue(self.other_org_user.is_active)
+
+    def test_admin_cannot_deactivate_themselves(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(self._url(self.admin))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_non_admin_cannot_deactivate_a_user(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.delete(self._url(self.other_org_user))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.delete(self._url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_deactivated_user_can_no_longer_log_in(self):
+        self.client.force_authenticate(self.admin)
+        self.client.delete(self._url(self.member))
+        self.client.force_authenticate(user=None)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_login"),
+                {"email": self.member.email, "password": "Member-Pass-123!"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class UserManagerTests(TestCase):
     def test_create_user_requires_an_email(self):
         with self.assertNumQueries(0), self.assertRaises(ValueError):
@@ -544,3 +640,202 @@ class ModelStrTests(TestCase):
 
         with self.assertNumQueries(0):
             self.assertEqual(str(invitation), "invitee@example.com (PENDING)")
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class InvitationBulkCreateTests(APITestCase):
+    def setUp(self):
+        self.org_a = OrganizationFactory(name="Org A")
+        self.admin_a = AdminUserFactory(
+            email="admin-a@example.com", organization=self.org_a
+        )
+        self.member_a = UserFactory(
+            email="member-a@example.com", organization=self.org_a
+        )
+
+    @patch("core.email.send_mail")
+    def test_valid_file_creates_invitations_and_sends_emails(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
+
+        with self.assertNumQueries(7):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 2)
+        self.assertEqual(response.data["skipped"], [])
+        self.assertEqual(mock_send_mail.call_count, 2)
+        self.assertTrue(Invitation.objects.filter(email="one@example.com").exists())
+        self.assertTrue(Invitation.objects.filter(email="two@example.com").exists())
+
+    @patch("core.email.send_mail")
+    def test_file_without_a_header_row_still_parses(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["one@example.com", "two@example.com"])
+
+        with self.assertNumQueries(7):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 2)
+        self.assertEqual(response.data["skipped"], [])
+
+    @patch("core.email.send_mail")
+    def test_duplicate_email_in_file_is_skipped(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "dupe@example.com", "DUPE@example.com"])
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        self.assertEqual(response.data["skipped"][0]["email"], "DUPE@example.com")
+        self.assertEqual(response.data["skipped"][0]["reason"], "duplicate in file")
+        mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_overlong_email_is_skipped(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        overlong_email = ("a" * 250) + "@example.com"
+        upload = build_xlsx_upload(["Email", overlong_email])
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 0)
+        self.assertEqual(response.data["skipped"][0]["reason"], "email too long")
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_malformed_rows_are_skipped_without_failing_batch(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "not-an-email", "valid@example.com"])
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        self.assertEqual(len(response.data["skipped"]), 1)
+        self.assertEqual(response.data["skipped"][0]["email"], "not-an-email")
+        self.assertEqual(response.data["skipped"][0]["reason"], "invalid email")
+        mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_existing_user_and_pending_invitation_are_skipped(self, mock_send_mail):
+        UserFactory(email="existing@example.com", organization=self.org_a)
+        InvitationFactory(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="pending@example.com",
+            token="already-pending-token",
+        )
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(
+            ["Email", "existing@example.com", "pending@example.com", "new@example.com"]
+        )
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        reasons = {item["email"]: item["reason"] for item in response.data["skipped"]}
+        self.assertEqual(
+            reasons["existing@example.com"], "user already exists in organization"
+        )
+        self.assertEqual(reasons["pending@example.com"], "invitation already pending")
+        mock_send_mail.assert_called_once()
+        self.assertTrue(Invitation.objects.filter(email="new@example.com").exists())
+
+    def test_cannot_create_invitations_past_the_pending_cap(self):
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
+
+        with (
+            patch("users.services.MAX_PENDING_INVITATIONS_PER_ORG", 1),
+            self.assertNumQueries(5),
+        ):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 1)
+        reasons = {item["email"]: item["reason"] for item in response.data["skipped"]}
+        self.assertEqual(
+            reasons["two@example.com"],
+            "organization has too many pending invitations",
+        )
+
+    def test_non_admin_cannot_bulk_create_invitations(self):
+        self.client.force_authenticate(self.member_a)
+        upload = build_xlsx_upload(["Email", "someone@example.com"])
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            Invitation.objects.filter(email="someone@example.com").exists()
+        )
+
+    def test_missing_file_is_rejected(self):
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "file is required.")
+
+    def test_invalid_file_is_rejected(self):
+        self.client.force_authenticate(self.admin_a)
+        not_xlsx = SimpleUploadedFile(
+            "bad.xlsx", b"not an xlsx file", content_type=XLSX_CONTENT_TYPE
+        )
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"),
+                {"file": not_xlsx},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"], "file must be a valid .xlsx workbook."
+        )
+
+    def test_file_over_row_limit_is_rejected(self):
+        self.client.force_authenticate(self.admin_a)
+        rows = ["Email"] + [
+            f"user{i}@example.com" for i in range(MAX_BULK_INVITE_ROWS + 1)
+        ]
+        upload = build_xlsx_upload(rows)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Invitation.objects.exists())

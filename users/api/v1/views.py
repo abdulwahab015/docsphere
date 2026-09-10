@@ -3,6 +3,7 @@ from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -28,6 +29,7 @@ from users.api.v1.serializers import (
 from users.choices import InvitationStatus
 from users.models import Invitation
 from users.permissions import IsOrganizationAdmin
+from users.services import bulk_create_invitations, parse_invitation_emails
 from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 User = get_user_model()
@@ -56,6 +58,50 @@ class InvitationListCreateAPIView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         invitation = serializer.save()
         send_invitation_email_task.delay(invitation.pk)
+
+
+class InvitationBulkCreateAPIView(APIView):
+    """Creates invitations in bulk from an uploaded .xlsx file of email
+    addresses, scoped to the requesting admin's organization."""
+
+    permission_classes = [IsOrganizationAdmin]
+
+    @extend_schema(
+        request={
+            "multipart/form-data": {
+                "type": "object",
+                "properties": {"file": {"type": "string", "format": "binary"}},
+                "required": ["file"],
+            }
+        },
+        responses={
+            201: OpenApiResponse(description="Summary of created/skipped rows."),
+            400: OpenApiResponse(
+                description="Missing file, invalid .xlsx, or row-count cap exceeded."
+            ),
+        },
+    )
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response(
+                {"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            emails = parse_invitation_emails(upload)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = bulk_create_invitations(
+            emails,
+            organization=request.user.organization,
+            invited_by=request.user,
+        )
+        return Response(
+            {"created": len(result["created"]), "skipped": result["skipped"]},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class InvitationAcceptAPIView(APIView):
@@ -191,3 +237,33 @@ class PasswordResetConfirmAPIView(APIView):
                 BlacklistedToken.objects.get_or_create(token=token)
 
         return Response(status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    responses={
+        204: OpenApiResponse(description="User deactivated."),
+        400: OpenApiResponse(
+            description="An admin cannot deactivate their own account."
+        ),
+        404: OpenApiResponse(description="No such user in your organization."),
+    }
+)
+class DeactivateUserAPIView(generics.DestroyAPIView):
+    """Admin-initiated soft-removal of a user within the requesting admin's own
+    organization: sets ``is_active=False``, never a hard delete.
+    Cross-organization targets are indistinguishable from missing ones.
+    """
+
+    permission_classes = [IsOrganizationAdmin]
+
+    def get_queryset(self):
+        return User.objects.filter(organization_id=self.request.user.organization_id)
+
+    def perform_destroy(self, instance):
+        """Soft-delete instead of the default hard ``instance.delete()``; an
+        admin may not deactivate their own account."""
+        if instance.pk == self.request.user.pk:
+            raise ValidationError({"detail": "You cannot deactivate your own account."})
+
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])

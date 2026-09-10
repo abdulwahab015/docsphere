@@ -2,7 +2,9 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from users.api.v1.views import (
+    DeactivateUserAPIView,
     InvitationAcceptAPIView,
+    InvitationBulkCreateAPIView,
     InvitationListCreateAPIView,
     LoginView,
     LogoutAPIView,
@@ -30,8 +32,18 @@ urlpatterns = [
         name="invitation_list_create",
     ),
     path(
+        "invitations/bulk/",
+        InvitationBulkCreateAPIView.as_view(),
+        name="invitation_bulk_create",
+    ),
+    path(
         "invitations/accept/",
         InvitationAcceptAPIView.as_view(),
         name="invitation_accept",
+    ),
+    path(
+        "<int:pk>/deactivate/",
+        DeactivateUserAPIView.as_view(),
+        name="user_deactivate",
     ),
 ]
