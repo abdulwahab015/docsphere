@@ -2,19 +2,14 @@ from django.contrib.auth.models import AnonymousUser
 from django.test import TestCase
 from rest_framework.test import APIRequestFactory
 
-from projects.choices import AccessLevel
+from projects.choices import AccessLevel, Action
 from projects.factories import (
     DocumentFactory,
     DocumentPermissionFactory,
     ProjectFactory,
     ProjectPermissionFactory,
 )
-from projects.permissions import (
-    Action,
-    HasDocumentAccess,
-    access_permits,
-    resolve_access,
-)
+from projects.permissions import HasDocumentAccess, access_permits, resolve_access
 from users.factories import UserFactory
 
 

@@ -1,31 +1,8 @@
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from projects.choices import AccessLevel
+from projects.choices import Action
+from projects.mappings import ALLOWED_ACTIONS
 from projects.models import DocumentPermission, ProjectPermission
-
-_ACCESS_RANK = {
-    AccessLevel.VIEWER: 1,
-    AccessLevel.EDITOR: 2,
-    AccessLevel.OWNER: 3,
-}
-
-
-class Action:
-    """Things a user can attempt against a document. DELETE and RESHARE
-    require Owner; WRITE requires Editor; READ requires Viewer."""
-
-    READ = "read"
-    WRITE = "write"
-    DELETE = "delete"
-    RESHARE = "reshare"
-
-
-_ACTION_MIN_LEVEL = {
-    Action.READ: AccessLevel.VIEWER,
-    Action.WRITE: AccessLevel.EDITOR,
-    Action.DELETE: AccessLevel.OWNER,
-    Action.RESHARE: AccessLevel.OWNER,
-}
 
 
 def resolve_access(user, document):
@@ -40,7 +17,7 @@ def resolve_access(user, document):
         .values_list("access_level", flat=True)
         .first()
     )
-    if document_level is not None:
+    if document_level:
         return document_level
 
     return (
@@ -52,11 +29,11 @@ def resolve_access(user, document):
 
 def access_permits(access_level, action):
     """Whether ``access_level`` (from :func:`resolve_access`, or ``None``) allows
-    ``action`` under the Owner > Editor > Viewer ranking."""
-    if access_level is None:
+    ``action``."""
+    if not access_level:
         return False
 
-    return _ACCESS_RANK[access_level] >= _ACCESS_RANK[_ACTION_MIN_LEVEL[action]]
+    return action in ALLOWED_ACTIONS.get(access_level, frozenset())
 
 
 class HasDocumentAccess(BasePermission):
