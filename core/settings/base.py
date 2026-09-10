@@ -68,7 +68,6 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "core.middleware.logging.RequestLoggingMiddleware",
-    "core.middleware.subscription_gating.SubscriptionGatingMiddleware",
 ]
 
 ROOT_URLCONF = "core.urls"
@@ -194,7 +193,10 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+        "core.permissions.HasActiveSubscription",
+    ),
     "DEFAULT_PAGINATION_CLASS": "core.paginations.PageNumberPagination",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     # Baseline rate limiting on every endpoint; sensitive views add a tighter
@@ -221,10 +223,6 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "v1",
     "SERVE_INCLUDE_SCHEMA": False,
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
-    "POSTPROCESSING_HOOKS": [
-        "drf_spectacular.hooks.postprocess_schema_enums",
-        "core.schema.add_subscription_gate_responses",
-    ],
 }
 
 SIMPLE_JWT = {
@@ -270,21 +268,6 @@ REQUEST_LOG_SKIP_PATHS = ["/healthz/"]
 # proxy that appends it (production.py turns this on). Otherwise a client can
 # spoof the field. Log-only — never used for auth or throttling.
 REQUEST_LOG_TRUST_FORWARDED_FOR = False
-
-SUBSCRIPTION_GATING_EXEMPT_URL_NAMES = frozenset(
-    {
-        "auth_login",
-        "auth_refresh",
-        "auth_logout",
-        "auth_password_reset",
-        "auth_password_reset_confirm",
-        "invitation_accept",
-        "healthz",
-        "schema",
-        "swagger_ui",
-        "djstripe_webhook_by_uuid",
-    }
-)
 
 LOGGING = {
     "version": 1,

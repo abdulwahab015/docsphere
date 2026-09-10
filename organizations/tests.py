@@ -20,9 +20,7 @@ class OrganizationModelTests(TestCase):
 
     def test_active_subscription_returns_the_active_subscription(self):
         org = OrganizationFactory()
-        subscription = StripeSubscriptionFactory(
-            customer__subscriber=org, status="active"
-        )
+        subscription = StripeSubscriptionFactory(customer__subscriber=org)
 
         with self.assertNumQueries(2):
             self.assertEqual(org.active_subscription, subscription)
