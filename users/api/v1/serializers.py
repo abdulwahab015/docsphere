@@ -1,5 +1,3 @@
-import secrets
-
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -12,12 +10,9 @@ from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from users.choices import InvitationStatus
-from users.constants import (
-    INVITATION_TOKEN_BYTES,
-    MAX_PASSWORD_LENGTH,
-    MAX_PENDING_INVITATIONS_PER_ORG,
-)
+from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
 from users.models import Invitation
+from users.services import create_invitation
 
 User = get_user_model()
 
@@ -75,12 +70,12 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        request = self.context["request"]
-        validated_data["organization"] = request.user.organization
-        validated_data["invited_by"] = request.user
-        validated_data["token"] = secrets.token_urlsafe(INVITATION_TOKEN_BYTES)
-
-        return super().create(validated_data)
+        user = self.context["request"].user
+        return create_invitation(
+            organization=user.organization,
+            invited_by=user,
+            email=validated_data["email"],
+        )
 
 
 class InvitationAcceptSerializer(serializers.Serializer):

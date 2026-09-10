@@ -1,3 +1,4 @@
+import secrets
 from zipfile import BadZipFile
 
 from django.contrib.auth import get_user_model
@@ -5,11 +6,13 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
-from rest_framework import serializers as drf_serializers
 
-from users.api.v1.serializers import InvitationCreateSerializer
 from users.choices import InvitationStatus
-from users.constants import MAX_BULK_INVITE_ROWS
+from users.constants import (
+    INVITATION_TOKEN_BYTES,
+    MAX_BULK_INVITE_ROWS,
+    MAX_PENDING_INVITATIONS_PER_ORG,
+)
 from users.models import Invitation
 from users.tasks import send_invitation_email_task
 
@@ -42,13 +45,43 @@ def parse_invitation_emails(file):
     return emails
 
 
-def bulk_create_invitations(emails, request):
-    """Create a pending Invitation for each valid, non-duplicate email via
-    the same path as single invitation creation. Invalid, duplicate,
-    already-invited/existing-user emails, and rows rejected by
-    `InvitationCreateSerializer` (e.g. the org's pending-invitation cap)
-    are skipped and reported instead of failing the batch."""
-    organization = request.user.organization
+def create_invitation(*, organization, invited_by, email):
+    """Create a pending Invitation with a freshly generated token. Shared by the
+    single-invite endpoint and the bulk upload so both produce identical rows."""
+    return Invitation.objects.create(
+        organization=organization,
+        invited_by=invited_by,
+        email=email,
+        token=secrets.token_urlsafe(INVITATION_TOKEN_BYTES),
+    )
+
+
+def bulk_create_invitations(emails, *, organization, invited_by):
+    """Create a pending Invitation for each usable email. Rows that are malformed,
+    over-long, duplicated in the file, already a user or a pending invite in the
+    org, or past the org's pending-invitation cap are skipped and reported rather
+    than failing the batch."""
+    max_email_length = Invitation._meta.get_field("email").max_length
+    candidate_emails = {raw.strip().lower() for raw in emails}
+
+    existing_user_emails = {
+        stored.lower()
+        for stored in User.objects.filter(
+            organization=organization, email__in=candidate_emails
+        ).values_list("email", flat=True)
+    }
+
+    pending_invites = Invitation.objects.for_organization(organization).filter(
+        status=InvitationStatus.PENDING
+    )
+    pending_invite_emails = {
+        stored.lower()
+        for stored in pending_invites.filter(email__in=candidate_emails).values_list(
+            "email", flat=True
+        )
+    }
+    remaining_slots = MAX_PENDING_INVITATIONS_PER_ORG - pending_invites.count()
+
     created_invitations = []
     skipped_rows = []
     seen_emails = set()
@@ -63,6 +96,10 @@ def bulk_create_invitations(emails, request):
             skipped_rows.append({"email": original_email, "reason": "invalid email"})
             continue
 
+        if len(email) > max_email_length:
+            skipped_rows.append({"email": original_email, "reason": "email too long"})
+            continue
+
         if normalized_email in seen_emails:
             skipped_rows.append(
                 {"email": original_email, "reason": "duplicate in file"}
@@ -70,7 +107,7 @@ def bulk_create_invitations(emails, request):
             continue
         seen_emails.add(normalized_email)
 
-        if User.objects.filter(organization=organization, email__iexact=email).exists():
+        if normalized_email in existing_user_emails:
             skipped_rows.append(
                 {
                     "email": original_email,
@@ -79,29 +116,25 @@ def bulk_create_invitations(emails, request):
             )
             continue
 
-        if (
-            Invitation.objects.for_organization(organization)
-            .filter(email__iexact=email, status=InvitationStatus.PENDING)
-            .exists()
-        ):
+        if normalized_email in pending_invite_emails:
             skipped_rows.append(
                 {"email": original_email, "reason": "invitation already pending"}
             )
             continue
 
-        serializer = InvitationCreateSerializer(
-            data={"email": email}, context={"request": request}
-        )
-        try:
-            serializer.is_valid(raise_exception=True)
-        except drf_serializers.ValidationError as exc:
-            field_errors = next(iter(exc.detail.values()))
+        if remaining_slots <= 0:
             skipped_rows.append(
-                {"email": original_email, "reason": str(field_errors[0])}
+                {
+                    "email": original_email,
+                    "reason": "organization has too many pending invitations",
+                }
             )
             continue
 
-        invitation = serializer.save()
+        invitation = create_invitation(
+            organization=organization, invited_by=invited_by, email=email
+        )
+        remaining_slots -= 1
         send_invitation_email_task.delay(invitation.pk)
         created_invitations.append(invitation)
 

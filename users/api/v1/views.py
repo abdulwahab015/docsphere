@@ -93,7 +93,11 @@ class InvitationBulkCreateAPIView(APIView):
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        result = bulk_create_invitations(emails, request)
+        result = bulk_create_invitations(
+            emails,
+            organization=request.user.organization,
+            invited_by=request.user,
+        )
         return Response(
             {"created": len(result["created"]), "skipped": result["skipped"]},
             status=status.HTTP_201_CREATED,

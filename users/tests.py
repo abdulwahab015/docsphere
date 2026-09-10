@@ -658,7 +658,7 @@ class InvitationBulkCreateTests(APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(7):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -675,7 +675,7 @@ class InvitationBulkCreateTests(APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["one@example.com", "two@example.com"])
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(7):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -701,22 +701,19 @@ class InvitationBulkCreateTests(APITestCase):
         mock_send_mail.assert_called_once()
 
     @patch("core.email.send_mail")
-    def test_field_level_rejection_is_skipped_with_its_reason(self, mock_send_mail):
+    def test_overlong_email_is_skipped(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
         overlong_email = ("a" * 250) + "@example.com"
         upload = build_xlsx_upload(["Email", overlong_email])
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["created"], 0)
-        self.assertEqual(
-            response.data["skipped"][0]["reason"],
-            "Ensure this field has no more than 254 characters.",
-        )
+        self.assertEqual(response.data["skipped"][0]["reason"], "email too long")
         mock_send_mail.assert_not_called()
 
     @patch("core.email.send_mail")
@@ -750,7 +747,7 @@ class InvitationBulkCreateTests(APITestCase):
             ["Email", "existing@example.com", "pending@example.com", "new@example.com"]
         )
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(5):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -770,8 +767,8 @@ class InvitationBulkCreateTests(APITestCase):
         upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
 
         with (
-            patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1),
-            self.assertNumQueries(8),
+            patch("users.services.MAX_PENDING_INVITATIONS_PER_ORG", 1),
+            self.assertNumQueries(5),
         ):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
@@ -782,7 +779,7 @@ class InvitationBulkCreateTests(APITestCase):
         reasons = {item["email"]: item["reason"] for item in response.data["skipped"]}
         self.assertEqual(
             reasons["two@example.com"],
-            "This organization has too many pending invitations.",
+            "organization has too many pending invitations",
         )
 
     def test_non_admin_cannot_bulk_create_invitations(self):
