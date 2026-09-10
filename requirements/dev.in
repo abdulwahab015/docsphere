@@ -1,0 +1,11 @@
+# Dev / CI tooling on top of the runtime dependencies.
+# Compiled to dev.txt by `make compile`; `make install` and CI install dev.txt.
+
+-r base.in
+
+black==26.5.*
+coverage==7.16.*
+factory-boy==3.3.*
+pip-tools==7.6.*
+pre-commit==4.6.*
+ruff==0.16.*

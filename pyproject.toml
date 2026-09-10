@@ -20,9 +20,29 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-# E = pycodestyle, F = Pyflakes, I = isort
-select = ["E", "F", "I"]
-# E501 (line too long) is left to black; black doesn't split string
-# literals, so a long single token (e.g. an import path) can still
-# legally exceed line-length after black formats it.
-ignore = ["E501"]
+# Formatting stays with black — this is lint only, no `[tool.ruff.format]`.
+# E/W pycodestyle, F Pyflakes, I isort, N pep8-naming, B bugbear,
+# C4 comprehensions, DJ flake8-django, SIM simplify, UP pyupgrade,
+# S bandit (security), RUF ruff-specific.
+select = ["E", "W", "F", "I", "N", "B", "C4", "DJ", "SIM", "UP", "S", "RUF"]
+ignore = [
+    # E501 (line too long) is left to black; black doesn't split string
+    # literals, so a long single token can still exceed line-length.
+    "E501",
+    # DRF/Django idiom is bare mutable class attrs (`fields = [...]`,
+    # `permission_classes = [...]`); ClassVar annotations everywhere add noise.
+    "RUF012",
+    # Nullable CharField/TextField is deliberate here (see CLAUDE.md rule 10
+    # for billing_email; description/content are optional free text).
+    "DJ001",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "organizations", "projects", "subscriptions", "users"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and factories: asserts, and string literals ruff reads as passwords.
+"**/tests.py" = ["S101", "S105", "S106"]
+"**/factories.py" = ["S105", "S106"]
+# Settings compose via `from base import *`.
+"core/settings/*" = ["F401", "F403", "F405"]

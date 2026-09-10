@@ -1,0 +1,38 @@
+# Dev-only overlay: hot-reload runserver instead of gunicorn, source mounted
+# for live edits, local settings, host-published db/redis/flower ports.
+#
+# NOT auto-loaded — you must name it explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up   (`make up`)
+# Plain `docker compose up` uses only docker-compose.yml (the prod-safe
+# gunicorn/worker/no-mount setup), so it can't silently boot dev config.
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    # Still requires -a $REDIS_PASSWORD (see .env) even on localhost — the
+    # base service's --requirepass isn't overridden here.
+    ports:
+      - "6379:6379"
+
+  web:
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
+  worker:
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
+  flower:
+    ports:
+      - "5555:5555"
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local

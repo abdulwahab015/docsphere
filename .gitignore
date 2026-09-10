@@ -5,6 +5,11 @@ __pycache__/
 db.sqlite3
 *.sqlite3-journal
 media/
+staticfiles/*
+!staticfiles/.gitkeep
 .DS_Store
 .vscode/
 .idea/
+.ruff_cache/
+.coverage
+htmlcov/
