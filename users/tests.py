@@ -17,6 +17,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 
+from core.testing import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory
 from users.choices import InvitationStatus
 from users.constants import MAX_BULK_INVITE_ROWS
@@ -290,8 +291,9 @@ class PasswordResetTests(APITestCase):
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-class InvitationTests(APITestCase):
+class InvitationTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
+        super().setUp()
         self.org_a = OrganizationFactory(name="Org A")
         self.org_b = OrganizationFactory(name="Org B")
 
@@ -494,8 +496,9 @@ class InvitationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
-class DeactivateUserTests(APITestCase):
+class DeactivateUserTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
+        super().setUp()
         self.org = OrganizationFactory(name="Org A")
         self.other_org = OrganizationFactory(name="Org B")
 
@@ -643,8 +646,9 @@ class ModelStrTests(TestCase):
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-class InvitationBulkCreateTests(APITestCase):
+class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
+        super().setUp()
         self.org_a = OrganizationFactory(name="Org A")
         self.admin_a = AdminUserFactory(
             email="admin-a@example.com", organization=self.org_a

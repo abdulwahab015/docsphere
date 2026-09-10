@@ -16,6 +16,7 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
     InvitationAcceptSerializer,
@@ -48,7 +49,7 @@ class InvitationListCreateAPIView(generics.ListCreateAPIView):
     """Lists and creates invitations, scoped to the requesting admin's organization."""
 
     serializer_class = InvitationCreateSerializer
-    permission_classes = [IsOrganizationAdmin]
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     def get_queryset(self):
         return Invitation.objects.for_organization(
@@ -64,7 +65,7 @@ class InvitationBulkCreateAPIView(APIView):
     """Creates invitations in bulk from an uploaded .xlsx file of email
     addresses, scoped to the requesting admin's organization."""
 
-    permission_classes = [IsOrganizationAdmin]
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     @extend_schema(
         request={
@@ -254,7 +255,7 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
     Cross-organization targets are indistinguishable from missing ones.
     """
 
-    permission_classes = [IsOrganizationAdmin]
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     def get_queryset(self):
         return User.objects.filter(organization_id=self.request.user.organization_id)
