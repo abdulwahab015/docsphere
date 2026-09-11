@@ -1,5 +1,6 @@
 from rest_framework.exceptions import APIException
 from rest_framework.permissions import BasePermission
+from rest_framework.settings import api_settings
 
 
 class SubscriptionRequired(APIException):
@@ -34,3 +35,24 @@ class HasActiveSubscription(BasePermission):
             raise SubscriptionRequired()
 
         return True
+
+
+class ExtraPermissionsMixin:
+    """Adds view-specific permissions to ``DEFAULT_PERMISSION_CLASSES`` instead
+    of replacing them, as setting ``permission_classes`` directly would.
+
+    Declare ``extra_permission_classes`` for a fixed set, or override
+    ``get_permissions`` and call ``_permissions_for`` when it varies by
+    request. Extras run first - they're cheap attribute checks, while
+    ``HasActiveSubscription`` hits the database and shouldn't run for a
+    request an extra would deny anyway.
+    """
+
+    extra_permission_classes: tuple = ()
+
+    def get_permissions(self):
+        return self._permissions_for(*self.extra_permission_classes)
+
+    def _permissions_for(self, *extra_classes):
+        classes = (*extra_classes, *api_settings.DEFAULT_PERMISSION_CLASSES)
+        return [permission_class() for permission_class in classes]
