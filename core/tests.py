@@ -2,6 +2,7 @@ import json
 import logging
 from unittest.mock import patch
 
+import stripe
 from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
@@ -12,7 +13,11 @@ from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
 from core.permissions import HasActiveSubscription, SubscriptionRequired
 from core.testing import AssumeActiveSubscription
-from organizations.factories import StripeSubscriptionFactory
+from organizations.factories import (
+    StripeCustomerFactory,
+    StripeSubscriptionFactory,
+    WebhookEndpointFactory,
+)
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 
 
@@ -306,17 +311,79 @@ class HasActiveSubscriptionEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
+def _sign_webhook_payload(payload, secret):
+    """Build a real ``Stripe-Signature`` header for a webhook body, using
+    stripe's own test-signing helper - no cryptography is mocked here."""
+    body = json.dumps(payload)
+    header = stripe.WebhookSignature.generate_signature_header(
+        payload=body, secret=secret
+    )
+    return body, header
+
+
 class StripeWebhookEndpointTests(APITestCase):
-    """The dj-stripe webhook is mounted and CSRF-exempt. Signature verification
-    is dj-stripe's concern and isn't re-tested here."""
+    """The dj-stripe webhook is mounted and CSRF-exempt."""
 
     def setUp(self):
+        self.endpoint = WebhookEndpointFactory()
         self.url = reverse(
             "djstripe:djstripe_webhook_by_uuid",
-            kwargs={"uuid": "3fa85f64-5717-4562-b3fc-2c963f66afa6"},
+            kwargs={"uuid": str(self.endpoint.djstripe_uuid)},
         )
 
-    def test_endpoint_is_routed_and_rejects_an_unsigned_payload(self):
+    def test_valid_signed_event_syncs_the_local_subscription(self):
+        admin = AdminUserFactory()
+        StripeCustomerFactory(subscriber=admin.organization, id="cus_test_webhook")
+        subscription_object = {
+            "id": "sub_test_webhook",
+            "object": "subscription",
+            "customer": "cus_test_webhook",
+            "status": "active",
+            "items": {
+                "object": "list",
+                "data": [],
+                "has_more": False,
+                "total_count": 0,
+                "url": "/v1/subscription_items",
+            },
+        }
+        body, signature = _sign_webhook_payload(
+            {
+                "id": "evt_test_webhook",
+                "object": "event",
+                "api_version": "2020-08-27",
+                "livemode": False,
+                "type": "customer.subscription.updated",
+                "data": {"object": subscription_object},
+            },
+            self.endpoint.secret,
+        )
+        # dj-stripe's event handler re-fetches the canonical object from
+        # Stripe rather than trusting the webhook payload - the one genuine
+        # outbound API call in this flow, and the only thing mocked here.
+        remote_subscription = stripe.Subscription.construct_from(
+            subscription_object, "sk_test_dummy"
+        )
+
+        with (
+            patch(
+                "djstripe.models.Account.get_or_retrieve_for_api_key",
+                return_value=None,
+            ),
+            patch("stripe.Subscription.retrieve", return_value=remote_subscription),
+            self.assertNumQueries(17),
+        ):
+            response = self.client.post(
+                self.url,
+                data=body,
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE=signature,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(admin.organization.active_subscription)
+
+    def test_endpoint_rejects_an_unsigned_payload(self):
         with self.assertNumQueries(0):
             response = self.client.post(
                 self.url, data="{}", content_type="application/json"
@@ -325,9 +392,14 @@ class StripeWebhookEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_signed_payload_for_an_unknown_endpoint_uuid_is_404(self):
+        unknown_url = reverse(
+            "djstripe:djstripe_webhook_by_uuid",
+            kwargs={"uuid": "3fa85f64-5717-4562-b3fc-2c963f66afa6"},
+        )
+
         with self.assertNumQueries(1):
             response = self.client.post(
-                self.url,
+                unknown_url,
                 data="{}",
                 content_type="application/json",
                 HTTP_STRIPE_SIGNATURE="t=1,v1=deadbeef",

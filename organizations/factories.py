@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import factory
 from django.utils import timezone
-from djstripe.models import Customer, Subscription
+from djstripe.models import Customer, Subscription, WebhookEndpoint
 
 from organizations.models import Organization
 
@@ -49,3 +49,19 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
             ),
         }
     )
+
+
+class WebhookEndpointFactory(factory.django.DjangoModelFactory):
+    """A dj-stripe WebhookEndpoint - the signing secret Stripe posts events
+    against. For local/dev/test only; a real endpoint is created via the
+    Stripe dashboard (or synced from it) and its secret stored here."""
+
+    class Meta:
+        model = WebhookEndpoint
+
+    id = factory.Sequence(lambda n: f"we_test{n}")
+    secret = factory.Sequence(lambda n: f"whsec_test{n}")
+    enabled_events = factory.LazyFunction(lambda: ["*"])
+    status = "enabled"
+    url = factory.LazyAttribute(lambda o: f"https://example.com/stripe/webhook/{o.id}/")
+    stripe_data = factory.LazyAttribute(lambda o: {"id": o.id})
