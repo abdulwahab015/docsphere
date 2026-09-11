@@ -36,6 +36,35 @@ def access_permits(access_level, action):
     return action in ALLOWED_ACTIONS.get(access_level, frozenset())
 
 
+def resolve_project_access(user, project):
+    """Return ``user``'s effective ``AccessLevel`` on ``project``, or ``None``.
+
+    A project has a single permission tier - there's no parent resource to
+    inherit from - so this is one ``ProjectPermission`` lookup with no fallback.
+    """
+    return (
+        ProjectPermission.objects.filter(user=user, project=project)
+        .values_list("access_level", flat=True)
+        .first()
+    )
+
+
+class HasProjectAccess(BasePermission):
+    """Object-level permission for project views: safe methods need Viewer,
+    writes need Editor, DELETE needs Owner."""
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+
+        action = Action.READ if request.method in SAFE_METHODS else Action.WRITE
+        if request.method == "DELETE":
+            action = Action.DELETE
+
+        return access_permits(resolve_project_access(user, obj), action)
+
+
 class HasDocumentAccess(BasePermission):
     """Object-level permission for document views: safe methods need Viewer,
     writes need Editor, DELETE needs Owner. Re-share isn't an HTTP verb, so
