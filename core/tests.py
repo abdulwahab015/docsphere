@@ -2,13 +2,22 @@ import json
 import logging
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+import stripe
+from django.contrib.auth.models import AnonymousUser
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIRequestFactory, APITestCase
 
 from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
+from core.permissions import HasActiveSubscription, SubscriptionRequired
+from core.testing import AssumeActiveSubscription
+from organizations.factories import (
+    StripeCustomerFactory,
+    StripeSubscriptionFactory,
+    WebhookEndpointFactory,
+)
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 
 
@@ -164,8 +173,9 @@ class RequestLoggingMiddlewareTests(APITestCase):
         self.assertEqual(captured.records[0].client_ip, "10.0.0.1")
 
 
-class DefaultPaginationTests(APITestCase):
+class DefaultPaginationTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
+        super().setUp()
         self.admin = AdminUserFactory()
         InvitationFactory(organization=self.admin.organization, invited_by=self.admin)
 
@@ -196,3 +206,203 @@ class HealthzTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertEqual(response.data, {"status": "unhealthy"})
+
+
+class HasActiveSubscriptionUnitTests(TestCase):
+    """The permission in isolation - the branches that don't need a live
+    endpoint carrying it."""
+
+    @staticmethod
+    def _check(user):
+        request = APIRequestFactory().get("/")
+        request.user = user
+        return HasActiveSubscription().has_permission(request, view=None)
+
+    def test_anonymous_user_passes(self):
+        with self.assertNumQueries(0):
+            self.assertIs(self._check(AnonymousUser()), True)
+
+    def test_user_without_an_organization_passes(self):
+        superuser = UserFactory.build(organization=None)
+
+        with self.assertNumQueries(0):
+            self.assertIs(self._check(superuser), True)
+
+    def test_user_with_an_active_subscription_passes(self):
+        user = UserFactory()
+        StripeSubscriptionFactory(customer__subscriber=user.organization)
+
+        with self.assertNumQueries(2):
+            self.assertIs(self._check(user), True)
+
+    def test_user_without_an_active_subscription_raises_402(self):
+        user = UserFactory()
+
+        with self.assertNumQueries(1), self.assertRaises(SubscriptionRequired):
+            self._check(user)
+
+
+class HasActiveSubscriptionEndpointTests(APITestCase):
+    """End to end through ``invitation_list_create``, which carries
+    ``HasActiveSubscription`` after ``IsOrganizationAdmin``."""
+
+    def setUp(self):
+        self.url = reverse("invitation_list_create")
+
+    def test_active_subscription_passes_through(self):
+        admin = AdminUserFactory()
+        StripeSubscriptionFactory(customer__subscriber=admin.organization)
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_missing_subscription_is_blocked_with_402(self):
+        self.client.force_authenticate(AdminUserFactory())
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_402_PAYMENT_REQUIRED)
+        self.assertEqual(
+            response.json(),
+            {
+                "detail": SubscriptionRequired.default_detail,
+                "code": SubscriptionRequired.default_code,
+            },
+        )
+
+    def test_expired_subscription_is_blocked_with_402(self):
+        admin = AdminUserFactory()
+        StripeSubscriptionFactory(
+            customer__subscriber=admin.organization, status="canceled"
+        )
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_402_PAYMENT_REQUIRED)
+
+    def test_unauthenticated_request_is_not_subscription_gated(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_non_admin_is_denied_before_the_subscription_check(self):
+        self.client.force_authenticate(UserFactory())
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_allow_any_endpoint_is_never_gated(self):
+        self.client.force_authenticate(AdminUserFactory())
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset"), {"email": "nobody@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+def _sign_webhook_payload(payload, secret):
+    """Build a real ``Stripe-Signature`` header for a webhook body, using
+    stripe's own test-signing helper - no cryptography is mocked here."""
+    body = json.dumps(payload)
+    header = stripe.WebhookSignature.generate_signature_header(
+        payload=body, secret=secret
+    )
+    return body, header
+
+
+class StripeWebhookEndpointTests(APITestCase):
+    """The dj-stripe webhook is mounted and CSRF-exempt."""
+
+    def setUp(self):
+        self.endpoint = WebhookEndpointFactory()
+        self.url = reverse(
+            "djstripe:djstripe_webhook_by_uuid",
+            kwargs={"uuid": str(self.endpoint.djstripe_uuid)},
+        )
+
+    def test_valid_signed_event_syncs_the_local_subscription(self):
+        admin = AdminUserFactory()
+        StripeCustomerFactory(subscriber=admin.organization, id="cus_test_webhook")
+        subscription_object = {
+            "id": "sub_test_webhook",
+            "object": "subscription",
+            "customer": "cus_test_webhook",
+            "status": "active",
+            "items": {
+                "object": "list",
+                "data": [],
+                "has_more": False,
+                "total_count": 0,
+                "url": "/v1/subscription_items",
+            },
+        }
+        body, signature = _sign_webhook_payload(
+            {
+                "id": "evt_test_webhook",
+                "object": "event",
+                "api_version": "2020-08-27",
+                "livemode": False,
+                "type": "customer.subscription.updated",
+                "data": {"object": subscription_object},
+            },
+            self.endpoint.secret,
+        )
+        # dj-stripe's event handler re-fetches the canonical object from
+        # Stripe rather than trusting the webhook payload - the one genuine
+        # outbound API call in this flow, and the only thing mocked here.
+        remote_subscription = stripe.Subscription.construct_from(
+            subscription_object, "sk_test_dummy"
+        )
+
+        with (
+            patch(
+                "djstripe.models.Account.get_or_retrieve_for_api_key",
+                return_value=None,
+            ),
+            patch("stripe.Subscription.retrieve", return_value=remote_subscription),
+            self.assertNumQueries(17),
+        ):
+            response = self.client.post(
+                self.url,
+                data=body,
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE=signature,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(admin.organization.active_subscription)
+
+    def test_endpoint_rejects_an_unsigned_payload(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                self.url, data="{}", content_type="application/json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_signed_payload_for_an_unknown_endpoint_uuid_is_404(self):
+        unknown_url = reverse(
+            "djstripe:djstripe_webhook_by_uuid",
+            kwargs={"uuid": "3fa85f64-5717-4562-b3fc-2c963f66afa6"},
+        )
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                unknown_url,
+                data="{}",
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="t=1,v1=deadbeef",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
