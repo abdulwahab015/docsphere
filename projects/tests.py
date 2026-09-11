@@ -529,3 +529,63 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.project.refresh_from_db()
         self.assertTrue(self.project.is_active)
+
+
+class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha", is_active=False)
+        self.org = self.project.organization
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(organization=self.org)
+        self.url = reverse("project_restore", args=[self.project.pk])
+
+    def test_admin_can_restore_a_soft_deleted_project(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], "Alpha")
+        self.project.refresh_from_db()
+        self.assertTrue(self.project.is_active)
+
+    def test_non_admin_cannot_restore(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.project.refresh_from_db()
+        self.assertFalse(self.project.is_active)
+
+    def test_admin_without_an_organization_cannot_restore(self):
+        rootless_admin = AdminUserFactory(organization=None)
+        self.client.force_authenticate(rootless_admin)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_restoring_an_already_active_project_is_a_404(self):
+        active_project = ProjectFactory(organization=self.org, name="Beta")
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("project_restore", args=[active_project.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cross_org_restore_is_a_404(self):
+        foreign = ProjectFactory(name="Foreign", is_active=False)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(reverse("project_restore", args=[foreign.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
