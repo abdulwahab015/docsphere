@@ -3,7 +3,7 @@ from django.db import models
 
 from core.models import TimeStampedModel
 from projects.choices import AccessLevel
-from projects.managers import ProjectManager
+from projects.managers import DocumentManager, ProjectManager
 
 
 class Project(TimeStampedModel):
@@ -50,6 +50,8 @@ class Document(TimeStampedModel):
 
     title = models.CharField(max_length=100, db_index=True)
     content = models.TextField(null=True, blank=True)
+
+    objects = DocumentManager()
 
     def __str__(self):
         return self.title
