@@ -33,7 +33,7 @@ def access_permits(access_level, action):
     if not access_level:
         return False
 
-    return action in ALLOWED_ACTIONS.get(access_level, frozenset())
+    return action in ALLOWED_ACTIONS.get(access_level, set())
 
 
 class HasDocumentAccess(BasePermission):

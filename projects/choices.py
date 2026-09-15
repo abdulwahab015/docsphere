@@ -12,7 +12,7 @@ class AccessLevel(models.TextChoices):
 class Action(models.TextChoices):
     """Things a user can attempt against a document or project."""
 
-    READ = "read", "Read"
-    WRITE = "write", "Write"
-    DELETE = "delete", "Delete"
-    RESHARE = "reshare", "Re-share"
+    READ = "READ", "Read"
+    WRITE = "WRITE", "Write"
+    DELETE = "DELETE", "Delete"
+    RESHARE = "RESHARE", "Re-share"
