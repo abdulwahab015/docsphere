@@ -16,7 +16,7 @@ from rest_framework_simplejwt.token_blacklist.models import (
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from core.permissions import ExtraPermissionsMixin
+from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
     InvitationAcceptSerializer,
@@ -45,11 +45,11 @@ class LoginView(TokenObtainPairView):
     throttle_scope = "login"
 
 
-class InvitationListCreateAPIView(ExtraPermissionsMixin, generics.ListCreateAPIView):
+class InvitationListCreateAPIView(generics.ListCreateAPIView):
     """Lists and creates invitations, scoped to the requesting admin's organization."""
 
     serializer_class = InvitationCreateSerializer
-    extra_permission_classes = (IsOrganizationAdmin,)
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     def get_queryset(self):
         return Invitation.objects.for_organization(
@@ -61,11 +61,11 @@ class InvitationListCreateAPIView(ExtraPermissionsMixin, generics.ListCreateAPIV
         send_invitation_email_task.delay(invitation.pk)
 
 
-class InvitationBulkCreateAPIView(ExtraPermissionsMixin, APIView):
+class InvitationBulkCreateAPIView(APIView):
     """Creates invitations in bulk from an uploaded .xlsx file of email
     addresses, scoped to the requesting admin's organization."""
 
-    extra_permission_classes = (IsOrganizationAdmin,)
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     @extend_schema(
         request={
@@ -249,13 +249,13 @@ class PasswordResetConfirmAPIView(APIView):
         404: OpenApiResponse(description="No such user in your organization."),
     }
 )
-class DeactivateUserAPIView(ExtraPermissionsMixin, generics.DestroyAPIView):
+class DeactivateUserAPIView(generics.DestroyAPIView):
     """Admin-initiated soft-removal of a user within the requesting admin's own
     organization: sets ``is_active=False``, never a hard delete.
     Cross-organization targets are indistinguishable from missing ones.
     """
 
-    extra_permission_classes = (IsOrganizationAdmin,)
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     def get_queryset(self):
         return User.objects.filter(organization_id=self.request.user.organization_id)

@@ -4,10 +4,11 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import generics
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import ExtraPermissionsMixin
+from core.permissions import HasActiveSubscription
 from projects.api.v1.serializers import ProjectSerializer
 from projects.choices import AccessLevel
 from projects.models import Project, ProjectPermission
@@ -15,7 +16,7 @@ from projects.permissions import HasProjectAccess
 from users.permissions import IsOrganizationAdmin
 
 
-class ProjectListCreateAPIView(ExtraPermissionsMixin, generics.ListCreateAPIView):
+class ProjectListCreateAPIView(generics.ListCreateAPIView):
     """Lists the caller's organization's projects (``?search=`` matches the
     name); creates one - admins only - recording the caller as ``created_by``
     and granting them Owner access to it."""
@@ -26,8 +27,8 @@ class ProjectListCreateAPIView(ExtraPermissionsMixin, generics.ListCreateAPIView
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return self._permissions_for(IsOrganizationAdmin)
-        return self._permissions_for()
+            return [IsOrganizationAdmin(), HasActiveSubscription()]
+        return [IsAuthenticated(), HasActiveSubscription()]
 
     def get_queryset(self):
         return Project.objects.for_organization(
@@ -52,16 +53,14 @@ class ProjectListCreateAPIView(ExtraPermissionsMixin, generics.ListCreateAPIView
             )
 
 
-class ProjectDetailAPIView(
-    ExtraPermissionsMixin, generics.RetrieveUpdateDestroyAPIView
-):
+class ProjectRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update, or soft-delete a single project. Requires a resolvable
     ProjectPermission: read needs Viewer, write needs Editor, delete needs
     Owner. Cross-organization projects are indistinguishable from missing ones.
     """
 
     serializer_class = ProjectSerializer
-    extra_permission_classes = (HasProjectAccess,)
+    permission_classes = (IsAuthenticated, HasProjectAccess, HasActiveSubscription)
 
     def get_queryset(self):
         return Project.objects.for_organization(self.request.user.organization)
@@ -73,14 +72,14 @@ class ProjectDetailAPIView(
         instance.save(update_fields=["is_active"])
 
 
-class ProjectRestoreAPIView(ExtraPermissionsMixin, APIView):
+class ProjectRestoreAPIView(APIView):
     """Reverses a soft-delete. Admin-only, like project creation - a Project's
     own ProjectPermission rows survive the soft-delete, but restoring one isn't
     gated on them. Cross-organization and already-active projects are both a
     404, since neither is in the restore lookup set.
     """
 
-    extra_permission_classes = (IsOrganizationAdmin,)
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     @extend_schema(request=None, responses={200: ProjectSerializer})
     def post(self, request, pk):

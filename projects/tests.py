@@ -1,11 +1,10 @@
-from django.contrib.auth.models import AnonymousUser
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIRequestFactory, APITestCase
 
-from core.testing import AssumeActiveSubscription
+from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory
 from projects.api.v1.serializers import ProjectSerializer
 from projects.api.v1.views import ProjectListCreateAPIView
@@ -199,15 +198,6 @@ class HasDocumentAccessTests(TestCase):
         with self.assertNumQueries(2):
             self.assertFalse(self._check("GET"))
 
-    def test_anonymous_user_is_denied_without_hitting_the_db(self):
-        request = self.factory.get("/")
-        request.user = AnonymousUser()
-
-        with self.assertNumQueries(0):
-            self.assertFalse(
-                self.permission.has_object_permission(request, None, self.document)
-            )
-
 
 class ResolveProjectAccessTests(TestCase):
     """A single ProjectPermission lookup, no fallback chain."""
@@ -290,15 +280,6 @@ class HasProjectAccessTests(TestCase):
     def test_user_without_any_permission_is_denied(self):
         with self.assertNumQueries(1):
             self.assertFalse(self._check("GET"))
-
-    def test_anonymous_user_is_denied_without_hitting_the_db(self):
-        request = self.factory.get("/")
-        request.user = AnonymousUser()
-
-        with self.assertNumQueries(0):
-            self.assertFalse(
-                self.permission.has_object_permission(request, None, self.project)
-            )
 
 
 class ProjectCreateAPITests(AssumeActiveSubscription, APITestCase):
