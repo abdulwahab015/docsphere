@@ -17,7 +17,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 
-from core.testing import AssumeActiveSubscription
+from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory
 from users.choices import InvitationStatus
 from users.constants import MAX_BULK_INVITE_ROWS

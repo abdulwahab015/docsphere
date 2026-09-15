@@ -1,6 +1,6 @@
 import json
 import logging
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import stripe
 from django.contrib.auth.models import AnonymousUser
@@ -12,12 +12,12 @@ from rest_framework.test import APIRequestFactory, APITestCase
 from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
 from core.permissions import HasActiveSubscription, SubscriptionRequired
-from core.testing import AssumeActiveSubscription
 from organizations.factories import (
     StripeCustomerFactory,
     StripeSubscriptionFactory,
     WebhookEndpointFactory,
 )
+from organizations.models import Organization
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 
 
@@ -171,6 +171,24 @@ class RequestLoggingMiddlewareTests(APITestCase):
 
         # Left of the proxy-appended entry is client-controlled; take the last.
         self.assertEqual(captured.records[0].client_ip, "10.0.0.1")
+
+
+class AssumeActiveSubscription:
+    """Test mixin that makes ``Organization.active_subscription`` truthy for the
+    duration of each test, so ``HasActiveSubscription`` passes without any
+    dj-stripe rows. Use it where a paid organization is a precondition rather
+    than the thing under test."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch.object(
+            Organization,
+            "active_subscription",
+            new_callable=PropertyMock,
+            return_value=True,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
 
 class DefaultPaginationTests(AssumeActiveSubscription, APITestCase):
