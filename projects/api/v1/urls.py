@@ -1,6 +1,9 @@
 from django.urls import path
 
 from projects.api.v1.views import (
+    DocumentListCreateAPIView,
+    DocumentRestoreAPIView,
+    DocumentRetrieveUpdateDestroyAPIView,
     ProjectListCreateAPIView,
     ProjectRestoreAPIView,
     ProjectRetrieveUpdateDestroyAPIView,
@@ -14,4 +17,18 @@ urlpatterns = [
         name="project_detail",
     ),
     path("<int:pk>/restore/", ProjectRestoreAPIView.as_view(), name="project_restore"),
+]
+
+document_urlpatterns = [
+    path("", DocumentListCreateAPIView.as_view(), name="document_list_create"),
+    path(
+        "<int:pk>/",
+        DocumentRetrieveUpdateDestroyAPIView.as_view(),
+        name="document_detail",
+    ),
+    path(
+        "<int:pk>/restore/",
+        DocumentRestoreAPIView.as_view(),
+        name="document_restore",
+    ),
 ]

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from projects.models import Project
+from projects.models import Document, Project
 
 
 class ProjectSerializer(serializers.ModelSerializer):
@@ -42,3 +42,28 @@ class ProjectSerializer(serializers.ModelSerializer):
                 "A project with this name already exists in your organization."
             )
         return value
+
+
+class DocumentSerializer(serializers.ModelSerializer):
+    """``created_by`` and ``project`` are always set server-side in the view
+    (the latter after explicit org-scoped validation) and never accepted from
+    the client through this serializer."""
+
+    class Meta:
+        model = Document
+        fields = [
+            "id",
+            "title",
+            "content",
+            "created_by",
+            "project",
+            "created",
+            "modified",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "project",
+            "created",
+            "modified",
+        ]
