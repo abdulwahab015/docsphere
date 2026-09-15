@@ -123,7 +123,6 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
     """
 
     serializer_class = DocumentSerializer
-    permission_classes = (IsAuthenticated, HasActiveSubscription)
     filter_backends = (SearchFilter,)
     search_fields = ("title",)
 
@@ -188,8 +187,6 @@ class DocumentRestoreAPIView(APIView):
     already-active documents are both a 404, since neither is in the restore
     lookup set.
     """
-
-    permission_classes = [IsAuthenticated, HasActiveSubscription]
 
     @extend_schema(request=None, responses={200: DocumentSerializer})
     def post(self, request, pk):
