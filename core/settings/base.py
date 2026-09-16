@@ -18,6 +18,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from decouple import Csv, config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -256,6 +257,19 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
+
+CELERY_BEAT_SCHEDULE = {
+    "send-subscription-expiry-reminders": {
+        "task": "subscriptions.tasks.send_expiry_reminders_task",
+        "schedule": crontab(hour=0, minute=0),
+    },
+}
+
+# How many days before a subscription's current period ends to send a
+# one-time reminder email.
+SUBSCRIPTION_EXPIRY_REMINDER_DAYS = config(
+    "SUBSCRIPTION_EXPIRY_REMINDER_DAYS", cast=int
+)
 
 
 # Logging

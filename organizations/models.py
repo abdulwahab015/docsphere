@@ -11,6 +11,7 @@ class Organization(TimeStampedModel):
 
     name = models.CharField(max_length=100)
     billing_email = models.EmailField(blank=True, null=True, unique=True)
+    last_expiry_reminder_sent_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.name
