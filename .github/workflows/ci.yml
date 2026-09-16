@@ -21,6 +21,9 @@ jobs:
       LOGIN_THROTTLE_RATE: "100000/min"
       INVITE_ACCEPT_THROTTLE_RATE: "100000/min"
       PASSWORD_RESET_THROTTLE_RATE: "100000/min"
+      BILLING_CHECKOUT_THROTTLE_RATE: "100000/min"
+      STRIPE_PRICE_ID_MONTHLY: price_ci_dummy_monthly
+      STRIPE_PRICE_ID_YEARLY: price_ci_dummy_yearly
 
     steps:
       - uses: actions/checkout@v4
