@@ -180,7 +180,7 @@ STRIPE_TEST_SECRET_KEY = config("STRIPE_TEST_SECRET_KEY", default="")
 STRIPE_TEST_PUBLIC_KEY = config("STRIPE_TEST_PUBLIC_KEY", default="")
 STRIPE_LIVE_SECRET_KEY = config("STRIPE_LIVE_SECRET_KEY", default="")
 STRIPE_LIVE_PUBLIC_KEY = config("STRIPE_LIVE_PUBLIC_KEY", default="")
-DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET", default="")
+DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET")
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
 DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
 
@@ -294,6 +294,11 @@ LOGGING = {
             "propagate": False,
         },
         "core": {
+            "handlers": ["console"],
+            "level": config("CORE_LOG_LEVEL", default="INFO"),
+            "propagate": False,
+        },
+        "subscriptions": {
             "handlers": ["console"],
             "level": config("CORE_LOG_LEVEL", default="INFO"),
             "propagate": False,

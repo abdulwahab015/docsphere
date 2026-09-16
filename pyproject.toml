@@ -46,3 +46,5 @@ known-first-party = ["core", "organizations", "projects", "subscriptions", "user
 "**/factories.py" = ["S105", "S106"]
 # Settings compose via `from base import *`.
 "core/settings/*" = ["F401", "F403", "F405"]
+# Imported in ready() purely to register its signal receivers.
+"subscriptions/apps.py" = ["F401"]
