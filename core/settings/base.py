@@ -184,6 +184,9 @@ DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET", default="")
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
 DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
 
+STRIPE_PRICE_ID_MONTHLY = config("STRIPE_PRICE_ID_MONTHLY")
+STRIPE_PRICE_ID_YEARLY = config("STRIPE_PRICE_ID_YEARLY")
+
 
 # Django REST Framework / JWT auth
 # https://www.django-rest-framework.org/api-guide/settings/
@@ -211,6 +214,7 @@ REST_FRAMEWORK = {
         "login": config("LOGIN_THROTTLE_RATE"),
         "invite_accept": config("INVITE_ACCEPT_THROTTLE_RATE"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
+        "billing_checkout": config("BILLING_CHECKOUT_THROTTLE_RATE"),
     },
 }
 

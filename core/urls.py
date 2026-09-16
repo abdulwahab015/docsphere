@@ -30,5 +30,6 @@ urlpatterns = [
     path("api/v1/users/", include("users.api.v1.urls")),
     path("api/v1/projects/", include("projects.api.v1.urls")),
     path("api/v1/documents/", include(document_urlpatterns)),
+    path("api/v1/subscriptions/", include("subscriptions.api.v1.urls")),
     path("stripe/", include("djstripe.urls", namespace="djstripe")),
 ]

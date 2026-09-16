@@ -15,7 +15,15 @@ LOGGING["loggers"]["core"]["level"] = "WARNING"
 # Rates high enough that only the tests that explicitly exercise throttling
 # (via patch.object on THROTTLE_RATES) ever hit a 429.
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = dict.fromkeys(
-    ("anon", "user", "login", "invite_accept", "password_reset"), "100000/min"
+    (
+        "anon",
+        "user",
+        "login",
+        "invite_accept",
+        "password_reset",
+        "billing_checkout",
+    ),
+    "100000/min",
 )
 
 # Tests must not depend on the ambient CELERY_TASK_ALWAYS_EAGER value from
