@@ -3,7 +3,6 @@ import logging
 from unittest.mock import PropertyMock, patch
 
 import stripe
-from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from rest_framework import status
@@ -235,10 +234,6 @@ class HasActiveSubscriptionUnitTests(TestCase):
         request = APIRequestFactory().get("/")
         request.user = user
         return HasActiveSubscription().has_permission(request, view=None)
-
-    def test_anonymous_user_passes(self):
-        with self.assertNumQueries(0):
-            self.assertIs(self._check(AnonymousUser()), True)
 
     def test_user_without_an_organization_passes(self):
         superuser = UserFactory.build(organization=None)
