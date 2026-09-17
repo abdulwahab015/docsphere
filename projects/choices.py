@@ -7,3 +7,12 @@ class AccessLevel(models.TextChoices):
     VIEWER = "VIEWER", "Viewer"
     EDITOR = "EDITOR", "Editor"
     OWNER = "OWNER", "Owner"
+
+
+class Action(models.TextChoices):
+    """Things a user can attempt against a document or project."""
+
+    READ = "READ", "Read"
+    WRITE = "WRITE", "Write"
+    DELETE = "DELETE", "Delete"
+    RESHARE = "RESHARE", "Re-share"
