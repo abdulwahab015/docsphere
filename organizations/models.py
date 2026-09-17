@@ -27,7 +27,7 @@ class Organization(TimeStampedModel):
         """Returns the org's current active dj-stripe Subscription, or None."""
 
         customer = Customer.objects.filter(subscriber=self).first()
-        if customer is None:
+        if not customer:
             return None
 
         return customer.subscriptions.active().first()

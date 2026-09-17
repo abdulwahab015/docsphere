@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      DJANGO_SETTINGS_MODULE: core.settings.test
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      ALLOWED_HOSTS: localhost
+      ACCESS_TOKEN_LIFETIME_SECONDS: "900"
+      REFRESH_TOKEN_LIFETIME_SECONDS: "604800"
+      INVITATION_EXPIRY_SECONDS: "604800"
+      ANON_THROTTLE_RATE: "100000/min"
+      USER_THROTTLE_RATE: "100000/min"
+      LOGIN_THROTTLE_RATE: "100000/min"
+      INVITE_ACCEPT_THROTTLE_RATE: "100000/min"
+      PASSWORD_RESET_THROTTLE_RATE: "100000/min"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements/dev.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Check for missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: black
+        run: black --check .
+
+      - name: ruff
+        run: ruff check .
+
+      - name: Test suite
+        run: coverage run manage.py test
+
+      - name: Coverage report (fails under threshold)
+        run: coverage report
