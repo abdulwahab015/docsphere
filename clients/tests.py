@@ -1,19 +1,12 @@
-from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, TestCase
-from django.utils import timezone
 from djstripe.models import Event
 from djstripe.settings import djstripe_settings
 from djstripe.signals import WEBHOOK_SIGNALS, webhook_processing_error
 
 from clients import stripe as stripe_client
-from organizations.factories import (
-    OrganizationFactory,
-    StripeCustomerFactory,
-    StripePriceFactory,
-    StripeSubscriptionFactory,
-)
+from organizations.factories import OrganizationFactory, StripeCustomerFactory
 
 
 class GetOrCreateCustomerIdTests(TestCase):
@@ -36,70 +29,6 @@ class GetOrCreateCustomerIdTests(TestCase):
         customer_id = stripe_client.get_or_create_customer_id(organization)
 
         self.assertEqual(customer_id, "cus_test999")
-
-
-class GetActiveSubscriptionTests(TestCase):
-    def test_returns_the_active_subscription(self):
-        organization = OrganizationFactory()
-        subscription = StripeSubscriptionFactory(customer__subscriber=organization)
-
-        with self.assertNumQueries(2):
-            self.assertEqual(
-                stripe_client.get_active_subscription(organization), subscription
-            )
-
-    def test_returns_none_without_a_customer(self):
-        organization = OrganizationFactory()
-
-        with self.assertNumQueries(1):
-            self.assertIsNone(stripe_client.get_active_subscription(organization))
-
-    def test_returns_none_when_customer_has_no_active_sub(self):
-        organization = OrganizationFactory()
-        StripeCustomerFactory(subscriber=organization)
-
-        with self.assertNumQueries(2):
-            self.assertIsNone(stripe_client.get_active_subscription(organization))
-
-
-class IsActiveRecurringPriceTests(TestCase):
-    def test_true_for_an_active_recurring_price(self):
-        price = StripePriceFactory()
-
-        with self.assertNumQueries(1):
-            self.assertTrue(stripe_client.is_active_recurring_price(price.id))
-
-    def test_false_for_an_inactive_price(self):
-        price = StripePriceFactory(active=False)
-
-        self.assertFalse(stripe_client.is_active_recurring_price(price.id))
-
-    def test_false_for_an_unknown_price(self):
-        self.assertFalse(stripe_client.is_active_recurring_price("price_doesnotexist"))
-
-
-class GetExpiringSubscriptionsTests(TestCase):
-    def test_returns_subscriptions_ending_within_the_window(self):
-        now = timezone.now()
-        subscription = StripeSubscriptionFactory(days_until_renewal=3)
-        StripeSubscriptionFactory(days_until_renewal=30)
-
-        with self.assertNumQueries(1):
-            result = list(
-                stripe_client.get_expiring_subscriptions(now, now + timedelta(days=7))
-            )
-
-        self.assertEqual(result, [subscription])
-
-    def test_excludes_canceled_subscriptions(self):
-        now = timezone.now()
-        StripeSubscriptionFactory(days_until_renewal=3, status="canceled")
-
-        result = list(
-            stripe_client.get_expiring_subscriptions(now, now + timedelta(days=7))
-        )
-
-        self.assertEqual(result, [])
 
 
 class CreateCheckoutSessionTests(SimpleTestCase):

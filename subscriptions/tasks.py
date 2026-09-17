@@ -3,8 +3,8 @@ from datetime import timedelta
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
+from djstripe.models import Subscription
 
-from clients import stripe as stripe_client
 from core.email import send_templated_mail
 from organizations.models import Organization
 
@@ -18,7 +18,14 @@ def send_expiry_reminders_task():
     now = timezone.now()
     window_end = now + timedelta(days=settings.SUBSCRIPTION_EXPIRY_REMINDER_DAYS)
 
-    expiring_subscriptions = stripe_client.get_expiring_subscriptions(now, window_end)
+    expiring_subscriptions = (
+        Subscription.objects.active()
+        .filter(
+            stripe_data__current_period_end__gte=int(now.timestamp()),
+            stripe_data__current_period_end__lte=int(window_end.timestamp()),
+        )
+        .select_related("customer")
+    )
 
     organization_ids = {
         subscription.customer.subscriber_id

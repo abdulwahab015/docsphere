@@ -3,7 +3,7 @@ import logging
 import stripe
 from django.dispatch import receiver
 from djstripe.event_handlers import djstripe_receiver
-from djstripe.models import Customer, Price, Subscription
+from djstripe.models import Customer
 from djstripe.settings import djstripe_settings
 from djstripe.signals import webhook_processing_error
 
@@ -15,35 +15,6 @@ def get_or_create_customer_id(subscriber):
     Stripe API if none exists yet."""
     customer, _ = Customer.get_or_create(subscriber=subscriber)
     return customer.id
-
-
-def get_active_subscription(subscriber):
-    """Returns subscriber's current active dj-stripe Subscription, or None."""
-    customer = Customer.objects.filter(subscriber=subscriber).first()
-    if not customer:
-        return None
-
-    return customer.subscriptions.active().first()
-
-
-def is_active_recurring_price(price_id):
-    """True if price_id is a currently active, recurring dj-stripe Price."""
-    return Price.objects.filter(
-        id=price_id, active=True, stripe_data__type="recurring"
-    ).exists()
-
-
-def get_expiring_subscriptions(window_start, window_end):
-    """Returns active dj-stripe Subscriptions whose current period ends within
-    [window_start, window_end], with their Customer preloaded."""
-    return (
-        Subscription.objects.active()
-        .filter(
-            stripe_data__current_period_end__gte=int(window_start.timestamp()),
-            stripe_data__current_period_end__lte=int(window_end.timestamp()),
-        )
-        .select_related("customer")
-    )
 
 
 def create_checkout_session(

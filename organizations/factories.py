@@ -24,7 +24,7 @@ class StripeCustomerFactory(factory.django.DjangoModelFactory):
     id = factory.Sequence(lambda n: f"cus_test{n}")
     subscriber = factory.SubFactory(OrganizationFactory)
     livemode = False
-    stripe_data = factory.LazyAttribute(lambda o: {"id": o.id})
+    stripe_data = factory.LazyAttribute(lambda customer: {"id": customer.id})
 
 
 class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
@@ -42,11 +42,13 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
     id = factory.Sequence(lambda n: f"sub_test{n}")
     customer = factory.SubFactory(StripeCustomerFactory)
     stripe_data = factory.LazyAttribute(
-        lambda o: {
-            "id": o.id,
-            "status": o.status,
+        lambda subscription: {
+            "id": subscription.id,
+            "status": subscription.status,
             "current_period_end": int(
-                (timezone.now() + timedelta(days=o.days_until_renewal)).timestamp()
+                (
+                    timezone.now() + timedelta(days=subscription.days_until_renewal)
+                ).timestamp()
             ),
         }
     )
@@ -63,7 +65,9 @@ class StripeProductFactory(factory.django.DjangoModelFactory):
     id = factory.Sequence(lambda n: f"prod_test{n}")
     name = "DocSphere Subscription"
     active = True
-    stripe_data = factory.LazyAttribute(lambda o: {"id": o.id, "name": o.name})
+    stripe_data = factory.LazyAttribute(
+        lambda product: {"id": product.id, "name": product.name}
+    )
 
 
 class StripePriceFactory(factory.django.DjangoModelFactory):
@@ -81,12 +85,12 @@ class StripePriceFactory(factory.django.DjangoModelFactory):
     active = True
     currency = "usd"
     stripe_data = factory.LazyAttribute(
-        lambda o: {
-            "id": o.id,
+        lambda price: {
+            "id": price.id,
             "type": "recurring",
-            "currency": o.currency,
+            "currency": price.currency,
             "unit_amount": 1000,
-            "recurring": {"interval": o.interval},
+            "recurring": {"interval": price.interval},
         }
     )
 
@@ -103,5 +107,9 @@ class WebhookEndpointFactory(factory.django.DjangoModelFactory):
     secret = factory.Sequence(lambda n: f"whsec_test{n}")
     enabled_events = factory.LazyFunction(lambda: ["*"])
     status = "enabled"
-    url = factory.LazyAttribute(lambda o: f"https://example.com/stripe/webhook/{o.id}/")
-    stripe_data = factory.LazyAttribute(lambda o: {"id": o.id})
+    url = factory.LazyAttribute(
+        lambda webhook_endpoint: f"https://example.com/stripe/webhook/{webhook_endpoint.id}/"
+    )
+    stripe_data = factory.LazyAttribute(
+        lambda webhook_endpoint: {"id": webhook_endpoint.id}
+    )

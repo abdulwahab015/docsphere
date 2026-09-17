@@ -1,13 +1,15 @@
+from djstripe.models import Price
 from rest_framework import serializers
-
-from clients import stripe as stripe_client
 
 
 class CheckoutSessionSerializer(serializers.Serializer):
     price_id = serializers.CharField()
 
     def validate_price_id(self, value):
-        if not stripe_client.is_active_recurring_price(value):
+        is_active_recurring_price = Price.objects.filter(
+            id=value, active=True, stripe_data__type="recurring"
+        ).exists()
+        if not is_active_recurring_price:
             raise serializers.ValidationError("No such active recurring price.")
         return value
 
