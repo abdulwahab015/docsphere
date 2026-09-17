@@ -8,6 +8,4 @@ from decouple import config
 
 broker = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 
-# "user:password" — required, no default: a misconfigured deploy should fail to
-# start Flower rather than expose an unauthenticated dashboard.
 basic_auth = [config("FLOWER_BASIC_AUTH")]

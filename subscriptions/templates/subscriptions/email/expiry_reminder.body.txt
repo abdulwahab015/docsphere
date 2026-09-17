@@ -1,0 +1,5 @@
+Hi there,
+
+The subscription for {{ organization_name }} is set to renew on {{ expiry_date }}.
+
+If you'd like to make any changes before then, please visit your billing settings.

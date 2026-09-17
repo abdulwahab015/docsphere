@@ -25,8 +25,6 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
-      # A real worker exists in this stack — never run tasks synchronously
-      # in-process, regardless of what .env's local-dev-convenience value is.
       CELERY_TASK_ALWAYS_EAGER: "False"
     ports:
       - "8000:8000"
@@ -51,9 +49,6 @@ services:
       - redis
     restart: unless-stopped
 
-  # Celery monitoring UI. No published port here — reach it over the compose
-  # network or a tunnel; the dev override publishes 5555 for local use.
-  # Auth comes from FLOWER_BASIC_AUTH ("user:password") in .env.
   flower:
     build: .
     command: celery -A core flower --conf=core/settings/flowerconfig.py
