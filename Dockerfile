@@ -1,4 +1,3 @@
-# ---- builder: compiles wheels that need gcc/libpq-dev, discarded after ----
 FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,7 +13,6 @@ COPY requirements/base.txt requirements.txt
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 
-# ---- runtime: slim image, non-root user, gunicorn by default ----
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -31,18 +29,10 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /root/.local /home/app/.local
 COPY --chown=app:app . .
 
-# staticfiles/ is .dockerignore'd (collected fresh below, not shipped from
-# the build context), so it never gets created by the COPY above — make it
-# ourselves, owned by app, before collectstatic runs as that user.
 RUN mkdir -p /app/staticfiles && chown app:app /app/staticfiles
 
 USER app
 
-# Placeholder values scoped to this one RUN layer only (not baked in as image
-# ENV) so collectstatic's settings import succeeds at build time, without a
-# misconfigured runtime container silently falling back to them — a real
-# deployment without real env vars still fails loudly instead of booting
-# insecurely.
 RUN DJANGO_SETTINGS_MODULE=core.settings.production \
     SECRET_KEY=collectstatic-build-time-placeholder \
     ALLOWED_HOSTS=collectstatic \

@@ -1,6 +1,5 @@
 .DEFAULT_GOAL := help
 
-# Dev stack = prod-safe base + the dev overlay (never auto-loaded).
 DC_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
 .PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format \
