@@ -1,16 +1,18 @@
 from unittest.mock import MagicMock, patch
 
 from django.core.cache import cache
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from djstripe.models import Event
 from djstripe.signals import WEBHOOK_SIGNALS, webhook_processing_error
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 
-from organizations.factories import OrganizationFactory
+from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
 from subscriptions.signals import log_subscription_activated
+from subscriptions.tasks import send_expiry_reminders_task
 from users.factories import AdminUserFactory, UserFactory
 
 
@@ -144,3 +146,76 @@ class SubscriptionSignalTests(SimpleTestCase):
             )
 
         self.assertIn("Stripe webhook processing failed", logs.output[0])
+
+
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+    SUBSCRIPTION_EXPIRY_REMINDER_DAYS=7,
+)
+class ExpiryReminderTaskTests(TestCase):
+    @patch("core.email.send_mail")
+    def test_org_within_the_window_and_not_yet_reminded_gets_reminded(
+        self, mock_send_mail
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=3
+        )
+
+        with self.assertNumQueries(6):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_called_once()
+        organization.refresh_from_db()
+        self.assertIsNotNone(organization.last_expiry_reminder_sent_at)
+
+    @patch("core.email.send_mail")
+    def test_already_reminded_org_is_not_reminded_again(self, mock_send_mail):
+        organization = OrganizationFactory(
+            billing_email="billing@example.com",
+            last_expiry_reminder_sent_at=timezone.now(),
+        )
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=3
+        )
+
+        with self.assertNumQueries(2):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_org_outside_the_window_is_skipped(self, mock_send_mail):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=30
+        )
+
+        with self.assertNumQueries(1):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_org_without_an_active_subscription_is_skipped(self, mock_send_mail):
+        OrganizationFactory(billing_email="billing@example.com")
+
+        with self.assertNumQueries(1):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_deactivated_org_is_skipped(self, mock_send_mail):
+        organization = OrganizationFactory(
+            billing_email="billing@example.com", is_active=False
+        )
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=3
+        )
+
+        with self.assertNumQueries(2):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_not_called()

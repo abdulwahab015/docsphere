@@ -8,16 +8,13 @@ https://docs.djangoproject.com/en/6.1/topics/settings/
 
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
-
-Settings common to every environment live here. `DEBUG` and any other
-environment-specific values are set in `local.py` / `production.py`, which
-import everything from this module and override only what differs.
 """
 
 from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from decouple import Csv, config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -111,7 +108,6 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        # Cap length so a multi-MB password can't burn CPU in the hasher.
         "NAME": "users.password_validation.MaximumLengthValidator",
     },
     {
@@ -140,15 +136,10 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
-# Served via WhiteNoise (see MIDDLEWARE) — `collectstatic` populates STATIC_ROOT;
-# `production.py` additionally enables compressed, cache-busted filenames.
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
 EMAIL_BACKEND = config(
     "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
@@ -162,18 +153,7 @@ DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="webmaster@localhost")
 
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
-
-# CORS
-# https://github.com/adamchainz/django-cors-headers
-# Browser clients (the SPA at FRONTEND_URL) call this API cross-origin. Auth is
-# a Bearer token in the Authorization header, so credentialed requests aren't
-# needed — keep an explicit allowlist, never CORS_ALLOW_ALL_ORIGINS.
-
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default=FRONTEND_URL, cast=Csv())
-
-
-# Stripe / dj-stripe
-# https://dj-stripe.dev/reference/settings/
 
 STRIPE_LIVE_MODE = config("STRIPE_LIVE_MODE", default=False, cast=bool)
 STRIPE_TEST_SECRET_KEY = config("STRIPE_TEST_SECRET_KEY", default="")
@@ -187,11 +167,6 @@ DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
 STRIPE_PRICE_ID_MONTHLY = config("STRIPE_PRICE_ID_MONTHLY")
 STRIPE_PRICE_ID_YEARLY = config("STRIPE_PRICE_ID_YEARLY")
 
-
-# Django REST Framework / JWT auth
-# https://www.django-rest-framework.org/api-guide/settings/
-# https://django-rest-framework-simplejwt.readthedocs.io/en/latest/settings.html
-
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -202,8 +177,6 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PAGINATION_CLASS": "core.paginations.PageNumberPagination",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # Baseline rate limiting on every endpoint; sensitive views add a tighter
-    # ScopedRateThrottle on top (see users/api/v1/views.py).
     "DEFAULT_THROTTLE_CLASSES": (
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
@@ -217,10 +190,6 @@ REST_FRAMEWORK = {
         "billing_checkout": config("BILLING_CHECKOUT_THROTTLE_RATE"),
     },
 }
-
-# drf-spectacular — OpenAPI schema + Swagger UI (see core/urls.py).
-# Open to anyone here for convenient local/dev use; production.py locks
-# /api/schema/ and /api/docs/ to staff.
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "DocSphere API",
@@ -240,12 +209,7 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
 }
 
-# How long an unaccepted invitation token stays usable.
 INVITATION_EXPIRY = timedelta(seconds=config("INVITATION_EXPIRY_SECONDS", cast=int))
-
-
-# Celery
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config(
@@ -257,20 +221,21 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
 
+CELERY_BEAT_SCHEDULE = {
+    "send-subscription-expiry-reminders": {
+        "task": "subscriptions.tasks.send_expiry_reminders_task",
+        "schedule": crontab(hour=0, minute=0),
+    },
+}
 
-# Logging
-# Structured JSON to stdout; RequestLoggingMiddleware emits one record per
-# request/response, correlated by `request_id`.
+SUBSCRIPTION_EXPIRY_REMINDER_DAYS = config(
+    "SUBSCRIPTION_EXPIRY_REMINDER_DAYS", cast=int
+)
 
 MAX_LOG_BODY_CHARS = config("MAX_LOG_BODY_CHARS", default=2048, cast=int)
 
-# Paths the request logger skips entirely — health probes hit these every few
-# seconds and would otherwise dominate the logs.
 REQUEST_LOG_SKIP_PATHS = ["/healthz/"]
 
-# Only trust X-Forwarded-For for the logged client IP when actually behind a
-# proxy that appends it (production.py turns this on). Otherwise a client can
-# spoof the field. Log-only — never used for auth or throttling.
 REQUEST_LOG_TRUST_FORWARDED_FOR = False
 
 LOGGING = {
