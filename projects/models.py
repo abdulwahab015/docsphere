@@ -3,6 +3,7 @@ from django.db import models
 
 from core.models import TimeStampedModel
 from projects.choices import AccessLevel
+from projects.managers import ProjectManager
 
 
 class Project(TimeStampedModel):
@@ -19,6 +20,8 @@ class Project(TimeStampedModel):
 
     name = models.CharField(max_length=100, db_index=True)
     description = models.TextField(null=True, blank=True)
+
+    objects = ProjectManager()
 
     class Meta:
         constraints = [
