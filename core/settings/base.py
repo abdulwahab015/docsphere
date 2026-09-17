@@ -185,6 +185,7 @@ REST_FRAMEWORK = {
         "invite_accept": config("INVITE_ACCEPT_THROTTLE_RATE"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
         "billing_checkout": config("BILLING_CHECKOUT_THROTTLE_RATE"),
+        "org_signup": config("ORG_SIGNUP_THROTTLE_RATE"),
     },
 }
 
