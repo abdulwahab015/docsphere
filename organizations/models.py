@@ -1,8 +1,8 @@
 from functools import cached_property
 
 from django.db import models
-from djstripe.models import Customer
 
+from clients import stripe as stripe_client
 from core.models import TimeStampedModel
 
 
@@ -26,9 +26,4 @@ class Organization(TimeStampedModel):
     @cached_property
     def active_subscription(self):
         """Returns the org's current active dj-stripe Subscription, or None."""
-
-        customer = Customer.objects.filter(subscriber=self).first()
-        if not customer:
-            return None
-
-        return customer.subscriptions.active().first()
+        return stripe_client.get_active_subscription(self)

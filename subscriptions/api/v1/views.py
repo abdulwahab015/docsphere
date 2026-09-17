@@ -7,7 +7,6 @@ from subscriptions.api.v1.serializers import (
     CheckoutSessionResponseSerializer,
     CheckoutSessionSerializer,
 )
-from subscriptions.mappings import PLAN_PRICE_IDS
 from subscriptions.services import create_checkout_session
 from users.permissions import IsOrganizationAdmin
 
@@ -29,7 +28,7 @@ class CheckoutSessionCreateAPIView(APIView):
         responses={
             200: CheckoutSessionResponseSerializer,
             400: OpenApiResponse(
-                description="Invalid plan, or organization has no billing email set."
+                description="Invalid price, or organization has no billing email set."
             ),
         },
     )
@@ -40,7 +39,7 @@ class CheckoutSessionCreateAPIView(APIView):
         )
         serializer.is_valid(raise_exception=True)
 
-        price_id = PLAN_PRICE_IDS[serializer.validated_data["plan"]]
+        price_id = serializer.validated_data["price_id"]
         checkout_url = create_checkout_session(organization, price_id)
 
         return Response(

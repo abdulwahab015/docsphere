@@ -1,10 +1,15 @@
 from rest_framework import serializers
 
-from subscriptions.choices import Plan
+from clients import stripe as stripe_client
 
 
 class CheckoutSessionSerializer(serializers.Serializer):
-    plan = serializers.ChoiceField(choices=Plan.choices)
+    price_id = serializers.CharField()
+
+    def validate_price_id(self, value):
+        if not stripe_client.is_active_recurring_price(value):
+            raise serializers.ValidationError("No such active recurring price.")
+        return value
 
     def validate(self, attrs):
         organization = self.context["organization"]
