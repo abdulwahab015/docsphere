@@ -36,19 +36,48 @@ def access_permits(access_level, action):
     return action in ALLOWED_ACTIONS.get(access_level, set())
 
 
+def resolve_project_access(user, project):
+    """Return ``user``'s effective ``AccessLevel`` on ``project``, or ``None``.
+
+    A project has a single permission tier - there's no parent resource to
+    inherit from - so this is one ``ProjectPermission`` lookup with no fallback.
+    """
+    return (
+        ProjectPermission.objects.filter(user=user, project=project)
+        .values_list("access_level", flat=True)
+        .first()
+    )
+
+
+def _action_for_method(method):
+    """Maps an HTTP method to the ``Action`` it represents: safe methods read,
+    ``DELETE`` deletes, everything else writes."""
+    if method == "DELETE":
+        return Action.DELETE
+    return Action.READ if method in SAFE_METHODS else Action.WRITE
+
+
+class HasProjectAccess(BasePermission):
+    """Object-level permission for project views: safe methods need Viewer,
+    writes need Editor, DELETE needs Owner. Assumes ``IsAuthenticated`` (or
+    equivalent) already ran - DRF only calls ``has_object_permission`` once
+    every view-level permission has passed, so every view using this must
+    also list an authentication permission."""
+
+    def has_object_permission(self, request, view, obj):
+        action = _action_for_method(request.method)
+        return access_permits(resolve_project_access(request.user, obj), action)
+
+
 class HasDocumentAccess(BasePermission):
     """Object-level permission for document views: safe methods need Viewer,
     writes need Editor, DELETE needs Owner. Re-share isn't an HTTP verb, so
     share actions must call ``access_permits(level, Action.RESHARE)`` directly.
+    Assumes ``IsAuthenticated`` (or equivalent) already ran - DRF only calls
+    ``has_object_permission`` once every view-level permission has passed, so
+    every view using this must also list an authentication permission.
     """
 
     def has_object_permission(self, request, view, obj):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return False
-
-        action = Action.READ if request.method in SAFE_METHODS else Action.WRITE
-        if request.method == "DELETE":
-            action = Action.DELETE
-
-        return access_permits(resolve_access(user, obj), action)
+        action = _action_for_method(request.method)
+        return access_permits(resolve_access(request.user, obj), action)
