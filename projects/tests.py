@@ -1277,9 +1277,6 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         ProjectPermissionFactory(
             project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
         )
-        # The target's project-level access (Viewer) is deliberately weaker
-        # than their document-level override (Editor), so revoking the
-        # DocumentPermission is a visible downgrade, not just "access gone".
         ProjectPermissionFactory(
             project=self.project, user=self.target, access_level=AccessLevel.VIEWER
         )

@@ -16,6 +16,7 @@ jobs:
       ACCESS_TOKEN_LIFETIME_SECONDS: "900"
       REFRESH_TOKEN_LIFETIME_SECONDS: "604800"
       INVITATION_EXPIRY_SECONDS: "604800"
+      SUBSCRIPTION_EXPIRY_REMINDER_DAYS: "7"
       ANON_THROTTLE_RATE: "100000/min"
       USER_THROTTLE_RATE: "100000/min"
       LOGIN_THROTTLE_RATE: "100000/min"
@@ -24,6 +25,7 @@ jobs:
       BILLING_CHECKOUT_THROTTLE_RATE: "100000/min"
       STRIPE_PRICE_ID_MONTHLY: price_ci_dummy_monthly
       STRIPE_PRICE_ID_YEARLY: price_ci_dummy_yearly
+      DJSTRIPE_WEBHOOK_SECRET: whsec_ci_dummy_secret
 
     steps:
       - uses: actions/checkout@v4
