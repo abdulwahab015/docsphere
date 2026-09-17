@@ -34,7 +34,9 @@ def send_expiry_reminders_task():
     }
 
     organizations = Organization.objects.filter(
-        id__in=organization_ids, last_expiry_reminder_sent_at__isnull=True
+        id__in=organization_ids,
+        is_active=True,
+        last_expiry_reminder_sent_at__isnull=True,
     )
 
     for organization in organizations:

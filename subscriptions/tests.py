@@ -205,3 +205,17 @@ class ExpiryReminderTaskTests(TestCase):
             send_expiry_reminders_task()
 
         mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_deactivated_org_is_skipped(self, mock_send_mail):
+        organization = OrganizationFactory(
+            billing_email="billing@example.com", is_active=False
+        )
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=3
+        )
+
+        with self.assertNumQueries(2):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_not_called()

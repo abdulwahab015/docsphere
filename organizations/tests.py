@@ -1,10 +1,13 @@
+from django.contrib.admin.sites import AdminSite
 from django.test import TestCase
 
+from organizations.admin import OrganizationAdmin
 from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
     StripeSubscriptionFactory,
 )
+from organizations.models import Organization
 
 
 class OrganizationModelTests(TestCase):
@@ -44,3 +47,28 @@ class OrganizationModelTests(TestCase):
 
         with self.assertNumQueries(2):
             self.assertIsNone(org.active_subscription)
+
+
+class OrganizationAdminActionTests(TestCase):
+    def setUp(self):
+        self.model_admin = OrganizationAdmin(Organization, AdminSite())
+
+    def test_deactivate_organizations_sets_is_active_false(self):
+        org = OrganizationFactory(is_active=True)
+
+        self.model_admin.deactivate_organizations(
+            request=None, queryset=Organization.objects.filter(pk=org.pk)
+        )
+
+        org.refresh_from_db()
+        self.assertFalse(org.is_active)
+
+    def test_activate_organizations_sets_is_active_true(self):
+        org = OrganizationFactory(is_active=False)
+
+        self.model_admin.activate_organizations(
+            request=None, queryset=Organization.objects.filter(pk=org.pk)
+        )
+
+        org.refresh_from_db()
+        self.assertTrue(org.is_active)
