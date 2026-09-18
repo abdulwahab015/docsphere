@@ -154,7 +154,6 @@ class RequestLoggingMiddlewareTests(APITestCase):
                 HTTP_X_FORWARDED_FOR="1.2.3.4, 10.0.0.1",
             )
 
-        # Default REQUEST_LOG_TRUST_FORWARDED_FOR is False → peer address only.
         self.assertEqual(captured.records[0].client_ip, "127.0.0.1")
 
     def test_trusted_forwarded_for_uses_the_right_most_entry(self):
@@ -169,7 +168,6 @@ class RequestLoggingMiddlewareTests(APITestCase):
                 HTTP_X_FORWARDED_FOR="1.2.3.4, 10.0.0.1",
             )
 
-        # Left of the proxy-appended entry is client-controlled; take the last.
         self.assertEqual(captured.records[0].client_ip, "10.0.0.1")
 
 
@@ -200,7 +198,6 @@ class DefaultPaginationTests(AssumeActiveSubscription, APITestCase):
     def test_list_endpoints_return_the_paginated_envelope(self):
         self.client.force_authenticate(self.admin)
 
-        # 1 COUNT for pagination + 1 SELECT for the page.
         with self.assertNumQueries(2):
             response = self.client.get(reverse("invitation_list_create"))
 
@@ -218,7 +215,6 @@ class HealthzTests(APITestCase):
         self.assertEqual(response.data, {"status": "ok"})
 
     def test_healthz_reports_503_when_the_db_probe_fails(self):
-        # DB deliberately broken — query counting is moot here.
         with patch("core.health.connection.cursor", side_effect=Exception("db down")):
             response = self.client.get(reverse("healthz"))
 
@@ -376,9 +372,6 @@ class StripeWebhookEndpointTests(APITestCase):
             },
             self.endpoint.secret,
         )
-        # dj-stripe's event handler re-fetches the canonical object from
-        # Stripe rather than trusting the webhook payload - the one genuine
-        # outbound API call in this flow, and the only thing mocked here.
         remote_subscription = stripe.Subscription.construct_from(
             subscription_object, "sk_test_dummy"
         )

@@ -1,9 +1,8 @@
 .DEFAULT_GOAL := help
 
-# Dev stack = prod-safe base + the dev overlay (never auto-loaded).
 DC_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
-.PHONY: help install compile migrate makemigrations run shell flower test test-cov lint format \
+.PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format \
         up down build logs docker-migrate docker-shell clean
 
 help: ## Show this help
@@ -30,6 +29,9 @@ shell: ## Open the Django shell (local)
 
 flower: ## Run the Flower dashboard (local; needs FLOWER_BASIC_AUTH + a broker)
 	celery -A core flower --conf=core/settings/flowerconfig.py
+
+stripe-listen: ## Forward real Stripe test-mode webhooks to the local server (needs the Stripe CLI, `stripe login`)
+	python manage.py stripe_listen
 
 test: ## Run the test suite (local)
 	python manage.py test
