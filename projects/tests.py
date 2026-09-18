@@ -1,4 +1,6 @@
-from django.test import TestCase
+from unittest.mock import patch
+
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -15,7 +17,7 @@ from projects.factories import (
     ProjectFactory,
     ProjectPermissionFactory,
 )
-from projects.models import Document, Project, ProjectPermission
+from projects.models import Document, DocumentPermission, Project, ProjectPermission
 from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
@@ -893,5 +895,487 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
 
         with self.assertNumQueries(1):
             response = self.client.post(reverse("document_restore", args=[foreign.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        self.viewer = UserFactory(organization=self.org)
+        self.target = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.viewer, access_level=AccessLevel.VIEWER
+        )
+        self.url = reverse("project_share", args=[self.project.pk])
+
+    @patch("core.email.send_mail")
+    def test_owner_can_share_with_a_new_user(self, mock_send_mail):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(11):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permission = ProjectPermission.objects.get(
+            project=self.project, user=self.target
+        )
+        self.assertEqual(permission.access_level, AccessLevel.EDITOR)
+        mock_send_mail.assert_called_once()
+        self.assertEqual(
+            mock_send_mail.call_args.kwargs["recipient_list"], [self.target.email]
+        )
+
+    @patch("core.email.send_mail")
+    def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(9):
+            response = self.client.post(
+                self.url,
+                {"user": self.viewer.pk, "access_level": AccessLevel.OWNER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permissions = ProjectPermission.objects.filter(
+            project=self.project, user=self.viewer
+        )
+        self.assertEqual(permissions.count(), 1)
+        self.assertEqual(permissions.first().access_level, AccessLevel.OWNER)
+        mock_send_mail.assert_called_once()
+
+    def test_owner_can_list_current_grants(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user_ids = {row["user"] for row in response.data["results"]}
+        self.assertEqual(user_ids, {self.owner.pk, self.editor.pk, self.viewer.pk})
+
+    def test_editor_cannot_share(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            ProjectPermission.objects.filter(
+                project=self.project, user=self.target
+            ).exists()
+        )
+
+    def test_editor_cannot_list_current_grants(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_viewer_cannot_share(self):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cross_org_target_user_is_rejected(self):
+        foreign_user = UserFactory()
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.post(
+                self.url,
+                {"user": foreign_user.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            ProjectPermission.objects.filter(
+                project=self.project, user=foreign_user
+            ).exists()
+        )
+
+    def test_cross_org_project_share_attempt_is_a_404(self):
+        foreign_project = ProjectFactory()
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("project_share", args=[foreign_project.pk]),
+                {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        self.target = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.target, access_level=AccessLevel.VIEWER
+        )
+        self.url = reverse(
+            "project_share_revoke", args=[self.project.pk, self.target.pk]
+        )
+
+    def test_owner_can_revoke(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(resolve_project_access(self.target, self.project))
+
+    def test_owner_cannot_revoke_the_projects_last_owner(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(
+                reverse("project_share_revoke", args=[self.project.pk, self.owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            resolve_project_access(self.owner, self.project), AccessLevel.OWNER
+        )
+
+    def test_owner_can_revoke_a_co_owner_when_another_owner_remains(self):
+        co_owner = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=co_owner, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(5):
+            response = self.client.delete(
+                reverse("project_share_revoke", args=[self.project.pk, co_owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(resolve_project_access(co_owner, self.project))
+
+    def test_editor_cannot_revoke(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(2):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIsNotNone(resolve_project_access(self.target, self.project))
+
+    def test_revoking_a_nonexistent_permission_is_a_404(self):
+        stranger = UserFactory(organization=self.org)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(3):
+            response = self.client.delete(
+                reverse("project_share_revoke", args=[self.project.pk, stranger.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cross_org_project_revoke_attempt_is_a_404(self):
+        foreign_project = ProjectFactory()
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(
+                reverse(
+                    "project_share_revoke", args=[foreign_project.pk, self.target.pk]
+                )
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.document = DocumentFactory(project=self.project, title="Doc1")
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        self.target = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        self.url = reverse("document_share", args=[self.document.pk])
+
+    @patch("core.email.send_mail")
+    def test_owner_can_share_with_a_new_user(self, mock_send_mail):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(13):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permission = DocumentPermission.objects.get(
+            document=self.document, user=self.target
+        )
+        self.assertEqual(permission.access_level, AccessLevel.VIEWER)
+        mock_send_mail.assert_called_once()
+        self.assertEqual(
+            mock_send_mail.call_args.kwargs["recipient_list"], [self.target.email]
+        )
+
+    @patch("core.email.send_mail")
+    def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
+        DocumentPermissionFactory(
+            document=self.document, user=self.target, access_level=AccessLevel.VIEWER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(11):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.OWNER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permissions = DocumentPermission.objects.filter(
+            document=self.document, user=self.target
+        )
+        self.assertEqual(permissions.count(), 1)
+        self.assertEqual(permissions.first().access_level, AccessLevel.OWNER)
+        mock_send_mail.assert_called_once()
+
+    def test_owner_can_list_current_grants(self):
+        DocumentPermissionFactory(
+            document=self.document, user=self.target, access_level=AccessLevel.VIEWER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(5):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user_ids = {row["user"] for row in response.data["results"]}
+        self.assertEqual(user_ids, {self.target.pk})
+
+    def test_editor_cannot_share(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(
+            DocumentPermission.objects.filter(
+                document=self.document, user=self.target
+            ).exists()
+        )
+
+    def test_editor_cannot_list_current_grants(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cross_org_target_user_is_rejected(self):
+        foreign_user = UserFactory()
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                self.url,
+                {"user": foreign_user.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            DocumentPermission.objects.filter(
+                document=self.document, user=foreign_user
+            ).exists()
+        )
+
+    def test_cross_org_document_share_attempt_is_a_404(self):
+        foreign_document = DocumentFactory()
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("document_share", args=[foreign_document.pk]),
+                {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.document = DocumentFactory(project=self.project, title="Doc1")
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        self.target = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        # The target's project-level access (Viewer) is deliberately weaker
+        # than their document-level override (Editor), so revoking the
+        # DocumentPermission is a visible downgrade, not just "access gone".
+        ProjectPermissionFactory(
+            project=self.project, user=self.target, access_level=AccessLevel.VIEWER
+        )
+        DocumentPermissionFactory(
+            document=self.document, user=self.target, access_level=AccessLevel.EDITOR
+        )
+        self.url = reverse(
+            "document_share_revoke", args=[self.document.pk, self.target.pk]
+        )
+
+    def test_owner_can_revoke_and_access_falls_back_to_project_permission(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(5):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(resolve_access(self.target, self.document), AccessLevel.VIEWER)
+
+    def test_owner_cannot_revoke_the_documents_last_owner(self):
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(
+                reverse("document_share_revoke", args=[self.document.pk, self.owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resolve_access(self.owner, self.document), AccessLevel.OWNER)
+
+    def test_owner_can_revoke_a_co_owner_when_another_owner_remains(self):
+        co_owner = UserFactory(organization=self.org)
+        DocumentPermissionFactory(
+            document=self.document, user=co_owner, access_level=AccessLevel.OWNER
+        )
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(5):
+            response = self.client.delete(
+                reverse("document_share_revoke", args=[self.document.pk, co_owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(resolve_access(co_owner, self.document))
+
+    def test_editor_cannot_revoke(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resolve_access(self.target, self.document), AccessLevel.EDITOR)
+
+    def test_revoking_the_last_permission_removes_access_entirely(self):
+        stranger = UserFactory(organization=self.org)
+        DocumentPermissionFactory(
+            document=self.document, user=stranger, access_level=AccessLevel.VIEWER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(5):
+            response = self.client.delete(
+                reverse("document_share_revoke", args=[self.document.pk, stranger.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(resolve_access(stranger, self.document))
+
+    def test_revoking_a_nonexistent_permission_is_a_404(self):
+        stranger = UserFactory(organization=self.org)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(
+                reverse("document_share_revoke", args=[self.document.pk, stranger.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cross_org_document_revoke_attempt_is_a_404(self):
+        foreign_document = DocumentFactory()
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(
+                reverse(
+                    "document_share_revoke",
+                    args=[foreign_document.pk, self.target.pk],
+                )
+            )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

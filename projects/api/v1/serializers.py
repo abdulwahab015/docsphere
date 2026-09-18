@@ -1,6 +1,10 @@
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from projects.models import Document, Project
+from projects.choices import AccessLevel
+from projects.models import Document, DocumentPermission, Project, ProjectPermission
+
+User = get_user_model()
 
 
 class ProjectSerializer(serializers.ModelSerializer):
@@ -67,3 +71,38 @@ class DocumentSerializer(serializers.ModelSerializer):
             "created",
             "modified",
         ]
+
+
+class ShareSerializer(serializers.Serializer):
+    """Validates a grant/re-share request: a target user (by id) and the
+    ``AccessLevel`` to give them. The target user must belong to the same
+    organization as the resource being shared - checked against
+    ``context["organization"]``, which the view supplies from the resource
+    it already resolved (and therefore already org-scoped)."""
+
+    user = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+    access_level = serializers.ChoiceField(choices=AccessLevel.choices)
+
+    def validate_user(self, value):
+        organization = self.context["organization"]
+        if value.organization_id != organization.id:
+            raise serializers.ValidationError(
+                "This user does not belong to your organization."
+            )
+        return value
+
+
+def _permission_serializer(model, resource_field):
+    """Builds a read-only ModelSerializer exposing id, resource_field, user,
+    and access_level - all read-only - for a permission model."""
+    fields = ["id", resource_field, "user", "access_level"]
+    meta = type(
+        "Meta", (), {"model": model, "fields": fields, "read_only_fields": fields}
+    )
+    return type(
+        f"{model.__name__}Serializer", (serializers.ModelSerializer,), {"Meta": meta}
+    )
+
+
+ProjectPermissionSerializer = _permission_serializer(ProjectPermission, "project")
+DocumentPermissionSerializer = _permission_serializer(DocumentPermission, "document")

@@ -1,32 +1,43 @@
 from django.db import transaction
-from django.http import Http404
-from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
-from rest_framework import generics
+from rest_framework import generics, mixins
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
+from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import HasActiveSubscription
-from projects.api.v1.serializers import DocumentSerializer, ProjectSerializer
+from projects.api.v1.mixins import SoftDeleteMixin
+from projects.api.v1.serializers import (
+    DocumentPermissionSerializer,
+    DocumentSerializer,
+    ProjectPermissionSerializer,
+    ProjectSerializer,
+    ShareSerializer,
+)
 from projects.choices import AccessLevel, Action
-from projects.models import Document, Project, ProjectPermission
+from projects.models import Document, DocumentPermission, Project, ProjectPermission
 from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
     access_permits,
+    check_can_share,
     resolve_access,
     resolve_project_access,
 )
+from projects.tasks import (
+    send_document_shared_email_task,
+    send_project_shared_email_task,
+)
+from projects.validators import ensure_not_last_owner
 from users.permissions import IsOrganizationAdmin
 
 
 class ProjectListCreateAPIView(generics.ListCreateAPIView):
-    """Lists the caller's organization's projects (``?search=`` matches the
-    name); creates one - admins only - recording the caller as ``created_by``
-    and granting them Owner access to it."""
+    """Lists the org's projects (``?search=`` matches name); creates one -
+    admin-only - granting the creator Owner access."""
 
     serializer_class = ProjectSerializer
     filter_backends = (SearchFilter,)
@@ -60,11 +71,12 @@ class ProjectListCreateAPIView(generics.ListCreateAPIView):
             )
 
 
-class ProjectRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update, or soft-delete a single project. Requires a resolvable
-    ProjectPermission: read needs Viewer, write needs Editor, delete needs
-    Owner. Cross-organization projects are indistinguishable from missing ones.
-    """
+class ProjectRetrieveUpdateDestroyAPIView(
+    SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView
+):
+    """Retrieve/update/soft-delete a project. Requires a resolvable
+    ProjectPermission: read needs Viewer, write Editor, delete Owner.
+    Cross-organization projects are a 404, not a 403."""
 
     serializer_class = ProjectSerializer
     permission_classes = (IsAuthenticated, HasProjectAccess, HasActiveSubscription)
@@ -72,19 +84,11 @@ class ProjectRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView)
     def get_queryset(self):
         return Project.objects.for_organization(self.request.user.organization)
 
-    def perform_destroy(self, instance):
-        """Soft delete: flip ``is_active`` instead of the default hard delete, so
-        the row drops out of every ``for_organization`` queryset afterward."""
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
-
 
 class ProjectRestoreAPIView(APIView):
-    """Reverses a soft-delete. Admin-only, like project creation - a Project's
-    own ProjectPermission rows survive the soft-delete, but restoring one isn't
-    gated on them. Cross-organization and already-active projects are both a
-    404, since neither is in the restore lookup set.
-    """
+    """Reverses a soft-delete. Admin-only, like project creation - not gated
+    on the project's own ProjectPermission rows. Cross-organization and
+    already-active projects are both a 404."""
 
     permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
@@ -100,27 +104,10 @@ class ProjectRestoreAPIView(APIView):
         return Response(ProjectSerializer(project, context={"request": request}).data)
 
 
-def _get_org_project_or_404(organization, project_id):
-    """Shared lookup for both creating and listing documents: a project id
-    that doesn't resolve to an active project in the caller's organization is
-    a 404, never a 403 or a validation error - it must not reveal whether the
-    id belongs to another organization at all."""
-    try:
-        project_id = int(project_id)
-    except (TypeError, ValueError):
-        raise Http404 from None
-
-    return get_object_or_404(
-        Project.objects.for_organization(organization), pk=project_id
-    )
-
-
 class DocumentListCreateAPIView(generics.ListCreateAPIView):
-    """Lists the caller's organization's documents (``?search=`` matches the
-    title, ``?project=`` narrows to one project); creates one under a project
-    the caller has at least Editor access to, recording the caller as
-    ``created_by``.
-    """
+    """Lists the org's documents (``?search=`` matches title, ``?project=``
+    narrows to one project); creates one under a project the caller has at
+    least Editor access to."""
 
     serializer_class = DocumentSerializer
     filter_backends = (SearchFilter,)
@@ -132,7 +119,9 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
 
         project_id = self.request.query_params.get("project")
         if project_id:
-            project = _get_org_project_or_404(organization, project_id)
+            project = get_object_or_404(
+                Project.objects.for_organization(organization), pk=project_id
+            )
             queryset = queryset.filter(project=project)
 
         return queryset.order_by("title")
@@ -145,24 +134,24 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
                 {"detail": "You must belong to an organization to create a document."}
             )
 
-        project = _get_org_project_or_404(
-            organization, self.request.data.get("project")
+        project = get_object_or_404(
+            Project.objects.for_organization(organization),
+            pk=self.request.data.get("project"),
         )
         if not access_permits(resolve_project_access(user, project), Action.WRITE):
             raise PermissionDenied(
-                "You must have at least Editor access to this project to add documents to it."
+                "You must have Editor access to this project to add documents to it."
             )
 
         serializer.save(created_by=user, project=project)
 
 
-class DocumentRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update, or soft-delete a single document. Requires a
-    resolvable access level (``DocumentPermission`` first, falling back to
-    the parent project's ``ProjectPermission``): read needs Viewer, write
-    needs Editor, delete needs Owner. Cross-organization or soft-deleted
-    documents are indistinguishable from missing ones.
-    """
+class DocumentRetrieveUpdateDestroyAPIView(
+    SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView
+):
+    """Retrieve/update/soft-delete a document. Access resolves via
+    ``DocumentPermission``, falling back to the parent project's
+    ``ProjectPermission``: read needs Viewer, write Editor, delete Owner."""
 
     serializer_class = DocumentSerializer
     permission_classes = (IsAuthenticated, HasDocumentAccess, HasActiveSubscription)
@@ -170,23 +159,11 @@ class DocumentRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView
     def get_queryset(self):
         return Document.objects.for_organization(self.request.user.organization)
 
-    def perform_destroy(self, instance):
-        """Soft delete: flip ``is_active`` instead of the default hard delete, so
-        the row drops out of every ``for_organization`` queryset afterward."""
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
-
 
 class DocumentRestoreAPIView(APIView):
-    """Reverses a soft-delete. Unlike ``ProjectRestoreAPIView`` (admin-only,
-    matching project creation), document creation isn't admin-gated - so
-    restoring one requires the same Owner-level access that deleting it did,
-    resolved the usual way (``DocumentPermission`` first, falling back to the
-    parent project's ``ProjectPermission``). A document's own permission rows
-    survive its soft-delete, same as a project's do. Cross-organization and
-    already-active documents are both a 404, since neither is in the restore
-    lookup set.
-    """
+    """Reverses a soft-delete. Unlike ``ProjectRestoreAPIView`` (admin-only),
+    document creation isn't admin-gated, so restoring requires the same
+    Owner-level access that deleting it did."""
 
     @extend_schema(request=None, responses={200: DocumentSerializer})
     def post(self, request, pk):
@@ -203,3 +180,141 @@ class DocumentRestoreAPIView(APIView):
         document.save(update_fields=["is_active"])
 
         return Response(DocumentSerializer(document, context={"request": request}).data)
+
+
+class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
+    """Lists a project's ``ProjectPermission`` grants, or grants/updates one
+    for a target user - Owner-level access required. Granting an already-
+    permitted user updates their level in place; each grant emails the
+    target user."""
+
+    serializer_class = ProjectPermissionSerializer
+
+    def _get_project(self):
+        return get_object_or_404(
+            Project.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
+        )
+
+    def get_queryset(self):
+        project = self._get_project()
+        check_can_share(self.request.user, project, "project", resolve_project_access)
+        return ProjectPermission.objects.filter(project=project).order_by("user_id")
+
+    @extend_schema(responses={200: ProjectPermissionSerializer(many=True)})
+    def get(self, request, pk):
+        return self.list(request)
+
+    @extend_schema(
+        request=ShareSerializer, responses={200: ProjectPermissionSerializer}
+    )
+    def post(self, request, pk):
+        project = self._get_project()
+        check_can_share(request.user, project, "project", resolve_project_access)
+
+        serializer = ShareSerializer(
+            data=request.data, context={"organization": project.organization}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        permission, _ = ProjectPermission.objects.update_or_create(
+            project=project,
+            user=serializer.validated_data["user"],
+            defaults={"access_level": serializer.validated_data["access_level"]},
+        )
+        send_project_shared_email_task.delay(permission.pk)
+
+        return Response(ProjectPermissionSerializer(permission).data)
+
+
+class ProjectShareRevokeAPIView(generics.DestroyAPIView):
+    """Revokes a ``ProjectPermission`` outright (row deletion, not a
+    soft-delete). Owner-level access required; refuses to remove the
+    project's last remaining Owner."""
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request, *args, **kwargs):
+        return self.destroy(request, *args, **kwargs)
+
+    def get_object(self):
+        project = get_object_or_404(
+            Project.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
+        )
+        check_can_share(self.request.user, project, "project", resolve_project_access)
+
+        permission = get_object_or_404(
+            ProjectPermission, project=project, user_id=self.kwargs["user_id"]
+        )
+        ensure_not_last_owner(permission, ProjectPermission, "project", project)
+
+        return permission
+
+
+class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
+    """Lists a document's ``DocumentPermission`` grants, or grants/updates
+    one for a target user - same convention as ``ProjectShareAPIView``,
+    Owner-level access resolved via the usual fallback to ``ProjectPermission``."""
+
+    serializer_class = DocumentPermissionSerializer
+
+    def _get_document(self):
+        return get_object_or_404(
+            Document.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
+        )
+
+    def get_queryset(self):
+        document = self._get_document()
+        check_can_share(self.request.user, document, "document", resolve_access)
+        return DocumentPermission.objects.filter(document=document).order_by("user_id")
+
+    @extend_schema(responses={200: DocumentPermissionSerializer(many=True)})
+    def get(self, request, pk):
+        return self.list(request)
+
+    @extend_schema(
+        request=ShareSerializer, responses={200: DocumentPermissionSerializer}
+    )
+    def post(self, request, pk):
+        document = self._get_document()
+        check_can_share(request.user, document, "document", resolve_access)
+
+        serializer = ShareSerializer(
+            data=request.data,
+            context={"organization": document.project.organization},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        permission, _ = DocumentPermission.objects.update_or_create(
+            document=document,
+            user=serializer.validated_data["user"],
+            defaults={"access_level": serializer.validated_data["access_level"]},
+        )
+        send_document_shared_email_task.delay(permission.pk)
+
+        return Response(DocumentPermissionSerializer(permission).data)
+
+
+class DocumentShareRevokeAPIView(generics.DestroyAPIView):
+    """Revokes a ``DocumentPermission`` outright (row deletion, not a
+    soft-delete); access then falls back to the parent ``ProjectPermission``.
+    Owner-level access required; refuses to remove the document's last Owner."""
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request, *args, **kwargs):
+        return self.destroy(request, *args, **kwargs)
+
+    def get_object(self):
+        document = get_object_or_404(
+            Document.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
+        )
+        check_can_share(self.request.user, document, "document", resolve_access)
+
+        permission = get_object_or_404(
+            DocumentPermission, document=document, user_id=self.kwargs["user_id"]
+        )
+        ensure_not_last_owner(permission, DocumentPermission, "document", document)
+
+        return permission

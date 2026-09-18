@@ -1,0 +1,1 @@
+You've been given {{ access_level }} access to the document "{{ document_title }}" on DocSphere.
