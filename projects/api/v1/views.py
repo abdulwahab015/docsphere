@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import HasActiveSubscription
+from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
     DocumentPermissionSerializer,
     DocumentSerializer,
@@ -22,6 +23,7 @@ from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
     access_permits,
+    check_can_share,
     resolve_access,
     resolve_project_access,
 )
@@ -29,45 +31,8 @@ from projects.tasks import (
     send_document_shared_email_task,
     send_project_shared_email_task,
 )
+from projects.validators import ensure_not_last_owner
 from users.permissions import IsOrganizationAdmin
-
-
-def _get_org_scoped_or_404(model, organization, pk):
-    """A pk outside the caller's organization is a 404, never a 403 - it must
-    not reveal whether the id belongs to another organization."""
-    return get_object_or_404(model.objects.for_organization(organization), pk=pk)
-
-
-def _check_can_share(user, resource, resource_field, resolve_access_fn):
-    """Owner-level ``Action.RESHARE`` is required to view or change sharing."""
-    if not access_permits(resolve_access_fn(user, resource), Action.RESHARE):
-        raise PermissionDenied(
-            f"You must have Owner access to this {resource_field} to share it."
-        )
-
-
-def _ensure_not_last_owner(permission, permission_model, resource_field, resource):
-    """A resource's last Owner-level grant can't be revoked, so it never ends
-    up with nobody able to manage its sharing."""
-    if permission.access_level != AccessLevel.OWNER:
-        return
-
-    owner_count = permission_model.objects.filter(
-        access_level=AccessLevel.OWNER, **{resource_field: resource}
-    ).count()
-    if owner_count <= 1:
-        raise ValidationError(
-            {"detail": f"Cannot revoke the {resource_field}'s last Owner."}
-        )
-
-
-class SoftDeleteMixin:
-    """Flips ``is_active`` instead of hard-deleting, so the row drops out of
-    every ``for_organization`` queryset."""
-
-    def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
 
 
 class ProjectListCreateAPIView(generics.ListCreateAPIView):
@@ -154,7 +119,9 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
 
         project_id = self.request.query_params.get("project")
         if project_id:
-            project = _get_org_scoped_or_404(Project, organization, project_id)
+            project = get_object_or_404(
+                Project.objects.for_organization(organization), pk=project_id
+            )
             queryset = queryset.filter(project=project)
 
         return queryset.order_by("title")
@@ -167,8 +134,9 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
                 {"detail": "You must belong to an organization to create a document."}
             )
 
-        project = _get_org_scoped_or_404(
-            Project, organization, self.request.data.get("project")
+        project = get_object_or_404(
+            Project.objects.for_organization(organization),
+            pk=self.request.data.get("project"),
         )
         if not access_permits(resolve_project_access(user, project), Action.WRITE):
             raise PermissionDenied(
@@ -223,13 +191,14 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     serializer_class = ProjectPermissionSerializer
 
     def _get_project(self):
-        return _get_org_scoped_or_404(
-            Project, self.request.user.organization, self.kwargs["pk"]
+        return get_object_or_404(
+            Project.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
         )
 
     def get_queryset(self):
         project = self._get_project()
-        _check_can_share(self.request.user, project, "project", resolve_project_access)
+        check_can_share(self.request.user, project, "project", resolve_project_access)
         return ProjectPermission.objects.filter(project=project).order_by("user_id")
 
     @extend_schema(responses={200: ProjectPermissionSerializer(many=True)})
@@ -241,7 +210,7 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     )
     def post(self, request, pk):
         project = self._get_project()
-        _check_can_share(request.user, project, "project", resolve_project_access)
+        check_can_share(request.user, project, "project", resolve_project_access)
 
         serializer = ShareSerializer(
             data=request.data, context={"organization": project.organization}
@@ -268,15 +237,16 @@ class ProjectShareRevokeAPIView(generics.DestroyAPIView):
         return self.destroy(request, *args, **kwargs)
 
     def get_object(self):
-        project = _get_org_scoped_or_404(
-            Project, self.request.user.organization, self.kwargs["pk"]
+        project = get_object_or_404(
+            Project.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
         )
-        _check_can_share(self.request.user, project, "project", resolve_project_access)
+        check_can_share(self.request.user, project, "project", resolve_project_access)
 
         permission = get_object_or_404(
             ProjectPermission, project=project, user_id=self.kwargs["user_id"]
         )
-        _ensure_not_last_owner(permission, ProjectPermission, "project", project)
+        ensure_not_last_owner(permission, ProjectPermission, "project", project)
 
         return permission
 
@@ -289,13 +259,14 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     serializer_class = DocumentPermissionSerializer
 
     def _get_document(self):
-        return _get_org_scoped_or_404(
-            Document, self.request.user.organization, self.kwargs["pk"]
+        return get_object_or_404(
+            Document.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
         )
 
     def get_queryset(self):
         document = self._get_document()
-        _check_can_share(self.request.user, document, "document", resolve_access)
+        check_can_share(self.request.user, document, "document", resolve_access)
         return DocumentPermission.objects.filter(document=document).order_by("user_id")
 
     @extend_schema(responses={200: DocumentPermissionSerializer(many=True)})
@@ -307,7 +278,7 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     )
     def post(self, request, pk):
         document = self._get_document()
-        _check_can_share(request.user, document, "document", resolve_access)
+        check_can_share(request.user, document, "document", resolve_access)
 
         serializer = ShareSerializer(
             data=request.data,
@@ -335,14 +306,15 @@ class DocumentShareRevokeAPIView(generics.DestroyAPIView):
         return self.destroy(request, *args, **kwargs)
 
     def get_object(self):
-        document = _get_org_scoped_or_404(
-            Document, self.request.user.organization, self.kwargs["pk"]
+        document = get_object_or_404(
+            Document.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
         )
-        _check_can_share(self.request.user, document, "document", resolve_access)
+        check_can_share(self.request.user, document, "document", resolve_access)
 
         permission = get_object_or_404(
             DocumentPermission, document=document, user_id=self.kwargs["user_id"]
         )
-        _ensure_not_last_owner(permission, DocumentPermission, "document", document)
+        ensure_not_last_owner(permission, DocumentPermission, "document", document)
 
         return permission
