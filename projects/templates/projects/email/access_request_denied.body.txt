@@ -1,0 +1,1 @@
+Your request for Editor access to the document "{{ document_title }}" on DocSphere has been denied.

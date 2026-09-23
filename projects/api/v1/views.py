@@ -1,7 +1,7 @@
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, mixins
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
@@ -11,14 +11,21 @@ from rest_framework.views import APIView
 from core.permissions import HasActiveSubscription
 from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
+    DocumentAccessRequestSerializer,
     DocumentPermissionSerializer,
     DocumentSerializer,
     ProjectPermissionSerializer,
     ProjectSerializer,
     ShareSerializer,
 )
-from projects.choices import AccessLevel, Action
-from projects.models import Document, DocumentPermission, Project, ProjectPermission
+from projects.choices import AccessLevel, AccessRequestStatus, Action
+from projects.models import (
+    Document,
+    DocumentAccessRequest,
+    DocumentPermission,
+    Project,
+    ProjectPermission,
+)
 from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
@@ -28,11 +35,22 @@ from projects.permissions import (
     resolve_project_access,
 )
 from projects.tasks import (
+    send_access_request_approved_email_task,
+    send_access_request_created_email_task,
+    send_access_request_denied_email_task,
     send_document_shared_email_task,
     send_project_shared_email_task,
 )
 from projects.validators import ensure_not_last_owner
 from users.permissions import IsOrganizationAdmin
+
+
+def _grant_creator_ownership(permission_model, resource_field, resource, user):
+    """Creates an Owner-level permission row for a newly created resource's
+    creator - the same pattern for both Project and Document creation."""
+    permission_model.objects.create(
+        **{resource_field: resource, "user": user, "access_level": AccessLevel.OWNER}
+    )
 
 
 class ProjectListCreateAPIView(generics.ListCreateAPIView):
@@ -49,9 +67,7 @@ class ProjectListCreateAPIView(generics.ListCreateAPIView):
         return [IsAuthenticated(), HasActiveSubscription()]
 
     def get_queryset(self):
-        return Project.objects.for_organization(
-            self.request.user.organization
-        ).order_by("name")
+        return Project.objects.visible_to(self.request.user).order_by("name")
 
     def perform_create(self, serializer):
         organization = self.request.user.organization
@@ -64,10 +80,8 @@ class ProjectListCreateAPIView(generics.ListCreateAPIView):
             project = serializer.save(
                 created_by=self.request.user, organization=organization
             )
-            ProjectPermission.objects.create(
-                project=project,
-                user=self.request.user,
-                access_level=AccessLevel.OWNER,
+            _grant_creator_ownership(
+                ProjectPermission, "project", project, self.request.user
             )
 
 
@@ -83,6 +97,15 @@ class ProjectRetrieveUpdateDestroyAPIView(
 
     def get_queryset(self):
         return Project.objects.for_organization(self.request.user.organization)
+
+    def perform_update(self, serializer):
+        if "visibility" in serializer.validated_data:
+            level = resolve_project_access(self.request.user, serializer.instance)
+            if not access_permits(level, Action.RESHARE):
+                raise PermissionDenied(
+                    "You must have Owner access to this project to change its visibility."
+                )
+        serializer.save()
 
 
 class ProjectRestoreAPIView(APIView):
@@ -106,21 +129,22 @@ class ProjectRestoreAPIView(APIView):
 
 class DocumentListCreateAPIView(generics.ListCreateAPIView):
     """Lists the org's documents (``?search=`` matches title, ``?project=``
-    narrows to one project); creates one under a project the caller has at
-    least Editor access to."""
+    narrows to one project); creates one either under a project the caller has
+    at least Editor access to, or - with no ``project`` given - as a personal
+    document any org member may create. The creator always becomes Owner."""
 
     serializer_class = DocumentSerializer
     filter_backends = (SearchFilter,)
     search_fields = ("title",)
 
     def get_queryset(self):
-        organization = self.request.user.organization
-        queryset = Document.objects.for_organization(organization)
+        user = self.request.user
+        queryset = Document.objects.visible_to(user)
 
         project_id = self.request.query_params.get("project")
         if project_id:
             project = get_object_or_404(
-                Project.objects.for_organization(organization), pk=project_id
+                Project.objects.for_organization(user.organization), pk=project_id
             )
             queryset = queryset.filter(project=project)
 
@@ -134,30 +158,46 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
                 {"detail": "You must belong to an organization to create a document."}
             )
 
-        project = get_object_or_404(
-            Project.objects.for_organization(organization),
-            pk=self.request.data.get("project"),
-        )
-        if not access_permits(resolve_project_access(user, project), Action.WRITE):
-            raise PermissionDenied(
-                "You must have Editor access to this project to add documents to it."
+        project = None
+        project_id = self.request.data.get("project")
+        if project_id:
+            project = get_object_or_404(
+                Project.objects.for_organization(organization), pk=project_id
             )
+            if not access_permits(resolve_project_access(user, project), Action.WRITE):
+                raise PermissionDenied(
+                    "You must have Editor access to this project to add documents to it."
+                )
 
-        serializer.save(created_by=user, project=project)
+        with transaction.atomic():
+            document = serializer.save(
+                created_by=user, organization=organization, project=project
+            )
+            _grant_creator_ownership(DocumentPermission, "document", document, user)
 
 
 class DocumentRetrieveUpdateDestroyAPIView(
     SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView
 ):
     """Retrieve/update/soft-delete a document. Access resolves via
-    ``DocumentPermission``, falling back to the parent project's
-    ``ProjectPermission``: read needs Viewer, write Editor, delete Owner."""
+    ``DocumentPermission`` alone - explicit grant, else implicit Viewer if the
+    document is public, else nothing: read needs Viewer, write Editor, delete
+    Owner."""
 
     serializer_class = DocumentSerializer
     permission_classes = (IsAuthenticated, HasDocumentAccess, HasActiveSubscription)
 
     def get_queryset(self):
         return Document.objects.for_organization(self.request.user.organization)
+
+    def perform_update(self, serializer):
+        if "visibility" in serializer.validated_data:
+            level = resolve_access(self.request.user, serializer.instance)
+            if not access_permits(level, Action.RESHARE):
+                raise PermissionDenied(
+                    "You must have Owner access to this document to change its visibility."
+                )
+        serializer.save()
 
 
 class DocumentRestoreAPIView(APIView):
@@ -253,8 +293,10 @@ class ProjectShareRevokeAPIView(generics.DestroyAPIView):
 
 class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     """Lists a document's ``DocumentPermission`` grants, or grants/updates
-    one for a target user - same convention as ``ProjectShareAPIView``,
-    Owner-level access resolved via the usual fallback to ``ProjectPermission``."""
+    one for a target user - same convention as ``ProjectShareAPIView``.
+    Owner-level access is resolved via ``resolve_access`` (explicit grant, or
+    implicit Viewer on a public document - never enough to share, since
+    sharing needs ``Action.RESHARE``)."""
 
     serializer_class = DocumentPermissionSerializer
 
@@ -282,7 +324,7 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
 
         serializer = ShareSerializer(
             data=request.data,
-            context={"organization": document.project.organization},
+            context={"organization": document.organization},
         )
         serializer.is_valid(raise_exception=True)
 
@@ -298,8 +340,9 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
 
 class DocumentShareRevokeAPIView(generics.DestroyAPIView):
     """Revokes a ``DocumentPermission`` outright (row deletion, not a
-    soft-delete); access then falls back to the parent ``ProjectPermission``.
-    Owner-level access required; refuses to remove the document's last Owner."""
+    soft-delete); access then falls back to implicit Viewer if the document is
+    public, or to nothing. Owner-level access required; refuses to remove the
+    document's last Owner."""
 
     @extend_schema(request=None, responses={204: None})
     def delete(self, request, *args, **kwargs):
@@ -318,3 +361,106 @@ class DocumentShareRevokeAPIView(generics.DestroyAPIView):
         ensure_not_last_owner(permission, DocumentPermission, "document", document)
 
         return permission
+
+
+class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
+    """Lists a document's pending access requests (Owner-only), or files a new
+    one. A Viewer who can see the document - typically because it's public -
+    may request Editor access; a document the caller can't resolve any access
+    to is a 404, same as everywhere else private resources are hidden."""
+
+    serializer_class = DocumentAccessRequestSerializer
+
+    def _get_document(self):
+        return get_object_or_404(
+            Document.objects.for_organization(self.request.user.organization),
+            pk=self.kwargs["pk"],
+        )
+
+    def get_queryset(self):
+        document = self._get_document()
+        check_can_share(self.request.user, document, "document", resolve_access)
+        return DocumentAccessRequest.objects.filter(
+            document=document, status=AccessRequestStatus.PENDING
+        ).order_by("created")
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        document = self._get_document()
+        level = resolve_access(user, document)
+
+        if not access_permits(level, Action.READ):
+            raise NotFound
+
+        if level != AccessLevel.VIEWER:
+            raise ValidationError(
+                {"detail": "You already have sufficient access to this document."}
+            )
+
+        if DocumentAccessRequest.objects.filter(
+            document=document, requested_by=user, status=AccessRequestStatus.PENDING
+        ).exists():
+            raise ValidationError(
+                {"detail": "You already have a pending request for this document."}
+            )
+
+        access_request = serializer.save(document=document, requested_by=user)
+        send_access_request_created_email_task.delay(access_request.pk)
+
+
+class DocumentAccessRequestApproveAPIView(APIView):
+    """Owner-only. Upgrades the requester to Editor and marks the request
+    approved, inside one transaction."""
+
+    @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
+    def post(self, request, pk, request_id):
+        document = get_object_or_404(
+            Document.objects.for_organization(request.user.organization), pk=pk
+        )
+        check_can_share(request.user, document, "document", resolve_access)
+
+        access_request = get_object_or_404(
+            DocumentAccessRequest,
+            pk=request_id,
+            document=document,
+            status=AccessRequestStatus.PENDING,
+        )
+
+        with transaction.atomic():
+            DocumentPermission.objects.update_or_create(
+                document=document,
+                user=access_request.requested_by,
+                defaults={"access_level": AccessLevel.EDITOR},
+            )
+            access_request.status = AccessRequestStatus.APPROVED
+            access_request.reviewed_by = request.user
+            access_request.save(update_fields=["status", "reviewed_by", "modified"])
+
+        send_access_request_approved_email_task.delay(access_request.pk)
+
+        return Response(DocumentAccessRequestSerializer(access_request).data)
+
+
+class DocumentAccessRequestDenyAPIView(APIView):
+    """Owner-only. Marks the request denied without touching permissions."""
+
+    @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
+    def post(self, request, pk, request_id):
+        document = get_object_or_404(
+            Document.objects.for_organization(request.user.organization), pk=pk
+        )
+        check_can_share(request.user, document, "document", resolve_access)
+
+        access_request = get_object_or_404(
+            DocumentAccessRequest,
+            pk=request_id,
+            document=document,
+            status=AccessRequestStatus.PENDING,
+        )
+        access_request.status = AccessRequestStatus.DENIED
+        access_request.reviewed_by = request.user
+        access_request.save(update_fields=["status", "reviewed_by", "modified"])
+
+        send_access_request_denied_email_task.delay(access_request.pk)
+
+        return Response(DocumentAccessRequestSerializer(access_request).data)

@@ -1,6 +1,9 @@
 from django.urls import path
 
 from projects.api.v1.views import (
+    DocumentAccessRequestApproveAPIView,
+    DocumentAccessRequestDenyAPIView,
+    DocumentAccessRequestListCreateAPIView,
     DocumentListCreateAPIView,
     DocumentRestoreAPIView,
     DocumentRetrieveUpdateDestroyAPIView,
@@ -46,5 +49,20 @@ document_urlpatterns = [
         "<int:pk>/share/<int:user_id>/",
         DocumentShareRevokeAPIView.as_view(),
         name="document_share_revoke",
+    ),
+    path(
+        "<int:pk>/access-requests/",
+        DocumentAccessRequestListCreateAPIView.as_view(),
+        name="document_access_request_list_create",
+    ),
+    path(
+        "<int:pk>/access-requests/<int:request_id>/approve/",
+        DocumentAccessRequestApproveAPIView.as_view(),
+        name="document_access_request_approve",
+    ),
+    path(
+        "<int:pk>/access-requests/<int:request_id>/deny/",
+        DocumentAccessRequestDenyAPIView.as_view(),
+        name="document_access_request_deny",
     ),
 ]

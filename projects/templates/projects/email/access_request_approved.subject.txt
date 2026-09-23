@@ -1,0 +1,1 @@
+Your access request for {{ document_title }} was approved
