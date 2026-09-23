@@ -206,16 +206,67 @@ class OrganizationProfileAPITests(APITestCase):
     def test_admin_can_retrieve_own_organization(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             response = self.client.get(reverse("organization_profile"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["name"], "Acme Inc")
+        self.assertIsNone(response.data["active_subscription"])
+
+    def test_retrieve_includes_the_active_subscription_summary(self):
+        customer = StripeCustomerFactory(subscriber=self.org)
+        StripeSubscriptionFactory(
+            id="sub_profile",
+            customer=customer,
+            stripe_data={
+                "id": "sub_profile",
+                "status": "active",
+                "cancel_at_period_end": False,
+                "plan": {"interval": "month"},
+                "items": {"data": [{"current_period_end": 1792323428}]},
+            },
+        )
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("organization_profile"))
+
+        subscription = response.data["active_subscription"]
+        self.assertEqual(subscription["id"], "sub_profile")
+        self.assertEqual(subscription["status"], "active")
+        self.assertEqual(subscription["interval"], "month")
+        self.assertFalse(subscription["cancel_at_period_end"])
+        self.assertEqual(
+            subscription["current_period_end"].isoformat(), "2026-10-18T11:37:08+00:00"
+        )
+
+    def test_retrieve_omits_a_non_active_subscription(self):
+        customer = StripeCustomerFactory(subscriber=self.org)
+        StripeSubscriptionFactory(customer=customer, status="canceled")
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("organization_profile"))
+
+        self.assertIsNone(response.data["active_subscription"])
+
+    def test_retrieve_tolerates_a_subscription_without_a_period_end(self):
+        customer = StripeCustomerFactory(subscriber=self.org)
+        StripeSubscriptionFactory(
+            customer=customer,
+            stripe_data={"id": "sub_bare", "status": "active"},
+        )
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.get(reverse("organization_profile"))
+
+        self.assertIsNone(response.data["active_subscription"]["current_period_end"])
+        self.assertIsNone(response.data["active_subscription"]["interval"])
 
     def test_admin_can_set_billing_email(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(4):
             response = self.client.patch(
                 reverse("organization_profile"), {"billing_email": "billing@acme.test"}
             )

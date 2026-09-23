@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.core.cache import cache
@@ -10,10 +11,14 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from organizations.factories import (
     OrganizationFactory,
+    StripeCustomerFactory,
     StripePriceFactory,
     StripeSubscriptionFactory,
 )
-from subscriptions.tasks import send_expiry_reminders_task
+from subscriptions.tasks import (
+    send_expiry_reminder_email_task,
+    send_expiry_reminders_task,
+)
 from users.factories import AdminUserFactory, UserFactory
 
 
@@ -131,12 +136,58 @@ class ExpiryReminderTaskTests(TestCase):
             customer__subscriber=organization, days_until_renewal=3
         )
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(5):
             send_expiry_reminders_task()
 
         mock_send_mail.assert_called_once()
+        _, kwargs = mock_send_mail.call_args
+        expected_date = (timezone.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+        self.assertIn(expected_date, kwargs["message"])
+        self.assertEqual(kwargs["recipient_list"], ["billing@example.com"])
         organization.refresh_from_db()
         self.assertIsNotNone(organization.last_expiry_reminder_sent_at)
+
+    @patch("core.email.send_mail")
+    def test_org_reminded_in_a_previous_period_is_reminded_again(self, mock_send_mail):
+        organization = OrganizationFactory(
+            billing_email="billing@example.com",
+            last_expiry_reminder_sent_at=timezone.now() - timedelta(days=28),
+        )
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=3
+        )
+
+        send_expiry_reminders_task()
+
+        mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_org_is_reminded_once_even_with_several_active_subscriptions(
+        self, mock_send_mail
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        customer = StripeCustomerFactory(subscriber=organization)
+        StripeSubscriptionFactory(customer=customer, days_until_renewal=3)
+        StripeSubscriptionFactory(customer=customer, days_until_renewal=2)
+
+        send_expiry_reminders_task()
+
+        mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_reminder_email_is_skipped_if_the_subscription_lapsed_meanwhile(
+        self, mock_send_mail
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, status="canceled", days_until_renewal=3
+        )
+
+        send_expiry_reminder_email_task(organization.pk)
+
+        mock_send_mail.assert_not_called()
+        organization.refresh_from_db()
+        self.assertIsNone(organization.last_expiry_reminder_sent_at)
 
     @patch("core.email.send_mail")
     def test_already_reminded_org_is_not_reminded_again(self, mock_send_mail):
@@ -148,7 +199,7 @@ class ExpiryReminderTaskTests(TestCase):
             customer__subscriber=organization, days_until_renewal=3
         )
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             send_expiry_reminders_task()
 
         mock_send_mail.assert_not_called()
@@ -183,7 +234,7 @@ class ExpiryReminderTaskTests(TestCase):
             customer__subscriber=organization, days_until_renewal=3
         )
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             send_expiry_reminders_task()
 
         mock_send_mail.assert_not_called()
