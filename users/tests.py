@@ -872,12 +872,34 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["created"], 1)
         reasons = {item["email"]: item["reason"] for item in response.data["skipped"]}
-        self.assertEqual(
-            reasons["existing@example.com"], "user already exists in organization"
-        )
+        self.assertEqual(reasons["existing@example.com"], "user already exists")
         self.assertEqual(reasons["pending@example.com"], "invitation already pending")
         mock_send_mail.assert_called_once()
         self.assertTrue(Invitation.objects.filter(email="new@example.com").exists())
+
+    @patch("core.email.send_mail")
+    def test_a_user_from_another_organization_is_skipped_not_invited(
+        self, mock_send_mail
+    ):
+        other_org = OrganizationFactory(name="Org B")
+        UserFactory(email="outsider@example.com", organization=other_org)
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["Email", "outsider@example.com"])
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created"], 0)
+        self.assertEqual(response.data["skipped"][0]["reason"], "user already exists")
+        mock_send_mail.assert_not_called()
+        self.assertFalse(
+            Invitation.objects.filter(
+                organization=self.org_a, email="outsider@example.com"
+            ).exists()
+        )
 
     def test_cannot_create_invitations_past_the_pending_cap(self):
         self.client.force_authenticate(self.admin_a)
