@@ -311,7 +311,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
     def test_admin_can_create_invitation_for_own_organization(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "invitee@example.com"}
             )
@@ -342,12 +342,42 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         with patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1):
             InvitationFactory(organization=self.org_a, invited_by=self.admin_a)
 
-            with self.assertNumQueries(1):
+            with self.assertNumQueries(3):
                 response = self.client.post(
                     reverse("invitation_list_create"), {"email": "extra@example.com"}
                 )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_invite_an_email_that_already_belongs_to_a_user(self):
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": self.member_a.email}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Invitation.objects.filter(email=self.member_a.email).exists())
+
+    def test_cannot_invite_an_email_with_an_existing_pending_invitation(self):
+        InvitationFactory(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="already-invited@example.com",
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                reverse("invitation_list_create"),
+                {"email": "already-invited@example.com"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            Invitation.objects.filter(email="already-invited@example.com").count(), 1
+        )
 
     def test_admin_cannot_see_invitations_outside_own_organization(self):
         InvitationFactory(
@@ -494,6 +524,89 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class UserListAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory(name="Org A")
+        self.other_org = OrganizationFactory(name="Org B")
+        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.member = UserFactory(email="member@example.com", organization=self.org)
+        self.url = reverse("user_list")
+
+    def test_member_can_list_own_organization_users_ordered_by_email(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertEqual(emails, ["admin@example.com", "member@example.com"])
+
+    def test_member_only_sees_id_and_email(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        for row in response.data["results"]:
+            self.assertEqual(set(row.keys()), {"id", "email"})
+
+    def test_admin_also_sees_role_and_join_date(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        for row in response.data["results"]:
+            self.assertEqual(set(row.keys()), {"id", "email", "org_role", "created"})
+
+    def test_excludes_users_from_other_organizations(self):
+        UserFactory(email="outsider@example.com", organization=self.other_org)
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertNotIn("outsider@example.com", emails)
+
+    def test_excludes_deactivated_users(self):
+        UserFactory(email="gone@example.com", organization=self.org, is_active=False)
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertNotIn("gone@example.com", emails)
+
+    def test_search_filters_by_email(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url, {"search": "admin"})
+
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertEqual(emails, ["admin@example.com"])
+
+    def test_user_without_an_organization_sees_an_empty_list(self):
+        rootless_admin = AdminUserFactory(organization=None)
+        self.client.force_authenticate(rootless_admin)
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class DeactivateUserTests(AssumeActiveSubscription, APITestCase):

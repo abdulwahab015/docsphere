@@ -19,6 +19,25 @@ User = get_user_model()
 INVALID_INVITATION_MESSAGE = "This invitation link is invalid or has expired."
 
 
+class UserSerializer(serializers.ModelSerializer):
+    """Minimal roster entry visible to every org member - just enough to pick
+    a share target. Never accepts writes through this serializer."""
+
+    class Meta:
+        model = User
+        fields = ["id", "email"]
+        read_only_fields = fields
+
+
+class UserDetailSerializer(UserSerializer):
+    """Adds role and join-date - admin-only, for actual user management
+    rather than picking a share target."""
+
+    class Meta(UserSerializer.Meta):
+        fields = [*UserSerializer.Meta.fields, "org_role", "created"]
+        read_only_fields = fields
+
+
 class LoginSerializer(TokenObtainPairSerializer):
     """Adds a password-length ceiling before the (unvalidated) auth check, so an
     oversized string can't reach the password hasher."""
@@ -57,6 +76,20 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "created",
             "accepted_at",
         ]
+
+    def validate_email(self, value):
+        org = self.context["request"].user.organization
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        if (
+            Invitation.objects.for_organization(org)
+            .filter(email=value, status=InvitationStatus.PENDING)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "This email already has a pending invitation."
+            )
+        return value
 
     def validate(self, attrs):
         org = self.context["request"].user.organization
