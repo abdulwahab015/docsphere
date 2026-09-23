@@ -669,13 +669,13 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    def test_member_without_permission_cannot_retrieve(self):
+    def test_member_without_permission_gets_a_404_not_a_403(self):
         self.client.force_authenticate(self.stranger)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_cross_org_project_is_a_404_not_a_403(self):
         foreign = ProjectFactory(name="Foreign")
@@ -1051,20 +1051,46 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.member)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.get(self.url, {"project": self.project.pk})
 
         titles = [row["title"] for row in response.data["results"]]
         self.assertEqual(titles, ["Alpha Doc"])
 
-    def test_project_filter_with_a_project_from_another_org_is_a_404(self):
+    def test_project_filter_with_a_project_from_another_org_returns_an_empty_list(self):
         foreign_project = ProjectFactory(name="Foreign")
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(1):
             response = self.client.get(self.url, {"project": foreign_project.pk})
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
+
+    def test_project_filter_with_a_private_project_in_own_org_returns_an_empty_list(
+        self,
+    ):
+        """The filter never reveals whether a private project the caller can't
+        see exists at all - it behaves identically to a nonexistent or
+        cross-org id, always collapsing to an empty list rather than a 404."""
+        private_project = ProjectFactory(organization=self.org, name="Vault")
+        DocumentFactory(project=private_project, title="Confidential")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url, {"project": private_project.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
+
+    def test_project_filter_with_a_non_numeric_id_returns_an_empty_list(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url, {"project": "not-a-number"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
 
     def test_anonymous_request_is_rejected(self):
         with self.assertNumQueries(0):
@@ -1116,13 +1142,13 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    def test_member_without_permission_cannot_retrieve(self):
+    def test_member_without_permission_gets_a_404_not_a_403(self):
         self.client.force_authenticate(self.stranger)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_cross_org_document_is_a_404_not_a_403(self):
         foreign = DocumentFactory(title="Foreign")
@@ -1802,7 +1828,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
         stranger = UserFactory(organization=self.org)
         self.client.force_authenticate(stranger)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.post(
                 reverse(
                     "document_access_request_list_create", args=[private_document.pk]

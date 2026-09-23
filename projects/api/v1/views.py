@@ -1,7 +1,7 @@
 from django.db import transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, mixins
-from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
@@ -88,15 +88,17 @@ class ProjectListCreateAPIView(generics.ListCreateAPIView):
 class ProjectRetrieveUpdateDestroyAPIView(
     SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView
 ):
-    """Retrieve/update/soft-delete a project. Requires a resolvable
-    ProjectPermission: read needs Viewer, write Editor, delete Owner.
-    Cross-organization projects are a 404, not a 403."""
+    """Retrieve/update/soft-delete a project. A project outside the
+    requester's organization, or a private one they have no resolvable
+    access to, is a 404 either way; one they can see but can't act on at the
+    requested level (read needs Viewer, write Editor, delete Owner) is a
+    403."""
 
     serializer_class = ProjectSerializer
     permission_classes = (IsAuthenticated, HasProjectAccess, HasActiveSubscription)
 
     def get_queryset(self):
-        return Project.objects.for_organization(self.request.user.organization)
+        return Project.objects.visible_to(self.request.user)
 
     def perform_update(self, serializer):
         if "visibility" in serializer.validated_data:
@@ -143,10 +145,9 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
 
         project_id = self.request.query_params.get("project")
         if project_id:
-            project = get_object_or_404(
-                Project.objects.for_organization(user.organization), pk=project_id
-            )
-            queryset = queryset.filter(project=project)
+            if not project_id.isdigit():
+                return queryset.none()
+            queryset = queryset.filter(project_id=project_id)
 
         return queryset.order_by("title")
 
@@ -161,9 +162,7 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
         project = None
         project_id = self.request.data.get("project")
         if project_id:
-            project = get_object_or_404(
-                Project.objects.for_organization(organization), pk=project_id
-            )
+            project = get_object_or_404(Project.objects.visible_to(user), pk=project_id)
             if not access_permits(resolve_project_access(user, project), Action.WRITE):
                 raise PermissionDenied(
                     "You must have Editor access to this project to add documents to it."
@@ -182,13 +181,15 @@ class DocumentRetrieveUpdateDestroyAPIView(
     """Retrieve/update/soft-delete a document. Access resolves via
     ``DocumentPermission`` alone - explicit grant, else implicit Viewer if the
     document is public, else nothing: read needs Viewer, write Editor, delete
-    Owner."""
+    Owner. A document outside the requester's organization, or a private one
+    they have no resolvable access to, is a 404 either way; one they can see
+    but can't act on at the requested level is a 403."""
 
     serializer_class = DocumentSerializer
     permission_classes = (IsAuthenticated, HasDocumentAccess, HasActiveSubscription)
 
     def get_queryset(self):
-        return Document.objects.for_organization(self.request.user.organization)
+        return Document.objects.visible_to(self.request.user)
 
     def perform_update(self, serializer):
         if "visibility" in serializer.validated_data:
@@ -232,7 +233,7 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
 
     def _get_project(self):
         return get_object_or_404(
-            Project.objects.for_organization(self.request.user.organization),
+            Project.objects.visible_to(self.request.user),
             pk=self.kwargs["pk"],
         )
 
@@ -278,7 +279,7 @@ class ProjectShareRevokeAPIView(generics.DestroyAPIView):
 
     def get_object(self):
         project = get_object_or_404(
-            Project.objects.for_organization(self.request.user.organization),
+            Project.objects.visible_to(self.request.user),
             pk=self.kwargs["pk"],
         )
         check_can_share(self.request.user, project, "project", resolve_project_access)
@@ -302,7 +303,7 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
 
     def _get_document(self):
         return get_object_or_404(
-            Document.objects.for_organization(self.request.user.organization),
+            Document.objects.visible_to(self.request.user),
             pk=self.kwargs["pk"],
         )
 
@@ -350,7 +351,7 @@ class DocumentShareRevokeAPIView(generics.DestroyAPIView):
 
     def get_object(self):
         document = get_object_or_404(
-            Document.objects.for_organization(self.request.user.organization),
+            Document.objects.visible_to(self.request.user),
             pk=self.kwargs["pk"],
         )
         check_can_share(self.request.user, document, "document", resolve_access)
@@ -373,7 +374,7 @@ class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
 
     def _get_document(self):
         return get_object_or_404(
-            Document.objects.for_organization(self.request.user.organization),
+            Document.objects.visible_to(self.request.user),
             pk=self.kwargs["pk"],
         )
 
@@ -388,9 +389,6 @@ class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
         user = self.request.user
         document = self._get_document()
         level = resolve_access(user, document)
-
-        if not access_permits(level, Action.READ):
-            raise NotFound
 
         if level != AccessLevel.VIEWER:
             raise ValidationError(
@@ -414,9 +412,7 @@ class DocumentAccessRequestApproveAPIView(APIView):
 
     @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
     def post(self, request, pk, request_id):
-        document = get_object_or_404(
-            Document.objects.for_organization(request.user.organization), pk=pk
-        )
+        document = get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
         check_can_share(request.user, document, "document", resolve_access)
 
         access_request = get_object_or_404(
@@ -446,9 +442,7 @@ class DocumentAccessRequestDenyAPIView(APIView):
 
     @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
     def post(self, request, pk, request_id):
-        document = get_object_or_404(
-            Document.objects.for_organization(request.user.organization), pk=pk
-        )
+        document = get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
         check_can_share(request.user, document, "document", resolve_access)
 
         access_request = get_object_or_404(
