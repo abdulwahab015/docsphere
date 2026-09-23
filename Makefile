@@ -2,7 +2,7 @@
 
 DC_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
-.PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format \
+.PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format check \
         up down build logs docker-migrate docker-shell clean
 
 help: ## Show this help
@@ -46,6 +46,14 @@ lint: ## Run ruff
 format: ## Run black + ruff --fix
 	black .
 	ruff check --fix .
+
+check: ## Run the full CI check sequence locally (system check, migrations, format, lint, coverage)
+	python manage.py check
+	python manage.py makemigrations --check --dry-run
+	black --check .
+	ruff check .
+	coverage run manage.py test
+	coverage report
 
 up: ## Start the dev stack (base + dev overlay)
 	$(DC_DEV) up
