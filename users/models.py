@@ -6,7 +6,8 @@ from django.db import models
 
 from core.models import TimeStampedModel
 from users.choices import InvitationStatus, OrganizationRole
-from users.managers import UserManager
+from users.fields import EmailField
+from users.managers import InvitationManager, UserManager
 
 
 class User(AbstractUser, TimeStampedModel):
@@ -20,7 +21,7 @@ class User(AbstractUser, TimeStampedModel):
         blank=True,
     )
 
-    email = models.EmailField(unique=True)
+    email = EmailField(unique=True)
     org_role = models.CharField(
         max_length=10, choices=OrganizationRole.choices, default=OrganizationRole.MEMBER
     )
@@ -50,7 +51,7 @@ class Invitation(TimeStampedModel):
         related_name="sent_invitations",
     )
 
-    email = models.EmailField()
+    email = EmailField()
     token = models.CharField(max_length=64, unique=True)
     status = models.CharField(
         max_length=10,
@@ -58,6 +59,8 @@ class Invitation(TimeStampedModel):
         default=InvitationStatus.PENDING,
     )
     accepted_at = models.DateTimeField(null=True, blank=True)
+
+    objects = InvitationManager()
 
     def __str__(self):
         return f"{self.email} ({self.status})"
