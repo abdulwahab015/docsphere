@@ -2,7 +2,13 @@ import factory
 
 from organizations.factories import OrganizationFactory
 from projects.choices import AccessLevel
-from projects.models import Document, DocumentPermission, Project, ProjectPermission
+from projects.models import (
+    Document,
+    DocumentAccessRequest,
+    DocumentPermission,
+    Project,
+    ProjectPermission,
+)
 from users.factories import UserFactory
 
 
@@ -22,9 +28,11 @@ class DocumentFactory(factory.django.DjangoModelFactory):
         model = Document
 
     project = factory.SubFactory(ProjectFactory)
+    organization = factory.LazyAttribute(
+        lambda document: document.project.organization if document.project else None
+    )
     created_by = factory.SubFactory(
-        UserFactory,
-        organization=factory.SelfAttribute("..project.organization"),
+        UserFactory, organization=factory.SelfAttribute("..organization")
     )
     title = factory.Sequence(lambda n: f"Document {n}")
 
@@ -47,6 +55,16 @@ class DocumentPermissionFactory(factory.django.DjangoModelFactory):
     document = factory.SubFactory(DocumentFactory)
     user = factory.SubFactory(
         UserFactory,
-        organization=factory.SelfAttribute("..document.project.organization"),
+        organization=factory.SelfAttribute("..document.organization"),
     )
     access_level = AccessLevel.VIEWER
+
+
+class DocumentAccessRequestFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = DocumentAccessRequest
+
+    document = factory.SubFactory(DocumentFactory)
+    requested_by = factory.SubFactory(
+        UserFactory, organization=factory.SelfAttribute("..document.organization")
+    )

@@ -16,3 +16,20 @@ class Action(models.TextChoices):
     WRITE = "WRITE", "Write"
     DELETE = "DELETE", "Delete"
     RESHARE = "RESHARE", "Re-share"
+
+
+class Visibility(models.TextChoices):
+    """Shared by ``Project`` and ``Document``. ``PUBLIC`` grants every member of the
+    resource's organization an implicit Viewer level; ``PRIVATE`` grants nothing beyond
+    explicit permission rows."""
+
+    PRIVATE = "PRIVATE", "Private"
+    PUBLIC = "PUBLIC", "Public"
+
+
+class AccessRequestStatus(models.TextChoices):
+    """Lifecycle of a ``DocumentAccessRequest``."""
+
+    PENDING = "PENDING", "Pending"
+    APPROVED = "APPROVED", "Approved"
+    DENIED = "DENIED", "Denied"

@@ -30,7 +30,9 @@ class StripeCustomerFactory(factory.django.DjangoModelFactory):
 class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
     """A dj-stripe Subscription. ``status`` (default ``"active"``) is written
     into ``stripe_data`` where dj-stripe's managers read it from - pass
-    ``status="canceled"`` (or any non-active value) for an expired one."""
+    ``status="canceled"`` (or any non-active value) for an expired one. The
+    billing period end lives on the subscription item, as in current Stripe
+    API versions."""
 
     class Meta:
         model = Subscription
@@ -45,11 +47,20 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
         lambda subscription: {
             "id": subscription.id,
             "status": subscription.status,
-            "current_period_end": int(
-                (
-                    timezone.now() + timedelta(days=subscription.days_until_renewal)
-                ).timestamp()
-            ),
+            "cancel_at_period_end": False,
+            "plan": {"interval": "month"},
+            "items": {
+                "data": [
+                    {
+                        "current_period_end": int(
+                            (
+                                timezone.now()
+                                + timedelta(days=subscription.days_until_renewal)
+                            ).timestamp()
+                        )
+                    }
+                ]
+            },
         }
     )
 

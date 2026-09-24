@@ -10,9 +10,11 @@ from users.api.v1.views import (
     LogoutAPIView,
     PasswordResetConfirmAPIView,
     PasswordResetRequestAPIView,
+    UserListAPIView,
 )
 
 urlpatterns = [
+    path("", UserListAPIView.as_view(), name="user_list"),
     path("auth/login/", LoginView.as_view(), name="auth_login"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="auth_refresh"),
     path("auth/logout/", LogoutAPIView.as_view(), name="auth_logout"),

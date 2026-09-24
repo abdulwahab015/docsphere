@@ -10,14 +10,21 @@ from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory
 from projects.api.v1.serializers import ProjectSerializer
 from projects.api.v1.views import ProjectListCreateAPIView
-from projects.choices import AccessLevel, Action
+from projects.choices import AccessLevel, AccessRequestStatus, Action, Visibility
 from projects.factories import (
+    DocumentAccessRequestFactory,
     DocumentFactory,
     DocumentPermissionFactory,
     ProjectFactory,
     ProjectPermissionFactory,
 )
-from projects.models import Document, DocumentPermission, Project, ProjectPermission
+from projects.models import (
+    Document,
+    DocumentAccessRequest,
+    DocumentPermission,
+    Project,
+    ProjectPermission,
+)
 from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
@@ -25,6 +32,7 @@ from projects.permissions import (
     resolve_access,
     resolve_project_access,
 )
+from projects.tasks import send_access_request_created_email_task
 from users.factories import AdminUserFactory, UserFactory
 
 
@@ -55,6 +63,14 @@ class ModelStrTests(TestCase):
         self.assertIn(str(perm.document), rendered)
         self.assertIn(AccessLevel.VIEWER, rendered)
 
+    def test_document_access_request_str_names_requester_document_and_status(self):
+        access_request = DocumentAccessRequestFactory()
+
+        rendered = str(access_request)
+        self.assertIn(str(access_request.requested_by), rendered)
+        self.assertIn(str(access_request.document), rendered)
+        self.assertIn(AccessRequestStatus.PENDING, rendered)
+
 
 class DocumentManagerTests(TestCase):
     def test_for_project_returns_only_that_projects_active_documents(self):
@@ -65,10 +81,107 @@ class DocumentManagerTests(TestCase):
 
         self.assertEqual(list(Document.objects.for_project(project)), [document])
 
+    def test_for_organization_includes_personal_documents(self):
+        org = OrganizationFactory()
+        personal_document = DocumentFactory(project=None, organization=org)
+        DocumentFactory(project=ProjectFactory(organization=org))
+        DocumentFactory()
+
+        self.assertIn(personal_document, Document.objects.for_organization(org))
+
+
+class ProjectVisibleToTests(TestCase):
+    """The list-endpoint chokepoint: explicit permission, or public, within
+    the user's own organization - nothing else."""
+
+    def setUp(self):
+        self.org = OrganizationFactory()
+        self.user = UserFactory(organization=self.org)
+
+    def test_includes_projects_with_an_explicit_permission(self):
+        project = ProjectFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=project, user=self.user, access_level=AccessLevel.VIEWER
+        )
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [project])
+
+    def test_includes_public_projects_without_a_permission(self):
+        project = ProjectFactory(organization=self.org, visibility=Visibility.PUBLIC)
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [project])
+
+    def test_excludes_private_projects_without_a_permission(self):
+        ProjectFactory(organization=self.org)
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [])
+
+    def test_excludes_public_projects_from_another_organization(self):
+        ProjectFactory(visibility=Visibility.PUBLIC)
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [])
+
+    def test_excludes_soft_deleted_projects_even_if_public(self):
+        ProjectFactory(
+            organization=self.org, visibility=Visibility.PUBLIC, is_active=False
+        )
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [])
+
+    def test_does_not_duplicate_a_project_that_is_both_public_and_explicitly_shared(
+        self,
+    ):
+        project = ProjectFactory(organization=self.org, visibility=Visibility.PUBLIC)
+        ProjectPermissionFactory(
+            project=project, user=self.user, access_level=AccessLevel.EDITOR
+        )
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [project])
+
+
+class DocumentVisibleToTests(TestCase):
+    def setUp(self):
+        self.org = OrganizationFactory()
+        self.user = UserFactory(organization=self.org)
+
+    def test_includes_documents_with_an_explicit_permission(self):
+        document = DocumentFactory(project=ProjectFactory(organization=self.org))
+        DocumentPermissionFactory(
+            document=document, user=self.user, access_level=AccessLevel.VIEWER
+        )
+
+        self.assertEqual(list(Document.objects.visible_to(self.user)), [document])
+
+    def test_includes_public_documents_without_a_permission(self):
+        document = DocumentFactory(
+            project=ProjectFactory(organization=self.org), visibility=Visibility.PUBLIC
+        )
+
+        self.assertEqual(list(Document.objects.visible_to(self.user)), [document])
+
+    def test_includes_a_personal_document_with_an_explicit_permission(self):
+        document = DocumentFactory(project=None, organization=self.org)
+        DocumentPermissionFactory(
+            document=document, user=self.user, access_level=AccessLevel.OWNER
+        )
+
+        self.assertEqual(list(Document.objects.visible_to(self.user)), [document])
+
+    def test_excludes_private_documents_without_a_permission(self):
+        DocumentFactory(project=ProjectFactory(organization=self.org))
+
+        self.assertEqual(list(Document.objects.visible_to(self.user)), [])
+
+    def test_excludes_public_documents_from_another_organization(self):
+        DocumentFactory(visibility=Visibility.PUBLIC)
+
+        self.assertEqual(list(Document.objects.visible_to(self.user)), [])
+
 
 class ResolveAccessTests(TestCase):
-    """DocumentPermission first, then ProjectPermission fallback, else no
-    access. The document-level grant is a strict override."""
+    """An explicit DocumentPermission always wins; otherwise a public document
+    grants every member of its organization an implicit Viewer level; a
+    parent project's ProjectPermission never applies."""
 
     def setUp(self):
         self.project = ProjectFactory()
@@ -87,37 +200,45 @@ class ResolveAccessTests(TestCase):
                 resolve_access(self.user, self.document), AccessLevel.EDITOR
             )
 
-    def test_falls_back_to_project_permission_when_no_document_permission(self):
-        ProjectPermissionFactory(
-            project=self.project,
-            user=self.user,
-            access_level=AccessLevel.OWNER,
-        )
-
-        with self.assertNumQueries(2):
-            self.assertEqual(
-                resolve_access(self.user, self.document), AccessLevel.OWNER
-            )
-
-    def test_document_permission_overrides_even_when_it_grants_less(self):
-        ProjectPermissionFactory(
-            project=self.project,
-            user=self.user,
-            access_level=AccessLevel.OWNER,
-        )
-        DocumentPermissionFactory(
-            document=self.document,
-            user=self.user,
-            access_level=AccessLevel.VIEWER,
-        )
+    def test_public_document_with_no_permission_grants_implicit_viewer(self):
+        self.document.visibility = Visibility.PUBLIC
+        self.document.save(update_fields=["visibility"])
 
         with self.assertNumQueries(1):
             self.assertEqual(
                 resolve_access(self.user, self.document), AccessLevel.VIEWER
             )
 
-    def test_no_permission_anywhere_means_no_access(self):
-        with self.assertNumQueries(2):
+    def test_document_permission_overrides_public_visibility(self):
+        self.document.visibility = Visibility.PUBLIC
+        self.document.save(update_fields=["visibility"])
+        DocumentPermissionFactory(
+            document=self.document, user=self.user, access_level=AccessLevel.EDITOR
+        )
+
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                resolve_access(self.user, self.document), AccessLevel.EDITOR
+            )
+
+    def test_public_document_in_another_organization_grants_nothing(self):
+        self.document.visibility = Visibility.PUBLIC
+        self.document.save(update_fields=["visibility"])
+        outsider = UserFactory()
+
+        with self.assertNumQueries(1):
+            self.assertIsNone(resolve_access(outsider, self.document))
+
+    def test_private_document_with_no_permission_grants_nothing(self):
+        with self.assertNumQueries(1):
+            self.assertIsNone(resolve_access(self.user, self.document))
+
+    def test_project_permission_never_applies_to_a_document(self):
+        ProjectPermissionFactory(
+            project=self.project, user=self.user, access_level=AccessLevel.OWNER
+        )
+
+        with self.assertNumQueries(1):
             self.assertIsNone(resolve_access(self.user, self.document))
 
     def test_document_permission_on_another_document_does_not_leak(self):
@@ -128,7 +249,7 @@ class ResolveAccessTests(TestCase):
             access_level=AccessLevel.OWNER,
         )
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertIsNone(resolve_access(self.user, self.document))
 
 
@@ -206,13 +327,21 @@ class HasDocumentAccessTests(TestCase):
         with self.assertNumQueries(1):
             self.assertTrue(self._check("DELETE"))
 
+    def test_public_document_viewer_without_an_explicit_permission_may_read(self):
+        self.document.visibility = Visibility.PUBLIC
+        self.document.save(update_fields=["visibility"])
+
+        with self.assertNumQueries(1):
+            self.assertTrue(self._check("GET"))
+
     def test_user_without_any_permission_is_denied(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertFalse(self._check("GET"))
 
 
 class ResolveProjectAccessTests(TestCase):
-    """A single ProjectPermission lookup, no fallback chain."""
+    """An explicit ProjectPermission always wins; otherwise a public project
+    grants every member of its organization an implicit Viewer level."""
 
     def setUp(self):
         self.project = ProjectFactory()
@@ -227,6 +356,35 @@ class ResolveProjectAccessTests(TestCase):
             self.assertEqual(
                 resolve_project_access(self.user, self.project), AccessLevel.EDITOR
             )
+
+    def test_public_project_with_no_permission_grants_implicit_viewer(self):
+        self.project.visibility = Visibility.PUBLIC
+        self.project.save(update_fields=["visibility"])
+
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                resolve_project_access(self.user, self.project), AccessLevel.VIEWER
+            )
+
+    def test_project_permission_overrides_public_visibility(self):
+        self.project.visibility = Visibility.PUBLIC
+        self.project.save(update_fields=["visibility"])
+        ProjectPermissionFactory(
+            project=self.project, user=self.user, access_level=AccessLevel.EDITOR
+        )
+
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                resolve_project_access(self.user, self.project), AccessLevel.EDITOR
+            )
+
+    def test_public_project_in_another_organization_grants_nothing(self):
+        self.project.visibility = Visibility.PUBLIC
+        self.project.save(update_fields=["visibility"])
+        outsider = UserFactory()
+
+        with self.assertNumQueries(1):
+            self.assertIsNone(resolve_project_access(outsider, self.project))
 
     def test_returns_none_when_no_permission_exists(self):
         with self.assertNumQueries(1):
@@ -289,6 +447,13 @@ class HasProjectAccessTests(TestCase):
         with self.assertNumQueries(1):
             self.assertTrue(self._check("DELETE"))
 
+    def test_public_project_viewer_without_an_explicit_permission_may_read(self):
+        self.project.visibility = Visibility.PUBLIC
+        self.project.save(update_fields=["visibility"])
+
+        with self.assertNumQueries(1):
+            self.assertTrue(self._check("GET"))
+
     def test_user_without_any_permission_is_denied(self):
         with self.assertNumQueries(1):
             self.assertFalse(self._check("GET"))
@@ -303,7 +468,9 @@ class ProjectCreateAPITests(AssumeActiveSubscription, APITestCase):
         self.member = UserFactory(organization=self.org)
         self.url = reverse("project_list_create")
 
-    def test_admin_creates_project_with_creator_org_and_owner_permission(self):
+    def test_admin_creates_project_with_creator_org_owner_permission_and_private_default(
+        self,
+    ):
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(5):
@@ -313,11 +480,26 @@ class ProjectCreateAPITests(AssumeActiveSubscription, APITestCase):
         project = Project.objects.get(name="Roadmap")
         self.assertEqual(project.created_by, self.admin)
         self.assertEqual(project.organization, self.org)
+        self.assertEqual(project.visibility, Visibility.PRIVATE)
         self.assertTrue(
             ProjectPermission.objects.filter(
                 project=project, user=self.admin, access_level=AccessLevel.OWNER
             ).exists()
         )
+
+    def test_admin_can_create_a_public_project(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                self.url,
+                {"name": "Roadmap", "visibility": Visibility.PUBLIC},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        project = Project.objects.get(name="Roadmap")
+        self.assertEqual(project.visibility, Visibility.PUBLIC)
 
     def test_non_admin_member_cannot_create(self):
         self.client.force_authenticate(self.member)
@@ -368,14 +550,20 @@ class ProjectCreateAPITests(AssumeActiveSubscription, APITestCase):
 class ProjectListAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
         super().setUp()
-        self.project = ProjectFactory(name="Alpha")
-        self.org = self.project.organization
+        self.org = OrganizationFactory()
         self.member = UserFactory(organization=self.org)
         self.url = reverse("project_list_create")
 
-    def test_lists_active_projects_in_own_org_ordered_by_name(self):
+    def test_lists_public_and_explicitly_shared_projects_ordered_by_name(self):
+        shared = ProjectFactory(organization=self.org, name="Alpha")
+        ProjectPermissionFactory(
+            project=shared, user=self.member, access_level=AccessLevel.VIEWER
+        )
+        ProjectFactory(
+            organization=self.org, name="Bravo", visibility=Visibility.PUBLIC
+        )
         ProjectFactory(organization=self.org, name="Charlie")
-        ProjectFactory(organization=self.org, name="Bravo")
+
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(2):
@@ -383,30 +571,47 @@ class ProjectListAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         names = [row["name"] for row in response.data["results"]]
-        self.assertEqual(names, ["Alpha", "Bravo", "Charlie"])
+        self.assertEqual(names, ["Alpha", "Bravo"])
+
+    def test_excludes_private_projects_without_a_permission(self):
+        ProjectFactory(organization=self.org, name="Secret")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.data["results"], [])
 
     def test_excludes_projects_from_other_organizations(self):
-        ProjectFactory(name="Foreign")
+        ProjectFactory(name="Foreign", visibility=Visibility.PUBLIC)
         self.client.force_authenticate(self.member)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        names = [row["name"] for row in response.data["results"]]
-        self.assertEqual(names, ["Alpha"])
+        self.assertEqual(response.data["results"], [])
 
     def test_excludes_soft_deleted_projects(self):
-        ProjectFactory(organization=self.org, name="Deleted", is_active=False)
+        ProjectFactory(
+            organization=self.org,
+            name="Deleted",
+            visibility=Visibility.PUBLIC,
+            is_active=False,
+        )
         self.client.force_authenticate(self.member)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        names = [row["name"] for row in response.data["results"]]
-        self.assertEqual(names, ["Alpha"])
+        self.assertEqual(response.data["results"], [])
 
     def test_search_filters_by_name(self):
-        ProjectFactory(organization=self.org, name="Budget")
+        ProjectFactory(
+            organization=self.org, name="Budget", visibility=Visibility.PUBLIC
+        )
+        ProjectFactory(
+            organization=self.org, name="Other", visibility=Visibility.PUBLIC
+        )
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(2):
@@ -451,13 +656,26 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["name"], "Alpha")
 
-    def test_member_without_permission_cannot_retrieve(self):
+    def test_public_project_viewer_without_an_explicit_permission_can_retrieve(self):
+        public_project = ProjectFactory(
+            organization=self.org, name="Beta", visibility=Visibility.PUBLIC
+        )
         self.client.force_authenticate(self.stranger)
 
         with self.assertNumQueries(2):
+            response = self.client.get(
+                reverse("project_detail", args=[public_project.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_member_without_permission_gets_a_404_not_a_403(self):
+        self.client.force_authenticate(self.stranger)
+
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_cross_org_project_is_a_404_not_a_403(self):
         foreign = ProjectFactory(name="Foreign")
@@ -498,6 +716,30 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.patch(self.url, {"name": "Beta"}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_owner_can_change_visibility(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.patch(
+                self.url, {"visibility": Visibility.PUBLIC}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.visibility, Visibility.PUBLIC)
+
+    def test_editor_cannot_change_visibility(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.patch(
+                self.url, {"visibility": Visibility.PUBLIC}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.visibility, Visibility.PRIVATE)
 
     def test_owner_can_soft_delete_and_project_drops_out_of_the_api(self):
         self.client.force_authenticate(self.owner)
@@ -599,10 +841,10 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.url = reverse("document_list_create")
 
-    def test_editor_creates_document_with_creator_and_project(self):
+    def test_editor_creates_document_in_project_and_becomes_owner(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(6):
             response = self.client.post(
                 self.url,
                 {"title": "Spec", "project": self.project.pk},
@@ -613,8 +855,49 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
         document = Document.objects.get(title="Spec")
         self.assertEqual(document.created_by, self.editor)
         self.assertEqual(document.project, self.project)
+        self.assertEqual(document.organization, self.org)
+        self.assertEqual(document.visibility, Visibility.PRIVATE)
+        self.assertTrue(
+            DocumentPermission.objects.filter(
+                document=document, user=self.editor, access_level=AccessLevel.OWNER
+            ).exists()
+        )
 
-    def test_viewer_only_cannot_create(self):
+    def test_creator_can_set_visibility_to_public_at_creation(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                self.url,
+                {
+                    "title": "Spec",
+                    "project": self.project.pk,
+                    "visibility": Visibility.PUBLIC,
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        document = Document.objects.get(title="Spec")
+        self.assertEqual(document.visibility, Visibility.PUBLIC)
+
+    def test_any_org_member_can_create_a_personal_document_with_no_project(self):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(4):
+            response = self.client.post(self.url, {"title": "Notes"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        document = Document.objects.get(title="Notes")
+        self.assertIsNone(document.project)
+        self.assertEqual(document.organization, self.org)
+        self.assertTrue(
+            DocumentPermission.objects.filter(
+                document=document, user=self.viewer, access_level=AccessLevel.OWNER
+            ).exists()
+        )
+
+    def test_viewer_only_cannot_create_a_document_in_a_project(self):
         self.client.force_authenticate(self.viewer)
 
         with self.assertNumQueries(2):
@@ -672,13 +955,19 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
         super().setUp()
         self.project = ProjectFactory(name="Alpha")
         self.org = self.project.organization
-        self.document = DocumentFactory(project=self.project, title="Alpha Doc")
         self.member = UserFactory(organization=self.org)
         self.url = reverse("document_list_create")
 
-    def test_lists_active_documents_in_own_org_ordered_by_title(self):
+    def test_lists_public_and_explicitly_shared_documents_ordered_by_title(self):
+        shared = DocumentFactory(project=self.project, title="Alpha Doc")
+        DocumentPermissionFactory(
+            document=shared, user=self.member, access_level=AccessLevel.VIEWER
+        )
+        DocumentFactory(
+            project=self.project, title="Bravo Doc", visibility=Visibility.PUBLIC
+        )
         DocumentFactory(project=self.project, title="Charlie Doc")
-        DocumentFactory(project=self.project, title="Bravo Doc")
+
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(2):
@@ -686,30 +975,64 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         titles = [row["title"] for row in response.data["results"]]
-        self.assertEqual(titles, ["Alpha Doc", "Bravo Doc", "Charlie Doc"])
+        self.assertEqual(titles, ["Alpha Doc", "Bravo Doc"])
+
+    def test_lists_a_personal_document_the_member_has_a_permission_on(self):
+        personal_document = DocumentFactory(
+            project=None, organization=self.org, title="My Notes"
+        )
+        DocumentPermissionFactory(
+            document=personal_document,
+            user=self.member,
+            access_level=AccessLevel.OWNER,
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        titles = [row["title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["My Notes"])
+
+    def test_excludes_private_documents_without_a_permission(self):
+        DocumentFactory(project=self.project, title="Secret")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.data["results"], [])
 
     def test_excludes_documents_from_other_organizations(self):
-        DocumentFactory(title="Foreign Doc")
+        DocumentFactory(title="Foreign Doc", visibility=Visibility.PUBLIC)
         self.client.force_authenticate(self.member)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        titles = [row["title"] for row in response.data["results"]]
-        self.assertEqual(titles, ["Alpha Doc"])
+        self.assertEqual(response.data["results"], [])
 
     def test_excludes_soft_deleted_documents(self):
-        DocumentFactory(project=self.project, title="Deleted Doc", is_active=False)
+        DocumentFactory(
+            project=self.project,
+            title="Deleted Doc",
+            visibility=Visibility.PUBLIC,
+            is_active=False,
+        )
         self.client.force_authenticate(self.member)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        titles = [row["title"] for row in response.data["results"]]
-        self.assertEqual(titles, ["Alpha Doc"])
+        self.assertEqual(response.data["results"], [])
 
     def test_search_filters_by_title(self):
-        DocumentFactory(project=self.project, title="Budget Doc")
+        DocumentFactory(
+            project=self.project, title="Budget Doc", visibility=Visibility.PUBLIC
+        )
+        DocumentFactory(
+            project=self.project, title="Other Doc", visibility=Visibility.PUBLIC
+        )
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(2):
@@ -719,24 +1042,55 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(titles, ["Budget Doc"])
 
     def test_project_filter_returns_only_that_projects_documents(self):
+        DocumentFactory(
+            project=self.project, title="Alpha Doc", visibility=Visibility.PUBLIC
+        )
         other_project = ProjectFactory(organization=self.org, name="Beta")
-        DocumentFactory(project=other_project, title="Beta Doc")
+        DocumentFactory(
+            project=other_project, title="Beta Doc", visibility=Visibility.PUBLIC
+        )
         self.client.force_authenticate(self.member)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.get(self.url, {"project": self.project.pk})
 
         titles = [row["title"] for row in response.data["results"]]
         self.assertEqual(titles, ["Alpha Doc"])
 
-    def test_project_filter_with_a_project_from_another_org_is_a_404(self):
+    def test_project_filter_with_a_project_from_another_org_returns_an_empty_list(self):
         foreign_project = ProjectFactory(name="Foreign")
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(1):
             response = self.client.get(self.url, {"project": foreign_project.pk})
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
+
+    def test_project_filter_with_a_private_project_in_own_org_returns_an_empty_list(
+        self,
+    ):
+        """The filter never reveals whether a private project the caller can't
+        see exists at all - it behaves identically to a nonexistent or
+        cross-org id, always collapsing to an empty list rather than a 404."""
+        private_project = ProjectFactory(organization=self.org, name="Vault")
+        DocumentFactory(project=private_project, title="Confidential")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url, {"project": private_project.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
+
+    def test_project_filter_with_a_non_numeric_id_returns_an_empty_list(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url, {"project": "not-a-number"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], [])
 
     def test_anonymous_request_is_rejected(self):
         with self.assertNumQueries(0):
@@ -755,33 +1109,46 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
         self.editor = UserFactory(organization=self.org)
         self.viewer = UserFactory(organization=self.org)
         self.stranger = UserFactory(organization=self.org)
-        ProjectPermissionFactory(
-            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
         )
-        ProjectPermissionFactory(
-            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        DocumentPermissionFactory(
+            document=self.document, user=self.editor, access_level=AccessLevel.EDITOR
         )
-        ProjectPermissionFactory(
-            project=self.project, user=self.viewer, access_level=AccessLevel.VIEWER
+        DocumentPermissionFactory(
+            document=self.document, user=self.viewer, access_level=AccessLevel.VIEWER
         )
         self.url = reverse("document_detail", args=[self.document.pk])
 
     def test_member_with_viewer_permission_can_retrieve(self):
         self.client.force_authenticate(self.viewer)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["title"], "Doc1")
 
-    def test_member_without_permission_cannot_retrieve(self):
+    def test_public_document_viewer_without_an_explicit_permission_can_retrieve(self):
+        public_document = DocumentFactory(
+            project=self.project, title="Doc2", visibility=Visibility.PUBLIC
+        )
         self.client.force_authenticate(self.stranger)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
+            response = self.client.get(
+                reverse("document_detail", args=[public_document.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_member_without_permission_gets_a_404_not_a_403(self):
+        self.client.force_authenticate(self.stranger)
+
+        with self.assertNumQueries(1):
             response = self.client.get(self.url)
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_cross_org_document_is_a_404_not_a_403(self):
         foreign = DocumentFactory(title="Foreign")
@@ -795,7 +1162,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_can_update(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(3):
             response = self.client.patch(
                 self.url, {"title": "Doc1 Prime"}, format="json"
             )
@@ -807,17 +1174,41 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_viewer_cannot_update(self):
         self.client.force_authenticate(self.viewer)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.patch(
                 self.url, {"title": "Doc1 Prime"}, format="json"
             )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_owner_can_soft_delete_and_document_drops_out_of_the_api(self):
+    def test_owner_can_change_visibility(self):
         self.client.force_authenticate(self.owner)
 
         with self.assertNumQueries(4):
+            response = self.client.patch(
+                self.url, {"visibility": Visibility.PUBLIC}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.visibility, Visibility.PUBLIC)
+
+    def test_editor_cannot_change_visibility(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.patch(
+                self.url, {"visibility": Visibility.PUBLIC}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.visibility, Visibility.PRIVATE)
+
+    def test_owner_can_soft_delete_and_document_drops_out_of_the_api(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(3):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -831,7 +1222,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_cannot_delete(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -849,18 +1240,18 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.owner = UserFactory(organization=self.org)
         self.editor = UserFactory(organization=self.org)
-        ProjectPermissionFactory(
-            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
         )
-        ProjectPermissionFactory(
-            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        DocumentPermissionFactory(
+            document=self.document, user=self.editor, access_level=AccessLevel.EDITOR
         )
         self.url = reverse("document_restore", args=[self.document.pk])
 
     def test_owner_can_restore_a_soft_deleted_document(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(3):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -871,7 +1262,7 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_cannot_restore(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -1141,11 +1532,11 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         self.owner = UserFactory(organization=self.org)
         self.editor = UserFactory(organization=self.org)
         self.target = UserFactory(organization=self.org)
-        ProjectPermissionFactory(
-            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
         )
-        ProjectPermissionFactory(
-            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        DocumentPermissionFactory(
+            document=self.document, user=self.editor, access_level=AccessLevel.EDITOR
         )
         self.url = reverse("document_share", args=[self.document.pk])
 
@@ -1153,7 +1544,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(13):
+        with self.assertNumQueries(11):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -1177,7 +1568,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(11):
+        with self.assertNumQueries(9):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.OWNER},
@@ -1198,17 +1589,17 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(4):
             response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         user_ids = {row["user"] for row in response.data["results"]}
-        self.assertEqual(user_ids, {self.target.pk})
+        self.assertEqual(user_ids, {self.owner.pk, self.editor.pk, self.target.pk})
 
     def test_editor_cannot_share(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -1225,7 +1616,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_cannot_list_current_grants(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -1234,7 +1625,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         foreign_user = UserFactory()
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(4):
             response = self.client.post(
                 self.url,
                 {"user": foreign_user.pk, "access_level": AccessLevel.VIEWER},
@@ -1271,14 +1662,11 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         self.owner = UserFactory(organization=self.org)
         self.editor = UserFactory(organization=self.org)
         self.target = UserFactory(organization=self.org)
-        ProjectPermissionFactory(
-            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
         )
-        ProjectPermissionFactory(
-            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
-        )
-        ProjectPermissionFactory(
-            project=self.project, user=self.target, access_level=AccessLevel.VIEWER
+        DocumentPermissionFactory(
+            document=self.document, user=self.editor, access_level=AccessLevel.EDITOR
         )
         DocumentPermissionFactory(
             document=self.document, user=self.target, access_level=AccessLevel.EDITOR
@@ -1287,19 +1675,27 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
             "document_share_revoke", args=[self.document.pk, self.target.pk]
         )
 
-    def test_owner_can_revoke_and_access_falls_back_to_project_permission(self):
+    def test_owner_can_revoke_and_access_is_removed_entirely(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(4):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(resolve_access(self.target, self.document))
+
+    def test_owner_can_revoke_and_public_document_still_grants_implicit_viewer(self):
+        self.document.visibility = Visibility.PUBLIC
+        self.document.save(update_fields=["visibility"])
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(resolve_access(self.target, self.document), AccessLevel.VIEWER)
 
     def test_owner_cannot_revoke_the_documents_last_owner(self):
-        DocumentPermissionFactory(
-            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
-        )
         self.client.force_authenticate(self.owner)
 
         with self.assertNumQueries(4):
@@ -1315,9 +1711,6 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         DocumentPermissionFactory(
             document=self.document, user=co_owner, access_level=AccessLevel.OWNER
         )
-        DocumentPermissionFactory(
-            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
-        )
         self.client.force_authenticate(self.owner)
 
         with self.assertNumQueries(5):
@@ -1331,32 +1724,17 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_cannot_revoke(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(resolve_access(self.target, self.document), AccessLevel.EDITOR)
 
-    def test_revoking_the_last_permission_removes_access_entirely(self):
-        stranger = UserFactory(organization=self.org)
-        DocumentPermissionFactory(
-            document=self.document, user=stranger, access_level=AccessLevel.VIEWER
-        )
-        self.client.force_authenticate(self.owner)
-
-        with self.assertNumQueries(5):
-            response = self.client.delete(
-                reverse("document_share_revoke", args=[self.document.pk, stranger.pk])
-            )
-
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertIsNone(resolve_access(stranger, self.document))
-
     def test_revoking_a_nonexistent_permission_is_a_404(self):
         stranger = UserFactory(organization=self.org)
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(3):
             response = self.client.delete(
                 reverse("document_share_revoke", args=[self.document.pk, stranger.pk])
             )
@@ -1376,3 +1754,229 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.document = DocumentFactory(
+            project=self.project, title="Doc1", visibility=Visibility.PUBLIC
+        )
+        self.owner = UserFactory(organization=self.org)
+        self.other_owner = UserFactory(organization=self.org)
+        self.viewer = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        DocumentPermissionFactory(
+            document=self.document, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        DocumentPermissionFactory(
+            document=self.document,
+            user=self.other_owner,
+            access_level=AccessLevel.OWNER,
+        )
+        DocumentPermissionFactory(
+            document=self.document, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        self.url = reverse(
+            "document_access_request_list_create", args=[self.document.pk]
+        )
+
+    @patch("core.email.send_mail")
+    def test_viewer_on_a_public_document_can_request_editor_access(
+        self, mock_send_mail
+    ):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        access_request = DocumentAccessRequest.objects.get(
+            document=self.document, requested_by=self.viewer
+        )
+        self.assertEqual(access_request.status, AccessRequestStatus.PENDING)
+        mock_send_mail.assert_called_once()
+        self.assertEqual(
+            set(mock_send_mail.call_args.kwargs["recipient_list"]),
+            {self.owner.email, self.other_owner.email},
+        )
+
+    def test_editor_already_has_sufficient_access_and_cannot_request(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            DocumentAccessRequest.objects.filter(requested_by=self.editor).exists()
+        )
+
+    def test_owner_already_has_sufficient_access_and_cannot_request(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_requesting_against_a_private_document_with_no_access_is_a_404(self):
+        private_document = DocumentFactory(project=self.project, title="Secret")
+        stranger = UserFactory(organization=self.org)
+        self.client.force_authenticate(stranger)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse(
+                    "document_access_request_list_create", args=[private_document.pk]
+                )
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_duplicate_pending_request_is_rejected(self):
+        DocumentAccessRequestFactory(document=self.document, requested_by=self.viewer)
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            DocumentAccessRequest.objects.filter(requested_by=self.viewer).count(), 1
+        )
+
+    def test_owner_can_list_pending_requests(self):
+        DocumentAccessRequestFactory(document=self.document, requested_by=self.viewer)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 1)
+
+    def test_editor_cannot_list_pending_requests(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("core.email.send_mail")
+    def test_owner_can_approve_a_request(self, mock_send_mail):
+        access_request = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.viewer
+        )
+        self.client.force_authenticate(self.owner)
+        url = reverse(
+            "document_access_request_approve",
+            args=[self.document.pk, access_request.pk],
+        )
+
+        with self.assertNumQueries(14):
+            response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.status, AccessRequestStatus.APPROVED)
+        self.assertEqual(access_request.reviewed_by, self.owner)
+        self.assertEqual(resolve_access(self.viewer, self.document), AccessLevel.EDITOR)
+        mock_send_mail.assert_called_once()
+        self.assertEqual(
+            mock_send_mail.call_args.kwargs["recipient_list"], [self.viewer.email]
+        )
+
+    @patch("core.email.send_mail")
+    def test_owner_can_deny_a_request(self, mock_send_mail):
+        access_request = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.viewer
+        )
+        self.client.force_authenticate(self.owner)
+        url = reverse(
+            "document_access_request_deny",
+            args=[self.document.pk, access_request.pk],
+        )
+
+        with self.assertNumQueries(5):
+            response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.status, AccessRequestStatus.DENIED)
+        self.assertEqual(access_request.reviewed_by, self.owner)
+        # Denial doesn't touch DocumentPermission - the requester keeps whatever
+        # access they already had (here, the document's implicit public Viewer).
+        self.assertEqual(resolve_access(self.viewer, self.document), AccessLevel.VIEWER)
+        mock_send_mail.assert_called_once()
+
+    def test_editor_cannot_approve_a_request(self):
+        access_request = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.viewer
+        )
+        self.client.force_authenticate(self.editor)
+        url = reverse(
+            "document_access_request_approve",
+            args=[self.document.pk, access_request.pk],
+        )
+
+        with self.assertNumQueries(2):
+            response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.status, AccessRequestStatus.PENDING)
+
+    def test_approving_an_already_resolved_request_is_a_404(self):
+        access_request = DocumentAccessRequestFactory(
+            document=self.document,
+            requested_by=self.viewer,
+            status=AccessRequestStatus.APPROVED,
+        )
+        self.client.force_authenticate(self.owner)
+        url = reverse(
+            "document_access_request_approve",
+            args=[self.document.pk, access_request.pk],
+        )
+
+        with self.assertNumQueries(3):
+            response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentTasksTests(TestCase):
+    @patch("core.email.send_mail")
+    def test_created_task_emails_every_current_owner(self, mock_send_mail):
+        document = DocumentFactory(title="Doc1")
+        owner_one = UserFactory(organization=document.organization)
+        owner_two = UserFactory(organization=document.organization)
+        DocumentPermissionFactory(
+            document=document, user=owner_one, access_level=AccessLevel.OWNER
+        )
+        DocumentPermissionFactory(
+            document=document, user=owner_two, access_level=AccessLevel.OWNER
+        )
+        access_request = DocumentAccessRequestFactory(document=document)
+
+        send_access_request_created_email_task(access_request.pk)
+
+        mock_send_mail.assert_called_once()
+        self.assertEqual(
+            set(mock_send_mail.call_args.kwargs["recipient_list"]),
+            {owner_one.email, owner_two.email},
+        )
+
+    @patch("core.email.send_mail")
+    def test_created_task_is_a_noop_when_the_document_has_no_owner(
+        self, mock_send_mail
+    ):
+        access_request = DocumentAccessRequestFactory()
+
+        send_access_request_created_email_task(access_request.pk)
+
+        mock_send_mail.assert_not_called()

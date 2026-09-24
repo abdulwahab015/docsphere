@@ -3,17 +3,46 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from organizations.models import Organization
+from subscriptions.utils import get_period_end
 
 User = get_user_model()
+
+
+class ActiveSubscriptionSerializer(serializers.Serializer):
+    """Read-only summary of a dj-stripe Subscription."""
+
+    id = serializers.CharField()
+    status = serializers.CharField()
+    interval = serializers.SerializerMethodField()
+    current_period_end = serializers.SerializerMethodField()
+    cancel_at_period_end = serializers.SerializerMethodField()
+
+    def get_cancel_at_period_end(self, subscription):
+        return bool(subscription.stripe_data.get("cancel_at_period_end"))
+
+    def get_interval(self, subscription):
+        return (subscription.stripe_data.get("plan") or {}).get("interval")
+
+    def get_current_period_end(self, subscription):
+        return get_period_end(subscription)
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
     """``billing_email`` uniqueness is checked here so a collision returns 400
     rather than surfacing as an IntegrityError."""
 
+    active_subscription = ActiveSubscriptionSerializer(read_only=True)
+
     class Meta:
         model = Organization
-        fields = ["id", "name", "billing_email", "created", "modified"]
+        fields = [
+            "id",
+            "name",
+            "billing_email",
+            "active_subscription",
+            "created",
+            "modified",
+        ]
         read_only_fields = ["id", "created", "modified"]
 
     def validate_billing_email(self, value):

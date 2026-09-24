@@ -1,12 +1,25 @@
 from django.contrib import admin
 
-from .models import Document, DocumentPermission, Project, ProjectPermission
+from .models import (
+    Document,
+    DocumentAccessRequest,
+    DocumentPermission,
+    Project,
+    ProjectPermission,
+)
 
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ("name", "organization", "created_by", "is_active", "created")
-    list_filter = ("organization", "is_active")
+    list_display = (
+        "name",
+        "organization",
+        "visibility",
+        "created_by",
+        "is_active",
+        "created",
+    )
+    list_filter = ("organization", "visibility", "is_active")
     search_fields = ("name",)
 
 
@@ -14,13 +27,15 @@ class ProjectAdmin(admin.ModelAdmin):
 class DocumentAdmin(admin.ModelAdmin):
     list_display = (
         "title",
+        "organization",
         "project",
+        "visibility",
         "created_by",
         "is_active",
         "created",
         "modified",
     )
-    list_filter = ("project__organization", "is_active")
+    list_filter = ("organization", "visibility", "is_active")
     search_fields = ("title",)
 
 
@@ -34,3 +49,9 @@ class ProjectPermissionAdmin(admin.ModelAdmin):
 class DocumentPermissionAdmin(admin.ModelAdmin):
     list_display = ("document", "user", "access_level")
     list_filter = ("access_level",)
+
+
+@admin.register(DocumentAccessRequest)
+class DocumentAccessRequestAdmin(admin.ModelAdmin):
+    list_display = ("document", "requested_by", "status", "reviewed_by", "created")
+    list_filter = ("status",)

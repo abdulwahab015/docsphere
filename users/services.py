@@ -66,9 +66,9 @@ def bulk_create_invitations(emails, *, organization, invited_by):
 
     existing_user_emails = {
         stored.lower()
-        for stored in User.objects.filter(
-            organization=organization, email__in=candidate_emails
-        ).values_list("email", flat=True)
+        for stored in User.objects.filter(email__in=candidate_emails).values_list(
+            "email", flat=True
+        )
     }
 
     pending_invites = Invitation.objects.for_organization(organization).filter(
@@ -109,10 +109,7 @@ def bulk_create_invitations(emails, *, organization, invited_by):
 
         if normalized_email in existing_user_emails:
             skipped_rows.append(
-                {
-                    "email": original_email,
-                    "reason": "user already exists in organization",
-                }
+                {"email": original_email, "reason": "user already exists"}
             )
             continue
 

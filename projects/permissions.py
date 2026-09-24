@@ -1,7 +1,7 @@
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from projects.choices import Action
+from projects.choices import AccessLevel, Action, Visibility
 from projects.mappings import ALLOWED_ACTIONS
 from projects.models import DocumentPermission, ProjectPermission
 
@@ -9,9 +9,11 @@ from projects.models import DocumentPermission, ProjectPermission
 def resolve_access(user, document):
     """Return ``user``'s effective ``AccessLevel`` on ``document``, or ``None``.
 
-    A ``DocumentPermission`` wins outright when present - even if it grants less
-    than the parent ``ProjectPermission`` would. Otherwise the project permission
-    applies; with neither, there is no access.
+    A ``DocumentPermission`` wins outright when present, whatever level it grants.
+    Otherwise a public document grants every member of its organization an implicit
+    Viewer level. A parent project's ``ProjectPermission`` never applies here - it
+    only gates who may create a document inside that project, not who may read or
+    write it once created.
     """
     document_level = (
         DocumentPermission.objects.filter(user=user, document=document)
@@ -21,11 +23,13 @@ def resolve_access(user, document):
     if document_level:
         return document_level
 
-    return (
-        ProjectPermission.objects.filter(user=user, project_id=document.project_id)
-        .values_list("access_level", flat=True)
-        .first()
-    )
+    if (
+        document.visibility == Visibility.PUBLIC
+        and document.organization_id == user.organization_id
+    ):
+        return AccessLevel.VIEWER
+
+    return None
 
 
 def access_permits(access_level, action):
@@ -40,14 +44,25 @@ def access_permits(access_level, action):
 def resolve_project_access(user, project):
     """Return ``user``'s effective ``AccessLevel`` on ``project``, or ``None``.
 
-    A project has a single permission tier - there's no parent resource to
-    inherit from - so this is one ``ProjectPermission`` lookup with no fallback.
+    A ``ProjectPermission`` wins outright when present, whatever level it grants.
+    Otherwise a public project grants every member of its organization an implicit
+    Viewer level.
     """
-    return (
+    project_level = (
         ProjectPermission.objects.filter(user=user, project=project)
         .values_list("access_level", flat=True)
         .first()
     )
+    if project_level:
+        return project_level
+
+    if (
+        project.visibility == Visibility.PUBLIC
+        and project.organization_id == user.organization_id
+    ):
+        return AccessLevel.VIEWER
+
+    return None
 
 
 def check_can_share(user, resource, resource_field, resolve_access_fn):

@@ -2,14 +2,21 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from projects.choices import AccessLevel
-from projects.models import Document, DocumentPermission, Project, ProjectPermission
+from projects.models import (
+    Document,
+    DocumentAccessRequest,
+    DocumentPermission,
+    Project,
+    ProjectPermission,
+)
 
 User = get_user_model()
 
 
 class ProjectSerializer(serializers.ModelSerializer):
     """``created_by`` and ``organization`` are always set server-side from the
-    request and never accepted from the client."""
+    request and never accepted from the client. ``visibility`` is writable, but
+    changing it on an existing project is Owner-only (enforced in the view)."""
 
     class Meta:
         model = Project
@@ -17,6 +24,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "description",
+            "visibility",
             "created_by",
             "organization",
             "created",
@@ -49,9 +57,11 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 
 class DocumentSerializer(serializers.ModelSerializer):
-    """``created_by`` and ``project`` are always set server-side in the view
-    (the latter after explicit org-scoped validation) and never accepted from
-    the client through this serializer."""
+    """``created_by``, ``organization`` and ``project`` are always set server-side
+    in the view (the latter after explicit org-scoped validation, and may be left
+    unset entirely for a personal document) and never accepted from the client
+    through this serializer. ``visibility`` is writable, but changing it on an
+    existing document is Owner-only (enforced in the view)."""
 
     class Meta:
         model = Document
@@ -59,7 +69,9 @@ class DocumentSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "content",
+            "visibility",
             "created_by",
+            "organization",
             "project",
             "created",
             "modified",
@@ -67,6 +79,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "created_by",
+            "organization",
             "project",
             "created",
             "modified",
@@ -106,3 +119,21 @@ def _permission_serializer(model, resource_field):
 
 ProjectPermissionSerializer = _permission_serializer(ProjectPermission, "project")
 DocumentPermissionSerializer = _permission_serializer(DocumentPermission, "document")
+
+
+class DocumentAccessRequestSerializer(serializers.ModelSerializer):
+    """Read-only - the view supplies ``document`` and ``requested_by`` from the
+    URL and the requester, never from client-submitted data."""
+
+    class Meta:
+        model = DocumentAccessRequest
+        fields = [
+            "id",
+            "document",
+            "requested_by",
+            "reviewed_by",
+            "status",
+            "created",
+            "modified",
+        ]
+        read_only_fields = fields

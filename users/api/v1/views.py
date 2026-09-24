@@ -4,7 +4,8 @@ from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny
+from rest_framework.filters import SearchFilter
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -26,8 +27,10 @@ from users.api.v1.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     TokenPairSerializer,
+    UserDetailSerializer,
+    UserSerializer,
 )
-from users.choices import InvitationStatus
+from users.choices import InvitationStatus, OrganizationRole
 from users.models import Invitation
 from users.permissions import IsOrganizationAdmin
 from users.services import bulk_create_invitations, parse_invitation_emails
@@ -43,6 +46,32 @@ class LoginView(TokenObtainPairView):
     serializer_class = LoginSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
+
+
+class UserListAPIView(generics.ListAPIView):
+    """Lists the active members of the requesting user's own organization -
+    e.g. to look up a teammate's id when sharing a project or document. Any
+    authenticated org member may list, not just admins, but only an admin's
+    response includes ``org_role``/``created`` - a regular member only needs
+    an id and email to pick a share target."""
+
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
+    filter_backends = [SearchFilter]
+    search_fields = ["email"]
+
+    def get_serializer_class(self):
+        if self.request.user.org_role == OrganizationRole.ADMIN:
+            return UserDetailSerializer
+        return UserSerializer
+
+    def get_queryset(self):
+        organization = self.request.user.organization
+        if not organization:
+            return User.objects.none()
+
+        return User.objects.filter(organization=organization, is_active=True).order_by(
+            "email"
+        )
 
 
 class InvitationListCreateAPIView(generics.ListCreateAPIView):
