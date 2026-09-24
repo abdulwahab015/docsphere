@@ -15,7 +15,7 @@ from projects.factories import (
     ProjectFactory,
     ProjectPermissionFactory,
 )
-from projects.models import Project, ProjectPermission
+from projects.models import Document, Project, ProjectPermission
 from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
@@ -52,6 +52,16 @@ class ModelStrTests(TestCase):
         self.assertIn(str(perm.user), rendered)
         self.assertIn(str(perm.document), rendered)
         self.assertIn(AccessLevel.VIEWER, rendered)
+
+
+class DocumentManagerTests(TestCase):
+    def test_for_project_returns_only_that_projects_active_documents(self):
+        project = ProjectFactory()
+        document = DocumentFactory(project=project)
+        DocumentFactory(project=project, is_active=False)
+        DocumentFactory()
+
+        self.assertEqual(list(Document.objects.for_project(project)), [document])
 
 
 class ResolveAccessTests(TestCase):
@@ -568,5 +578,320 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
 
         with self.assertNumQueries(1):
             response = self.client.post(reverse("project_restore", args=[foreign.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.editor = UserFactory(organization=self.org)
+        self.viewer = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.viewer, access_level=AccessLevel.VIEWER
+        )
+        self.url = reverse("document_list_create")
+
+    def test_editor_creates_document_with_creator_and_project(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                self.url,
+                {"title": "Spec", "project": self.project.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        document = Document.objects.get(title="Spec")
+        self.assertEqual(document.created_by, self.editor)
+        self.assertEqual(document.project, self.project)
+
+    def test_viewer_only_cannot_create(self):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                self.url,
+                {"title": "Spec", "project": self.project.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(Document.objects.filter(title="Spec").exists())
+
+    def test_create_against_a_project_from_another_org_is_a_404(self):
+        foreign_project = ProjectFactory(name="Foreign")
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                self.url,
+                {"title": "Spec", "project": foreign_project.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Document.objects.filter(title="Spec").exists())
+
+    def test_create_with_a_non_numeric_project_id_is_a_404(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                self.url,
+                {"title": "Spec", "project": "not-a-number"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_create_without_an_organization_is_rejected(self):
+        rootless_user = UserFactory(organization=None)
+        self.client.force_authenticate(rootless_user)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                self.url,
+                {"title": "Spec", "project": self.project.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.document = DocumentFactory(project=self.project, title="Alpha Doc")
+        self.member = UserFactory(organization=self.org)
+        self.url = reverse("document_list_create")
+
+    def test_lists_active_documents_in_own_org_ordered_by_title(self):
+        DocumentFactory(project=self.project, title="Charlie Doc")
+        DocumentFactory(project=self.project, title="Bravo Doc")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        titles = [row["title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["Alpha Doc", "Bravo Doc", "Charlie Doc"])
+
+    def test_excludes_documents_from_other_organizations(self):
+        DocumentFactory(title="Foreign Doc")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        titles = [row["title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["Alpha Doc"])
+
+    def test_excludes_soft_deleted_documents(self):
+        DocumentFactory(project=self.project, title="Deleted Doc", is_active=False)
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        titles = [row["title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["Alpha Doc"])
+
+    def test_search_filters_by_title(self):
+        DocumentFactory(project=self.project, title="Budget Doc")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url, {"search": "Budg"})
+
+        titles = [row["title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["Budget Doc"])
+
+    def test_project_filter_returns_only_that_projects_documents(self):
+        other_project = ProjectFactory(organization=self.org, name="Beta")
+        DocumentFactory(project=other_project, title="Beta Doc")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url, {"project": self.project.pk})
+
+        titles = [row["title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["Alpha Doc"])
+
+    def test_project_filter_with_a_project_from_another_org_is_a_404(self):
+        foreign_project = ProjectFactory(name="Foreign")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url, {"project": foreign_project.pk})
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.document = DocumentFactory(project=self.project, title="Doc1")
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        self.viewer = UserFactory(organization=self.org)
+        self.stranger = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.viewer, access_level=AccessLevel.VIEWER
+        )
+        self.url = reverse("document_detail", args=[self.document.pk])
+
+    def test_member_with_viewer_permission_can_retrieve(self):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["title"], "Doc1")
+
+    def test_member_without_permission_cannot_retrieve(self):
+        self.client.force_authenticate(self.stranger)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cross_org_document_is_a_404_not_a_403(self):
+        foreign = DocumentFactory(title="Foreign")
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("document_detail", args=[foreign.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_editor_can_update(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(4):
+            response = self.client.patch(
+                self.url, {"title": "Doc1 Prime"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.title, "Doc1 Prime")
+
+    def test_viewer_cannot_update(self):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(3):
+            response = self.client.patch(
+                self.url, {"title": "Doc1 Prime"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_owner_can_soft_delete_and_document_drops_out_of_the_api(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.is_active)
+
+        with self.assertNumQueries(1):
+            follow_up = self.client.get(self.url)
+        self.assertEqual(follow_up.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_editor_cannot_delete(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.is_active)
+
+
+class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory(name="Alpha")
+        self.org = self.project.organization
+        self.document = DocumentFactory(
+            project=self.project, title="Doc1", is_active=False
+        )
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        ProjectPermissionFactory(
+            project=self.project, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        self.url = reverse("document_restore", args=[self.document.pk])
+
+    def test_owner_can_restore_a_soft_deleted_document(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["title"], "Doc1")
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.is_active)
+
+    def test_editor_cannot_restore(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.is_active)
+
+    def test_restoring_an_already_active_document_is_a_404(self):
+        active_document = DocumentFactory(project=self.project, title="Doc2")
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("document_restore", args=[active_document.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cross_org_restore_is_a_404(self):
+        foreign = DocumentFactory(title="Foreign", is_active=False)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(reverse("document_restore", args=[foreign.pk]))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

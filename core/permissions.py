@@ -19,18 +19,15 @@ class HasActiveSubscription(BasePermission):
     """Denies an authenticated user whose organization has no active
     subscription, with ``402``.
 
-    Superusers (no organization) pass - this gates paid access, not
-    authentication. Assumes ``IsAuthenticated`` (or equivalent) already ran,
-    same as ``HasProjectAccess``/``HasDocumentAccess`` - every view using this
-    must also list an authentication permission, since ``AnonymousUser`` has
-    no ``organization_id``. Views that must stay reachable without a
-    subscription (auth, password reset, invitation accept) simply don't
-    include this permission.
+    Anonymous requests and superusers (no organization) pass - this gates paid
+    access, not authentication. Views that must stay reachable without a
+    subscription (auth, password reset, invitation accept) simply don't include
+    this permission.
     """
 
     def has_permission(self, request, view):
         user = request.user
-        if not user.organization_id:
+        if not user or not user.is_authenticated or not user.organization_id:
             return True
 
         if not user.organization.active_subscription:
