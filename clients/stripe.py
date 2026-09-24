@@ -32,6 +32,16 @@ def create_checkout_session(
     )
 
 
+def create_billing_portal_session(*, customer_id, return_url):
+    """Thin wrapper around the Stripe SDK's Customer Portal session creation,
+    where a customer manages or cancels their own subscription."""
+    return stripe.billing_portal.Session.create(
+        customer=customer_id,
+        return_url=return_url,
+        api_key=djstripe_settings.STRIPE_SECRET_KEY,
+    )
+
+
 @receiver(webhook_processing_error)
 def log_webhook_processing_error(sender, instance, api_key, exception, data, **kwargs):
     logger.error(

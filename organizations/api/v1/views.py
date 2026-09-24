@@ -3,10 +3,8 @@ from django.db import transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from organizations.api.v1.serializers import (
     OrganizationSerializer,
@@ -14,6 +12,7 @@ from organizations.api.v1.serializers import (
 )
 from organizations.models import Organization
 from users.api.v1.serializers import TokenPairSerializer
+from users.api.v1.tokens import token_pair_response
 from users.choices import OrganizationRole
 from users.permissions import IsOrganizationAdmin
 
@@ -48,11 +47,7 @@ class OrganizationSignupAPIView(APIView):
                 org_role=OrganizationRole.ADMIN,
             )
 
-        refresh = RefreshToken.for_user(user)
-        return Response(
-            {"access": str(refresh.access_token), "refresh": str(refresh)},
-            status=status.HTTP_201_CREATED,
-        )
+        return token_pair_response(user, status.HTTP_201_CREATED)
 
 
 class OrganizationProfileAPIView(generics.RetrieveUpdateAPIView):

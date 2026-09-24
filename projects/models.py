@@ -3,7 +3,7 @@ from django.db import models
 
 from core.models import TimeStampedModel
 from projects.choices import AccessLevel, AccessRequestStatus, Visibility
-from projects.managers import DocumentManager, ProjectManager
+from projects.managers import DocumentQuerySet, VisibilityScopedQuerySet
 
 
 class Project(TimeStampedModel):
@@ -24,7 +24,7 @@ class Project(TimeStampedModel):
         max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE
     )
 
-    objects = ProjectManager()
+    objects = VisibilityScopedQuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -65,7 +65,7 @@ class Document(TimeStampedModel):
         max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE
     )
 
-    objects = DocumentManager()
+    objects = DocumentQuerySet.as_manager()
 
     def __str__(self):
         return self.title

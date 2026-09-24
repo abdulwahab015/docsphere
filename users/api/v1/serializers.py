@@ -9,6 +9,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from organizations.api.v1.serializers import OrganizationSummarySerializer
 from users.choices import InvitationStatus
 from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
 from users.models import Invitation
@@ -38,6 +39,44 @@ class UserDetailSerializer(UserSerializer):
         read_only_fields = fields
 
 
+class CurrentUserSerializer(serializers.ModelSerializer):
+    """The requesting user's own identity, role and organization - what a
+    client needs after login to decide which screens to offer."""
+
+    organization = OrganizationSummarySerializer(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ["id", "email", "org_role", "organization"]
+        read_only_fields = fields
+
+
+class OrganizationRoleSerializer(serializers.ModelSerializer):
+    """Changes a member's organization role - the only writable field."""
+
+    class Meta:
+        model = User
+        fields = ["org_role"]
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    """A signed-in user's own password change: the current password proves
+    it's really them, the new one must pass the full password policy."""
+
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    def validate_current_password(self, value):
+        user = self.context["request"].user
+        if len(value) > MAX_PASSWORD_LENGTH or not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate(self, attrs):
+        validate_password(attrs["new_password"], user=self.context["request"].user)
+        return attrs
+
+
 class LoginSerializer(TokenObtainPairSerializer):
     """Adds a password-length ceiling before the (unvalidated) auth check, so an
     oversized string can't reach the password hasher."""
@@ -65,6 +104,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "token",
             "status",
             "created",
+            "sent_at",
             "accepted_at",
         ]
         read_only_fields = [
@@ -74,6 +114,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "token",
             "status",
             "created",
+            "sent_at",
             "accepted_at",
         ]
 
@@ -128,7 +169,7 @@ class InvitationAcceptSerializer(serializers.Serializer):
         if invitation.status != InvitationStatus.PENDING:
             raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
 
-        if timezone.now() - invitation.created > settings.INVITATION_EXPIRY:
+        if timezone.now() - invitation.sent_at > settings.INVITATION_EXPIRY:
             raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
 
         validate_password(attrs["password"])
@@ -145,7 +186,9 @@ class TokenPairSerializer(serializers.Serializer):
 
 
 class LogoutSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
+    """``refresh`` may be omitted when the refresh-token cookie carries it."""
+
+    refresh = serializers.CharField(required=False)
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):

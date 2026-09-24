@@ -4,8 +4,13 @@ from zipfile import BadZipFile
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.utils import timezone
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 
 from users.choices import InvitationStatus
 from users.constants import (
@@ -45,6 +50,10 @@ def parse_invitation_emails(file):
     return emails
 
 
+def _generate_invitation_token():
+    return secrets.token_urlsafe(INVITATION_TOKEN_BYTES)
+
+
 def create_invitation(*, organization, invited_by, email):
     """Create a pending Invitation with a freshly generated token. Shared by the
     single-invite endpoint and the bulk upload so both produce identical rows."""
@@ -52,8 +61,23 @@ def create_invitation(*, organization, invited_by, email):
         organization=organization,
         invited_by=invited_by,
         email=email,
-        token=secrets.token_urlsafe(INVITATION_TOKEN_BYTES),
+        token=_generate_invitation_token(),
     )
+
+
+def refresh_invitation(invitation):
+    """Give a pending invitation a new token and restart its expiry window.
+    The previous link stops working, so only the latest email is usable."""
+    invitation.token = _generate_invitation_token()
+    invitation.sent_at = timezone.now()
+    invitation.save(update_fields=["token", "sent_at", "modified"])
+
+
+def blacklist_outstanding_tokens(user):
+    """Revoke every refresh token issued to ``user`` - after a password
+    change or reset, no session started with the old password survives."""
+    for token in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=token)
 
 
 def bulk_create_invitations(emails, *, organization, invited_by):

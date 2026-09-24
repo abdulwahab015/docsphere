@@ -5,47 +5,108 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
+from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.token_blacklist.models import (
-    BlacklistedToken,
-    OutstandingToken,
-)
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
+    CurrentUserSerializer,
     InvitationAcceptSerializer,
     InvitationCreateSerializer,
     LoginSerializer,
     LogoutSerializer,
+    OrganizationRoleSerializer,
+    PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     TokenPairSerializer,
     UserDetailSerializer,
     UserSerializer,
 )
+from users.api.v1.tokens import (
+    clear_refresh_cookie,
+    refresh_token_from,
+    set_refresh_cookie,
+    token_pair_response,
+)
 from users.choices import InvitationStatus, OrganizationRole
 from users.models import Invitation
 from users.permissions import IsOrganizationAdmin
-from users.services import bulk_create_invitations, parse_invitation_emails
+from users.services import (
+    blacklist_outstanding_tokens,
+    bulk_create_invitations,
+    parse_invitation_emails,
+    refresh_invitation,
+)
 from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 User = get_user_model()
 
 
+def _organization_users(request):
+    """Every user - active or not - in the requesting admin's organization;
+    anyone outside it is indistinguishable from a missing user."""
+    return User.objects.filter(organization_id=request.user.organization_id)
+
+
+def _get_pending_invitation(request, pk):
+    """An invitation in the requester's organization that is still pending;
+    one from another organization is a 404, an already-settled one a 400."""
+    invitation = get_object_or_404(
+        Invitation.objects.for_organization(request.user.organization), pk=pk
+    )
+    if invitation.status != InvitationStatus.PENDING:
+        raise ValidationError({"detail": "This invitation is no longer pending."})
+    return invitation
+
+
 class LoginView(TokenObtainPairView):
     """Email/password → JWT pair, with a tight per-IP rate limit on top of the
-    global anon throttle to blunt credential stuffing."""
+    global anon throttle to blunt credential stuffing. Also sets the refresh
+    token as an HttpOnly cookie."""
 
     serializer_class = LoginSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        set_refresh_cookie(response, response.data["refresh"])
+        return response
+
+
+class CookieTokenRefreshView(TokenRefreshView):
+    """Rotates a refresh token taken from the body or, when the body has
+    none, from the HttpOnly cookie - and sets the rotated one back as the
+    cookie."""
+
+    def get_serializer(self, *args, **kwargs):
+        kwargs["data"] = {"refresh": refresh_token_from(self.request)}
+        return super().get_serializer(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        set_refresh_cookie(response, response.data["refresh"])
+        return response
+
+
+class CurrentUserAPIView(generics.RetrieveAPIView):
+    """The requesting user's own profile. Deliberately reachable without an
+    active subscription, so a client can tell an admin (send to billing) from
+    a member (ask your admin) before any gated call returns 402."""
+
+    serializer_class = CurrentUserSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
 
 
 class UserListAPIView(generics.ListAPIView):
@@ -60,7 +121,8 @@ class UserListAPIView(generics.ListAPIView):
     search_fields = ["email"]
 
     def get_serializer_class(self):
-        if self.request.user.org_role == OrganizationRole.ADMIN:
+        user = self.request.user
+        if user.is_authenticated and user.org_role == OrganizationRole.ADMIN:
             return UserDetailSerializer
         return UserSerializer
 
@@ -174,16 +236,12 @@ class InvitationAcceptAPIView(APIView):
             invitation.accepted_at = timezone.now()
             invitation.save(update_fields=["status", "accepted_at"])
 
-        refresh = RefreshToken.for_user(user)
-
-        return Response(
-            {"access": str(refresh.access_token), "refresh": str(refresh)},
-            status=status.HTTP_201_CREATED,
-        )
+        return token_pair_response(user, status.HTTP_201_CREATED)
 
 
 class LogoutAPIView(APIView):
-    """Blacklists the given refresh token so it can no longer be used."""
+    """Blacklists the refresh token - from the body, else the cookie - so it
+    can no longer be used, and clears the cookie."""
 
     permission_classes = [AllowAny]
 
@@ -195,7 +253,7 @@ class LogoutAPIView(APIView):
         },
     )
     def post(self, request):
-        refresh_token = request.data.get("refresh")
+        refresh_token = refresh_token_from(request)
         if not refresh_token:
             return Response(
                 {"detail": "refresh token is required."},
@@ -210,7 +268,9 @@ class LogoutAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(status=status.HTTP_205_RESET_CONTENT)
+        response = Response(status=status.HTTP_205_RESET_CONTENT)
+        clear_refresh_cookie(response)
+        return response
 
 
 class PasswordResetRequestAPIView(APIView):
@@ -262,9 +322,7 @@ class PasswordResetConfirmAPIView(APIView):
         with transaction.atomic():
             user.set_password(serializer.validated_data["new_password"])
             user.save(update_fields=["password"])
-
-            for token in OutstandingToken.objects.filter(user=user):
-                BlacklistedToken.objects.get_or_create(token=token)
+            blacklist_outstanding_tokens(user)
 
         return Response(status=status.HTTP_200_OK)
 
@@ -287,7 +345,7 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
     permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     def get_queryset(self):
-        return User.objects.filter(organization_id=self.request.user.organization_id)
+        return _organization_users(self.request)
 
     def perform_destroy(self, instance):
         """Soft-delete instead of the default hard ``instance.delete()``; an
@@ -297,3 +355,135 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
 
         instance.is_active = False
         instance.save(update_fields=["is_active"])
+
+
+class PasswordChangeAPIView(APIView):
+    """A signed-in user changes their own password. Every refresh token they
+    hold is revoked - other devices are signed out - and a fresh pair is
+    returned so the current session carries on."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_change"
+
+    @extend_schema(
+        request=PasswordChangeSerializer,
+        responses={
+            200: TokenPairSerializer,
+            400: OpenApiResponse(
+                description="Wrong current password, or new password rejected."
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = PasswordChangeSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        with transaction.atomic():
+            user.set_password(serializer.validated_data["new_password"])
+            user.save(update_fields=["password"])
+            blacklist_outstanding_tokens(user)
+
+        return token_pair_response(user, status.HTTP_200_OK)
+
+
+class OrganizationRoleUpdateAPIView(APIView):
+    """Promotes a member to admin or demotes an admin to member, within the
+    requesting admin's own organization. An admin may not change their own
+    role, which also guarantees the organization always keeps an admin."""
+
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+
+    @extend_schema(
+        request=OrganizationRoleSerializer,
+        responses={
+            200: UserDetailSerializer,
+            400: OpenApiResponse(description="Invalid role, or your own account."),
+            404: OpenApiResponse(
+                description="No such active user in your organization."
+            ),
+        },
+    )
+    def patch(self, request, pk):
+        if pk == request.user.pk:
+            raise ValidationError({"detail": "You cannot change your own role."})
+
+        user = get_object_or_404(
+            _organization_users(request).filter(is_active=True), pk=pk
+        )
+        serializer = OrganizationRoleSerializer(user, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(UserDetailSerializer(user).data)
+
+
+class DeactivatedUserListAPIView(generics.ListAPIView):
+    """Deactivated users in the requesting admin's organization - the list
+    ``ReactivateUserAPIView`` restores from."""
+
+    serializer_class = UserDetailSerializer
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    filter_backends = [SearchFilter]
+    search_fields = ["email"]
+
+    def get_queryset(self):
+        return (
+            _organization_users(self.request).filter(is_active=False).order_by("email")
+        )
+
+
+class ReactivateUserAPIView(APIView):
+    """Reverses a deactivation within the requesting admin's organization.
+    An already-active or cross-organization user is a 404."""
+
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+
+    @extend_schema(request=None, responses={200: UserDetailSerializer})
+    def post(self, request, pk):
+        user = get_object_or_404(
+            _organization_users(request).filter(is_active=False), pk=pk
+        )
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+
+        return Response(UserDetailSerializer(user).data)
+
+
+class InvitationRevokeAPIView(APIView):
+    """Revokes a pending invitation so its link stops working. The record is
+    kept (status ``REVOKED``) rather than deleted."""
+
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+
+    @extend_schema(
+        request=None,
+        responses={
+            204: OpenApiResponse(description="Invitation revoked."),
+            400: OpenApiResponse(description="Invitation is no longer pending."),
+        },
+    )
+    def delete(self, request, pk):
+        invitation = _get_pending_invitation(request, pk)
+        invitation.status = InvitationStatus.REVOKED
+        invitation.save(update_fields=["status", "modified"])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class InvitationResendAPIView(APIView):
+    """Re-sends a pending invitation with a new token and a fresh expiry
+    window; the previously emailed link stops working."""
+
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+
+    @extend_schema(request=None, responses={200: InvitationCreateSerializer})
+    def post(self, request, pk):
+        invitation = _get_pending_invitation(request, pk)
+        refresh_invitation(invitation)
+        send_invitation_email_task.delay(invitation.pk)
+
+        return Response(InvitationCreateSerializer(invitation).data)

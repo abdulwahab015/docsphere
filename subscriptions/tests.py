@@ -22,6 +22,136 @@ from subscriptions.tasks import (
 from users.factories import AdminUserFactory, UserFactory
 
 
+class PriceListAPIViewTests(APITestCase):
+    def setUp(self):
+        self.organization = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.organization)
+        self.url = reverse("subscriptions_price_list")
+
+    def test_admin_without_a_subscription_lists_active_recurring_prices_cheapest_first(
+        self,
+    ):
+        yearly = StripePriceFactory(interval="year")
+        yearly.stripe_data["unit_amount"] = 10000
+        yearly.save(update_fields=["stripe_data"])
+        monthly = StripePriceFactory(interval="month")
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["results"],
+            [
+                {
+                    "id": monthly.id,
+                    "nickname": "",
+                    "product_name": "DocSphere Subscription",
+                    "unit_amount": 1000,
+                    "currency": "usd",
+                    "interval": "month",
+                },
+                {
+                    "id": yearly.id,
+                    "nickname": "",
+                    "product_name": "DocSphere Subscription",
+                    "unit_amount": 10000,
+                    "currency": "usd",
+                    "interval": "year",
+                },
+            ],
+        )
+
+    def test_excludes_inactive_and_one_time_prices(self):
+        StripePriceFactory(active=False)
+        one_time = StripePriceFactory()
+        one_time.stripe_data["type"] = "one_time"
+        one_time.save(update_fields=["stripe_data"])
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_member_cannot_list_prices(self):
+        self.client.force_authenticate(UserFactory(organization=self.organization))
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class BillingPortalSessionCreateAPIViewTests(APITestCase):
+    def setUp(self):
+        self.organization = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.organization)
+        self.url = reverse("subscriptions_portal")
+
+    @patch("stripe.billing_portal.Session.create")
+    def test_admin_of_a_lapsed_organization_gets_a_portal_url(self, mock_portal_create):
+        mock_portal_create.return_value = MagicMock(
+            url="https://billing.stripe.com/session_test123"
+        )
+        customer = StripeCustomerFactory(subscriber=self.organization)
+        StripeSubscriptionFactory(customer=customer, status="canceled")
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["portal_url"], "https://billing.stripe.com/session_test123"
+        )
+        self.assertEqual(mock_portal_create.call_args.kwargs["customer"], customer.id)
+        self.assertTrue(
+            mock_portal_create.call_args.kwargs["return_url"].endswith("/billing/")
+        )
+
+    @patch("stripe.billing_portal.Session.create")
+    def test_organization_that_never_subscribed_is_rejected_without_calling_stripe(
+        self, mock_portal_create
+    ):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_portal_create.assert_not_called()
+
+    def test_member_cannot_open_the_portal(self):
+        self.client.force_authenticate(UserFactory(organization=self.organization))
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_is_rate_limited(self):
+        cache.clear()
+        self.client.force_authenticate(self.admin)
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"billing_portal": "1/min"}
+        ):
+            with self.assertNumQueries(1):
+                self.client.post(self.url)
+            with self.assertNumQueries(0):
+                response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
 class CheckoutSessionCreateAPIViewTests(APITestCase):
     def setUp(self):
         self.url = reverse("subscriptions_checkout")

@@ -18,7 +18,9 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = dict.fromkeys(
         "invite_accept",
         "password_reset",
         "billing_checkout",
+        "billing_portal",
         "org_signup",
+        "password_change",
     ),
     "100000/min",
 )

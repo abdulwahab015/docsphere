@@ -9,15 +9,20 @@ from projects.api.v1.views import (
     DocumentRetrieveUpdateDestroyAPIView,
     DocumentShareAPIView,
     DocumentShareRevokeAPIView,
+    DocumentTrashListAPIView,
+    IncomingDocumentAccessRequestListAPIView,
+    MyDocumentAccessRequestListAPIView,
     ProjectListCreateAPIView,
     ProjectRestoreAPIView,
     ProjectRetrieveUpdateDestroyAPIView,
     ProjectShareAPIView,
     ProjectShareRevokeAPIView,
+    ProjectTrashListAPIView,
 )
 
 urlpatterns = [
     path("", ProjectListCreateAPIView.as_view(), name="project_list_create"),
+    path("trash/", ProjectTrashListAPIView.as_view(), name="project_trash"),
     path(
         "<int:pk>/",
         ProjectRetrieveUpdateDestroyAPIView.as_view(),
@@ -34,6 +39,17 @@ urlpatterns = [
 
 document_urlpatterns = [
     path("", DocumentListCreateAPIView.as_view(), name="document_list_create"),
+    path("trash/", DocumentTrashListAPIView.as_view(), name="document_trash"),
+    path(
+        "access-requests/mine/",
+        MyDocumentAccessRequestListAPIView.as_view(),
+        name="document_access_request_mine",
+    ),
+    path(
+        "access-requests/incoming/",
+        IncomingDocumentAccessRequestListAPIView.as_view(),
+        name="document_access_request_incoming",
+    ),
     path(
         "<int:pk>/",
         DocumentRetrieveUpdateDestroyAPIView.as_view(),

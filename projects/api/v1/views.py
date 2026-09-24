@@ -47,10 +47,13 @@ from users.permissions import IsOrganizationAdmin
 
 def _grant_creator_ownership(permission_model, resource_field, resource, user):
     """Creates an Owner-level permission row for a newly created resource's
-    creator - the same pattern for both Project and Document creation."""
+    creator - the same pattern for both Project and Document creation - and
+    records that level on the instance the way ``visible_to`` would have
+    annotated it, so the create response needn't re-query it."""
     permission_model.objects.create(
         **{resource_field: resource, "user": user, "access_level": AccessLevel.OWNER}
     )
+    resource.user_access_level = AccessLevel.OWNER
 
 
 class ProjectListCreateAPIView(generics.ListCreateAPIView):
@@ -67,7 +70,11 @@ class ProjectListCreateAPIView(generics.ListCreateAPIView):
         return [IsAuthenticated(), HasActiveSubscription()]
 
     def get_queryset(self):
-        return Project.objects.visible_to(self.request.user).order_by("name")
+        return (
+            Project.objects.visible_to(self.request.user)
+            .select_related("created_by")
+            .order_by("name")
+        )
 
     def perform_create(self, serializer):
         organization = self.request.user.organization
@@ -98,7 +105,9 @@ class ProjectRetrieveUpdateDestroyAPIView(
     permission_classes = (IsAuthenticated, HasProjectAccess, HasActiveSubscription)
 
     def get_queryset(self):
-        return Project.objects.visible_to(self.request.user)
+        return Project.objects.visible_to(self.request.user).select_related(
+            "created_by"
+        )
 
     def perform_update(self, serializer):
         if "visibility" in serializer.validated_data:
@@ -120,7 +129,9 @@ class ProjectRestoreAPIView(APIView):
     @extend_schema(request=None, responses={200: ProjectSerializer})
     def post(self, request, pk):
         project = get_object_or_404(
-            Project.objects.inactive_for_organization(request.user.organization),
+            Project.objects.inactive_for_organization(request.user.organization)
+            .with_access_level(request.user)
+            .select_related("created_by"),
             pk=pk,
         )
         project.is_active = True
@@ -141,7 +152,7 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Document.objects.visible_to(user)
+        queryset = Document.objects.visible_to(user).select_related("created_by")
 
         project_id = self.request.query_params.get("project")
         if project_id:
@@ -189,7 +200,9 @@ class DocumentRetrieveUpdateDestroyAPIView(
     permission_classes = (IsAuthenticated, HasDocumentAccess, HasActiveSubscription)
 
     def get_queryset(self):
-        return Document.objects.visible_to(self.request.user)
+        return Document.objects.visible_to(self.request.user).select_related(
+            "created_by"
+        )
 
     def perform_update(self, serializer):
         if "visibility" in serializer.validated_data:
@@ -209,10 +222,12 @@ class DocumentRestoreAPIView(APIView):
     @extend_schema(request=None, responses={200: DocumentSerializer})
     def post(self, request, pk):
         document = get_object_or_404(
-            Document.objects.inactive_for_organization(request.user.organization),
+            Document.objects.inactive_for_organization(request.user.organization)
+            .with_access_level(request.user)
+            .select_related("created_by"),
             pk=pk,
         )
-        if not access_permits(resolve_access(request.user, document), Action.DELETE):
+        if not access_permits(document.user_access_level, Action.DELETE):
             raise PermissionDenied(
                 "You must have Owner access to this document to restore it."
             )
@@ -240,7 +255,11 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     def get_queryset(self):
         project = self._get_project()
         check_can_share(self.request.user, project, "project", resolve_project_access)
-        return ProjectPermission.objects.filter(project=project).order_by("user_id")
+        return (
+            ProjectPermission.objects.filter(project=project)
+            .select_related("user")
+            .order_by("user_id")
+        )
 
     @extend_schema(responses={200: ProjectPermissionSerializer(many=True)})
     def get(self, request, pk):
@@ -310,7 +329,11 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     def get_queryset(self):
         document = self._get_document()
         check_can_share(self.request.user, document, "document", resolve_access)
-        return DocumentPermission.objects.filter(document=document).order_by("user_id")
+        return (
+            DocumentPermission.objects.filter(document=document)
+            .select_related("user")
+            .order_by("user_id")
+        )
 
     @extend_schema(responses={200: DocumentPermissionSerializer(many=True)})
     def get(self, request, pk):
@@ -381,9 +404,13 @@ class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
     def get_queryset(self):
         document = self._get_document()
         check_can_share(self.request.user, document, "document", resolve_access)
-        return DocumentAccessRequest.objects.filter(
-            document=document, status=AccessRequestStatus.PENDING
-        ).order_by("created")
+        return (
+            DocumentAccessRequest.objects.filter(
+                document=document, status=AccessRequestStatus.PENDING
+            )
+            .select_related("document", "requested_by", "reviewed_by")
+            .order_by("created")
+        )
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -406,25 +433,33 @@ class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
         send_access_request_created_email_task.delay(access_request.pk)
 
 
+def _get_pending_access_request_to_review(user, document_id, request_id):
+    """The pending access request an Owner approves or denies. The document
+    must be visible to them (else 404) and theirs to share (else 403)."""
+    document = get_object_or_404(Document.objects.visible_to(user), pk=document_id)
+    check_can_share(user, document, "document", resolve_access)
+
+    return get_object_or_404(
+        DocumentAccessRequest.objects.select_related("document", "requested_by"),
+        pk=request_id,
+        document=document,
+        status=AccessRequestStatus.PENDING,
+    )
+
+
 class DocumentAccessRequestApproveAPIView(APIView):
     """Owner-only. Upgrades the requester to Editor and marks the request
     approved, inside one transaction."""
 
     @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
     def post(self, request, pk, request_id):
-        document = get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
-        check_can_share(request.user, document, "document", resolve_access)
-
-        access_request = get_object_or_404(
-            DocumentAccessRequest,
-            pk=request_id,
-            document=document,
-            status=AccessRequestStatus.PENDING,
+        access_request = _get_pending_access_request_to_review(
+            request.user, pk, request_id
         )
 
         with transaction.atomic():
             DocumentPermission.objects.update_or_create(
-                document=document,
+                document=access_request.document,
                 user=access_request.requested_by,
                 defaults={"access_level": AccessLevel.EDITOR},
             )
@@ -442,14 +477,8 @@ class DocumentAccessRequestDenyAPIView(APIView):
 
     @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
     def post(self, request, pk, request_id):
-        document = get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
-        check_can_share(request.user, document, "document", resolve_access)
-
-        access_request = get_object_or_404(
-            DocumentAccessRequest,
-            pk=request_id,
-            document=document,
-            status=AccessRequestStatus.PENDING,
+        access_request = _get_pending_access_request_to_review(
+            request.user, pk, request_id
         )
         access_request.status = AccessRequestStatus.DENIED
         access_request.reviewed_by = request.user
@@ -458,3 +487,79 @@ class DocumentAccessRequestDenyAPIView(APIView):
         send_access_request_denied_email_task.delay(access_request.pk)
 
         return Response(DocumentAccessRequestSerializer(access_request).data)
+
+
+class ProjectTrashListAPIView(generics.ListAPIView):
+    """Soft-deleted projects in the admin's organization, most recently
+    deleted first - the list ``ProjectRestoreAPIView`` restores from, and
+    admin-only for the same reason."""
+
+    serializer_class = ProjectSerializer
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+
+    def get_queryset(self):
+        user = self.request.user
+        return (
+            Project.objects.inactive_for_organization(user.organization)
+            .with_access_level(user)
+            .select_related("created_by")
+            .order_by("-modified")
+        )
+
+
+class DocumentTrashListAPIView(generics.ListAPIView):
+    """Soft-deleted documents the caller owns, most recently deleted first -
+    exactly the ones ``DocumentRestoreAPIView`` would let them restore."""
+
+    serializer_class = DocumentSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        return (
+            Document.objects.inactive_for_organization(user.organization)
+            .with_access_level(user)
+            .filter(user_access_level=AccessLevel.OWNER)
+            .select_related("created_by")
+            .order_by("-modified")
+        )
+
+
+class MyDocumentAccessRequestListAPIView(generics.ListAPIView):
+    """The caller's own access requests in every status, newest first, so a
+    requester can see whether theirs was approved or denied. Requests on
+    documents since soft-deleted are left out."""
+
+    serializer_class = DocumentAccessRequestSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        return (
+            DocumentAccessRequest.objects.filter(
+                requested_by=user,
+                document__organization=user.organization,
+                document__is_active=True,
+            )
+            .select_related("document", "requested_by", "reviewed_by")
+            .order_by("-created")
+        )
+
+
+class IncomingDocumentAccessRequestListAPIView(generics.ListAPIView):
+    """Pending access requests across every active document the caller is an
+    Owner of - an inbox, so an Owner needn't open each document to find
+    them. Approve/deny still go through the per-document endpoints."""
+
+    serializer_class = DocumentAccessRequestSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        owned_documents = Document.objects.for_organization(user.organization).filter(
+            permissions__user=user, permissions__access_level=AccessLevel.OWNER
+        )
+        return (
+            DocumentAccessRequest.objects.filter(
+                document__in=owned_documents, status=AccessRequestStatus.PENDING
+            )
+            .select_related("document", "requested_by", "reviewed_by")
+            .order_by("created")
+        )
