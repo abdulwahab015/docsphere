@@ -1,0 +1,29 @@
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  web:
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
+  worker:
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
+  flower:
+    ports:
+      - "5555:5555"
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local

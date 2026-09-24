@@ -1,0 +1,1 @@
+{{ requested_by }} has requested Editor access to the document "{{ document_title }}" on DocSphere. Sign in to approve or deny the request.
