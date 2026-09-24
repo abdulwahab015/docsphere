@@ -2,6 +2,7 @@ from datetime import timedelta
 from io import BytesIO
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
@@ -16,6 +17,7 @@ from openpyxl import Workbook
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
@@ -163,6 +165,72 @@ class JWTAuthTests(APITestCase):
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class RefreshCookieTests(APITestCase):
+    """The refresh token also travels as an HttpOnly cookie scoped to the auth
+    endpoints, which refresh and logout fall back to when the body has none."""
+
+    def setUp(self):
+        self.password = "S0me-Strong-Pass!"
+        self.user = UserFactory(password=self.password)
+        self.cookie_name = settings.REFRESH_COOKIE_NAME
+
+    def test_login_sets_an_httponly_refresh_cookie_scoped_to_auth(self):
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                reverse("auth_login"),
+                {"email": self.user.email, "password": self.password},
+            )
+
+        cookie = response.cookies[self.cookie_name]
+        self.assertEqual(cookie.value, response.data["refresh"])
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["path"], settings.REFRESH_COOKIE_PATH)
+        self.assertEqual(cookie["samesite"], settings.REFRESH_COOKIE_SAMESITE)
+
+    def test_refresh_with_only_the_cookie_rotates_it(self):
+        old_refresh = str(RefreshToken.for_user(self.user))
+        self.client.cookies[self.cookie_name] = old_refresh
+
+        with self.assertNumQueries(13):
+            response = self.client.post(reverse("auth_refresh"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        new_cookie = response.cookies[self.cookie_name].value
+        self.assertEqual(new_cookie, response.data["refresh"])
+        self.assertNotEqual(new_cookie, old_refresh)
+
+    def test_refresh_token_in_the_body_still_works_and_wins_over_the_cookie(self):
+        self.client.cookies[self.cookie_name] = "not-a-token"
+        refresh = str(RefreshToken.for_user(self.user))
+
+        with self.assertNumQueries(13):
+            response = self.client.post(reverse("auth_refresh"), {"refresh": refresh})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_refresh_without_a_body_or_cookie_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(reverse("auth_refresh"))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_logout_with_only_the_cookie_blacklists_it_and_clears_the_cookie(self):
+        refresh = str(RefreshToken.for_user(self.user))
+        self.client.cookies[self.cookie_name] = refresh
+
+        with self.assertNumQueries(7):
+            response = self.client.post(reverse("auth_logout"))
+
+        self.assertEqual(response.status_code, status.HTTP_205_RESET_CONTENT)
+        self.assertEqual(response.cookies[self.cookie_name].value, "")
+        with self.assertNumQueries(1):
+            refresh_response = self.client.post(
+                reverse("auth_refresh"), {"refresh": refresh}
+            )
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class PasswordResetTests(APITestCase):
     def setUp(self):
         cache.clear()
@@ -291,6 +359,83 @@ class PasswordResetTests(APITestCase):
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class PasswordChangeTests(APITestCase):
+    def setUp(self):
+        self.password = "S0me-Strong-Pass!"
+        self.new_password = "An0ther-Strong-Pass!"
+        self.user = UserFactory(password=self.password)
+        self.url = reverse("user_password_change")
+
+    def test_changes_password_revokes_old_sessions_and_returns_a_new_pair(self):
+        old_refresh = str(RefreshToken.for_user(self.user))
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(9):
+            response = self.client.post(
+                self.url,
+                {"current_password": self.password, "new_password": self.new_password},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertEqual(
+            response.cookies[settings.REFRESH_COOKIE_NAME].value,
+            response.data["refresh"],
+        )
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(self.new_password))
+        self.client.force_authenticate(None)
+        with self.assertNumQueries(1):
+            stale = self.client.post(reverse("auth_refresh"), {"refresh": old_refresh})
+        self.assertEqual(stale.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_rejects_a_wrong_current_password(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                self.url,
+                {"current_password": "Wr0ng-Pass!", "new_password": self.new_password},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", response.data)
+
+    def test_rejects_a_new_password_that_fails_the_policy(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                self.url,
+                {"current_password": self.password, "new_password": "short"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(self.password))
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(self.url, {})
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_is_rate_limited(self):
+        cache.clear()
+        self.client.force_authenticate(self.user)
+        payload = {"current_password": "Wr0ng-Pass!", "new_password": "x"}
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"password_change": "1/min"}
+        ):
+            with self.assertNumQueries(0):
+                self.client.post(self.url, payload)
+            with self.assertNumQueries(0):
+                response = self.client.post(self.url, payload)
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
 class InvitationTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
         super().setUp()
@@ -411,7 +556,10 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
+        self.assertEqual(
+            response.cookies[settings.REFRESH_COOKIE_NAME].value,
+            response.data["refresh"],
+        )
 
         user = User.objects.get(email="new-user@example.com")
         self.assertEqual(user.organization, self.org_a)
@@ -469,7 +617,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             organization=self.org_a, invited_by=self.admin_a, token="valid-token"
         )
         stale = timezone.now() - timedelta(days=999)
-        Invitation.objects.filter(pk=invitation.pk).update(created=stale)
+        Invitation.objects.filter(pk=invitation.pk).update(sent_at=stale)
 
         with self.assertNumQueries(1):
             response = self.client.post(
@@ -589,6 +737,112 @@ class CurrentUserAPITests(APITestCase):
             response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory(name="Acme")
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(organization=self.org)
+        self.invitation = InvitationFactory(
+            organization=self.org, invited_by=self.admin, token="first-token"
+        )
+        self.revoke_url = reverse("invitation_revoke", args=[self.invitation.pk])
+        self.resend_url = reverse("invitation_resend", args=[self.invitation.pk])
+
+    @patch("core.email.send_mail")
+    def test_resend_rotates_the_token_and_restarts_the_expiry_window(
+        self, mock_send_mail
+    ):
+        stale = timezone.now() - timedelta(days=999)
+        Invitation.objects.filter(pk=self.invitation.pk).update(sent_at=stale)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.invitation.refresh_from_db()
+        self.assertNotEqual(self.invitation.token, "first-token")
+        self.assertEqual(response.data["token"], self.invitation.token)
+        self.assertGreater(self.invitation.sent_at, stale)
+        mock_send_mail.assert_called_once()
+        self.assertIn(self.invitation.token, mock_send_mail.call_args.kwargs["message"])
+
+        self.client.force_authenticate(None)
+        old_link = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "first-token", "password": "Str0ng-New-Pass!"},
+        )
+        self.assertEqual(old_link.status_code, status.HTTP_400_BAD_REQUEST)
+        new_link = self.client.post(
+            reverse("invitation_accept"),
+            {"token": self.invitation.token, "password": "Str0ng-New-Pass!"},
+        )
+        self.assertEqual(new_link.status_code, status.HTTP_201_CREATED)
+
+    def test_resend_rejects_an_invitation_that_is_no_longer_pending(self):
+        Invitation.objects.filter(pk=self.invitation.pk).update(
+            status=InvitationStatus.ACCEPTED
+        )
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_revoke_marks_the_invitation_revoked_and_kills_its_link(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.delete(self.revoke_url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.invitation.refresh_from_db()
+        self.assertEqual(self.invitation.status, InvitationStatus.REVOKED)
+
+        self.client.force_authenticate(None)
+        accept = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "first-token", "password": "Str0ng-New-Pass!"},
+        )
+        self.assertEqual(accept.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_revoke_rejects_an_invitation_that_is_no_longer_pending(self):
+        Invitation.objects.filter(pk=self.invitation.pk).update(
+            status=InvitationStatus.REVOKED
+        )
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(self.revoke_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_another_organizations_invitation_is_a_404(self):
+        self.client.force_authenticate(AdminUserFactory())
+
+        with self.assertNumQueries(1):
+            revoke = self.client.delete(self.revoke_url)
+        with self.assertNumQueries(1):
+            resend = self.client.post(self.resend_url)
+
+        self.assertEqual(revoke.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(resend.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_member_cannot_revoke_or_resend(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            revoke = self.client.delete(self.revoke_url)
+        with self.assertNumQueries(0):
+            resend = self.client.post(self.resend_url)
+
+        self.assertEqual(revoke.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resend.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class UserListAPITests(AssumeActiveSubscription, APITestCase):
@@ -749,6 +1003,141 @@ class DeactivateUserTests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(organization=self.org)
+
+    def _url(self, user):
+        return reverse("user_role_update", args=[user.pk])
+
+    def test_admin_promotes_a_member_to_admin(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(
+                self._url(self.member), {"org_role": "ADMIN"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["org_role"], "ADMIN")
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.org_role, "ADMIN")
+
+    def test_admin_demotes_another_admin(self):
+        other_admin = AdminUserFactory(organization=self.org)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(
+                self._url(other_admin), {"org_role": "MEMBER"}, format="json"
+            )
+
+        self.assertEqual(response.data["org_role"], "MEMBER")
+
+    def test_admin_cannot_change_their_own_role(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(
+                self._url(self.admin), {"org_role": "MEMBER"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rejects_an_unknown_role(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.patch(
+                self._url(self.member), {"org_role": "OWNER"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_deactivated_and_other_organization_users_are_a_404(self):
+        deactivated = UserFactory(organization=self.org, is_active=False)
+        outsider = UserFactory()
+        self.client.force_authenticate(self.admin)
+
+        for target in (deactivated, outsider):
+            with self.assertNumQueries(1):
+                response = self.client.patch(
+                    self._url(target), {"org_role": "ADMIN"}, format="json"
+                )
+            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_member_cannot_change_roles(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(
+                self._url(self.admin), {"org_role": "MEMBER"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class DeactivatedUserListAndReactivateTests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(organization=self.org)
+        self.deactivated = UserFactory(
+            email="gone@example.com", organization=self.org, is_active=False
+        )
+        UserFactory(email="elsewhere@example.com", is_active=False)
+
+    def test_admin_lists_only_their_organizations_deactivated_users(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("user_deactivated_list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertEqual(emails, ["gone@example.com"])
+
+    def test_admin_reactivates_a_deactivated_user(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                reverse("user_reactivate", args=[self.deactivated.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.deactivated.refresh_from_db()
+        self.assertTrue(self.deactivated.is_active)
+
+    def test_reactivating_an_active_or_outside_user_is_a_404(self):
+        outsider = User.objects.get(email="elsewhere@example.com")
+        self.client.force_authenticate(self.admin)
+
+        for target in (self.member, outsider):
+            with self.assertNumQueries(1):
+                response = self.client.post(
+                    reverse("user_reactivate", args=[target.pk])
+                )
+            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_member_can_neither_list_nor_reactivate(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            listing = self.client.get(reverse("user_deactivated_list"))
+        with self.assertNumQueries(0):
+            reactivate = self.client.post(
+                reverse("user_reactivate", args=[self.deactivated.pk])
+            )
+
+        self.assertEqual(listing.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(reactivate.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class UserManagerTests(TestCase):

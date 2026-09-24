@@ -50,3 +50,7 @@ class CheckoutSessionSerializer(serializers.Serializer):
 
 class CheckoutSessionResponseSerializer(serializers.Serializer):
     checkout_url = serializers.URLField()
+
+
+class BillingPortalSessionResponseSerializer(serializers.Serializer):
+    portal_url = serializers.URLField()

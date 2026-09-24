@@ -23,7 +23,7 @@ class InvitationAdmin(admin.ModelAdmin):
         "organization",
         "status",
         "invited_by",
-        "created",
+        "sent_at",
         "accepted_at",
     )
     list_filter = ("status", "organization")

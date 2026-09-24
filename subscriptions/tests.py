@@ -90,6 +90,68 @@ class PriceListAPIViewTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class BillingPortalSessionCreateAPIViewTests(APITestCase):
+    def setUp(self):
+        self.organization = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.organization)
+        self.url = reverse("subscriptions_portal")
+
+    @patch("stripe.billing_portal.Session.create")
+    def test_admin_of_a_lapsed_organization_gets_a_portal_url(self, mock_portal_create):
+        mock_portal_create.return_value = MagicMock(
+            url="https://billing.stripe.com/session_test123"
+        )
+        customer = StripeCustomerFactory(subscriber=self.organization)
+        StripeSubscriptionFactory(customer=customer, status="canceled")
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["portal_url"], "https://billing.stripe.com/session_test123"
+        )
+        self.assertEqual(mock_portal_create.call_args.kwargs["customer"], customer.id)
+        self.assertTrue(
+            mock_portal_create.call_args.kwargs["return_url"].endswith("/billing/")
+        )
+
+    @patch("stripe.billing_portal.Session.create")
+    def test_organization_that_never_subscribed_is_rejected_without_calling_stripe(
+        self, mock_portal_create
+    ):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_portal_create.assert_not_called()
+
+    def test_member_cannot_open_the_portal(self):
+        self.client.force_authenticate(UserFactory(organization=self.organization))
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_is_rate_limited(self):
+        cache.clear()
+        self.client.force_authenticate(self.admin)
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"billing_portal": "1/min"}
+        ):
+            with self.assertNumQueries(1):
+                self.client.post(self.url)
+            with self.assertNumQueries(0):
+                response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
 class CheckoutSessionCreateAPIViewTests(APITestCase):
     def setUp(self):
         self.url = reverse("subscriptions_checkout")

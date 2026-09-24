@@ -3,6 +3,7 @@ from typing import ClassVar
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 
 from core.models import TimeStampedModel
 from users.choices import InvitationStatus, OrganizationRole
@@ -58,6 +59,7 @@ class Invitation(TimeStampedModel):
         choices=InvitationStatus.choices,
         default=InvitationStatus.PENDING,
     )
+    sent_at = models.DateTimeField(default=timezone.now)
     accepted_at = models.DateTimeField(null=True, blank=True)
 
     objects = InvitationManager()

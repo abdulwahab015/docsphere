@@ -623,6 +623,9 @@ class ProjectListAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.get(self.url)
 
         levels = {row["name"]: row["access_level"] for row in response.data["results"]}
+        self.assertTrue(
+            all(row["created_by_email"] for row in response.data["results"])
+        )
         self.assertEqual(
             levels,
             {
@@ -837,7 +840,7 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_admin_can_restore_a_soft_deleted_project(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -884,6 +887,49 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.post(reverse("project_restore", args=[foreign.pk]))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ProjectTrashListAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.org)
+        self.url = reverse("project_trash")
+
+    def test_admin_lists_the_organizations_deleted_projects_newest_first(self):
+        older = ProjectFactory(organization=self.org, name="Older", is_active=False)
+        owned = ProjectFactory(organization=self.org, name="Newer", is_active=False)
+        ProjectPermissionFactory(
+            project=owned, user=self.admin, access_level=AccessLevel.OWNER
+        )
+        owned.save()
+        ProjectFactory(organization=self.org, name="Live")
+        ProjectFactory(name="Foreign", is_active=False)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = [
+            (row["name"], row["access_level"], row["created_by_email"])
+            for row in response.data["results"]
+        ]
+        self.assertEqual(
+            rows,
+            [
+                ("Newer", AccessLevel.OWNER, owned.created_by.email),
+                ("Older", None, older.created_by.email),
+            ],
+        )
+
+    def test_member_cannot_list_the_trash(self):
+        self.client.force_authenticate(UserFactory(organization=self.org))
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
@@ -1331,7 +1377,7 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_restore_a_soft_deleted_document(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(2):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1343,7 +1389,7 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_cannot_restore(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -1372,6 +1418,40 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class DocumentTrashListAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory()
+        self.org = self.project.organization
+        self.user = UserFactory(organization=self.org)
+        self.url = reverse("document_trash")
+
+    def test_lists_only_deleted_documents_the_caller_owns(self):
+        for title, level, is_active in (
+            ("Mine", AccessLevel.OWNER, False),
+            ("Edited", AccessLevel.EDITOR, False),
+            ("Live", AccessLevel.OWNER, True),
+        ):
+            DocumentPermissionFactory(
+                document__project=self.project,
+                document__title=title,
+                document__is_active=is_active,
+                user=self.user,
+                access_level=level,
+            )
+        DocumentFactory(
+            project=self.project, visibility=Visibility.PUBLIC, is_active=False
+        )
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = [(row["title"], row["access_level"]) for row in response.data["results"]]
+        self.assertEqual(rows, [("Mine", AccessLevel.OWNER)])
+
+
 class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
         super().setUp()
@@ -1417,7 +1497,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(9):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.OWNER},
@@ -1441,6 +1521,10 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         user_ids = {row["user"] for row in response.data["results"]}
         self.assertEqual(user_ids, {self.owner.pk, self.editor.pk, self.viewer.pk})
+        emails = {row["user_email"] for row in response.data["results"]}
+        self.assertEqual(
+            emails, {self.owner.email, self.editor.email, self.viewer.email}
+        )
 
     def test_editor_cannot_share(self):
         self.client.force_authenticate(self.editor)
@@ -1649,7 +1733,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(9):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.OWNER},
@@ -1676,6 +1760,10 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         user_ids = {row["user"] for row in response.data["results"]}
         self.assertEqual(user_ids, {self.owner.pk, self.editor.pk, self.target.pk})
+        emails = {row["user_email"] for row in response.data["results"]}
+        self.assertEqual(
+            emails, {self.owner.email, self.editor.email, self.target.email}
+        )
 
     def test_editor_cannot_share(self):
         self.client.force_authenticate(self.editor)
@@ -1959,7 +2047,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(14):
+        with self.assertNumQueries(13):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -2028,6 +2116,115 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentAccessRequestListsAPITests(AssumeActiveSubscription, APITestCase):
+    """The requester's own requests, and an Owner's inbox of pending ones
+    across every document they own."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory()
+        self.org = self.project.organization
+        self.owner = UserFactory(email="owner@example.com", organization=self.org)
+        self.requester = UserFactory(email="asker@example.com", organization=self.org)
+        self.first = self._owned_public_document("First")
+        self.second = self._owned_public_document("Second")
+
+    def _owned_public_document(self, title):
+        document = DocumentFactory(
+            project=self.project, title=title, visibility=Visibility.PUBLIC
+        )
+        DocumentPermissionFactory(
+            document=document, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        return document
+
+    def test_requester_sees_their_own_requests_in_every_status_newest_first(self):
+        DocumentAccessRequestFactory(
+            document=self.first,
+            requested_by=self.requester,
+            reviewed_by=self.owner,
+            status=AccessRequestStatus.APPROVED,
+        )
+        DocumentAccessRequestFactory(document=self.second, requested_by=self.requester)
+        DocumentAccessRequestFactory(document=self.second)
+        self.client.force_authenticate(self.requester)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("document_access_request_mine"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = [
+            (
+                row["document_title"],
+                row["status"],
+                row["requested_by_email"],
+                row["reviewed_by_email"],
+            )
+            for row in response.data["results"]
+        ]
+        self.assertEqual(
+            rows,
+            [
+                ("Second", AccessRequestStatus.PENDING, "asker@example.com", None),
+                (
+                    "First",
+                    AccessRequestStatus.APPROVED,
+                    "asker@example.com",
+                    "owner@example.com",
+                ),
+            ],
+        )
+
+    def test_requester_list_leaves_out_soft_deleted_documents(self):
+        DocumentAccessRequestFactory(document=self.first, requested_by=self.requester)
+        Document.objects.filter(pk=self.first.pk).update(is_active=False)
+        self.client.force_authenticate(self.requester)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("document_access_request_mine"))
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_owner_inbox_gathers_pending_requests_across_owned_documents(self):
+        DocumentAccessRequestFactory(document=self.first, requested_by=self.requester)
+        DocumentAccessRequestFactory(document=self.second, requested_by=self.requester)
+        DocumentAccessRequestFactory(
+            document=self.first, status=AccessRequestStatus.DENIED
+        )
+        not_owned = DocumentFactory(project=self.project, visibility=Visibility.PUBLIC)
+        DocumentAccessRequestFactory(document=not_owned)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("document_access_request_incoming"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        titles = [row["document_title"] for row in response.data["results"]]
+        self.assertEqual(titles, ["First", "Second"])
+
+    def test_owner_inbox_leaves_out_soft_deleted_documents(self):
+        DocumentAccessRequestFactory(document=self.first, requested_by=self.requester)
+        Document.objects.filter(pk=self.first.pk).update(is_active=False)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("document_access_request_incoming"))
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_editor_is_not_sent_requests_for_documents_they_do_not_own(self):
+        DocumentPermissionFactory(
+            document=self.first, user=self.requester, access_level=AccessLevel.EDITOR
+        )
+        DocumentAccessRequestFactory(document=self.first)
+        self.client.force_authenticate(self.requester)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("document_access_request_incoming"))
+
+        self.assertEqual(response.data["results"], [])
 
 
 class DocumentTasksTests(TestCase):

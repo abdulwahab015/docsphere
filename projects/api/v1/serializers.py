@@ -20,7 +20,7 @@ class AccessLevelModelSerializer(serializers.ModelSerializer):
     resource, so a client knows which actions to offer without probing for
     403s - or ``null`` when they have none (an admin restoring a private
     project nobody granted them). Read from the ``user_access_level``
-    annotation ``visible_to`` adds; a resource loaded any other way is
+    annotation ``with_access_level`` adds; a resource loaded any other way is
     resolved with one extra query instead."""
 
     access_level = serializers.SerializerMethodField()
@@ -31,10 +31,11 @@ class AccessLevelModelSerializer(serializers.ModelSerializer):
         serializers.ChoiceField(choices=AccessLevel.choices, allow_null=True)
     )
     def get_access_level(self, resource):
-        level = getattr(resource, "user_access_level", None)
-        if not level:
-            level = self.resolve_access_fn(self.context["request"].user, resource)
-        return level
+        # An annotated ``None`` (no access) is a real answer, not a cue to
+        # re-resolve - hence hasattr rather than a truthiness test.
+        if hasattr(resource, "user_access_level"):
+            return resource.user_access_level
+        return self.resolve_access_fn(self.context["request"].user, resource)
 
 
 class ProjectSerializer(AccessLevelModelSerializer):
@@ -43,6 +44,8 @@ class ProjectSerializer(AccessLevelModelSerializer):
     changing it on an existing project is Owner-only (enforced in the view)."""
 
     resolve_access_fn = staticmethod(resolve_project_access)
+
+    created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
 
     class Meta:
         model = Project
@@ -53,6 +56,7 @@ class ProjectSerializer(AccessLevelModelSerializer):
             "visibility",
             "access_level",
             "created_by",
+            "created_by_email",
             "organization",
             "created",
             "modified",
@@ -92,6 +96,8 @@ class DocumentSerializer(AccessLevelModelSerializer):
 
     resolve_access_fn = staticmethod(resolve_access)
 
+    created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+
     class Meta:
         model = Document
         fields = [
@@ -101,6 +107,7 @@ class DocumentSerializer(AccessLevelModelSerializer):
             "visibility",
             "access_level",
             "created_by",
+            "created_by_email",
             "organization",
             "project",
             "created",
@@ -137,13 +144,16 @@ class ShareSerializer(serializers.Serializer):
 
 def _permission_serializer(model, resource_field):
     """Builds a read-only ModelSerializer exposing id, resource_field, user,
-    and access_level - all read-only - for a permission model."""
-    fields = ["id", resource_field, "user", "access_level"]
+    user_email, and access_level - all read-only - for a permission model."""
+    fields = ["id", resource_field, "user", "user_email", "access_level"]
     meta = type(
         "Meta", (), {"model": model, "fields": fields, "read_only_fields": fields}
     )
+    user_email = serializers.EmailField(source="user.email", read_only=True)
     return type(
-        f"{model.__name__}Serializer", (serializers.ModelSerializer,), {"Meta": meta}
+        f"{model.__name__}Serializer",
+        (serializers.ModelSerializer,),
+        {"Meta": meta, "user_email": user_email},
     )
 
 
@@ -155,13 +165,24 @@ class DocumentAccessRequestSerializer(serializers.ModelSerializer):
     """Read-only - the view supplies ``document`` and ``requested_by`` from the
     URL and the requester, never from client-submitted data."""
 
+    document_title = serializers.CharField(source="document.title", read_only=True)
+    requested_by_email = serializers.EmailField(
+        source="requested_by.email", read_only=True
+    )
+    reviewed_by_email = serializers.EmailField(
+        source="reviewed_by.email", read_only=True, allow_null=True
+    )
+
     class Meta:
         model = DocumentAccessRequest
         fields = [
             "id",
             "document",
+            "document_title",
             "requested_by",
+            "requested_by_email",
             "reviewed_by",
+            "reviewed_by_email",
             "status",
             "created",
             "modified",

@@ -154,6 +154,8 @@ DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="webmaster@localhost")
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default=FRONTEND_URL, cast=Csv())
+# Lets the allowlisted SPA send/receive the HttpOnly refresh-token cookie.
+CORS_ALLOW_CREDENTIALS = True
 
 STRIPE_LIVE_MODE = config("STRIPE_LIVE_MODE", default=False, cast=bool)
 STRIPE_TEST_SECRET_KEY = config("STRIPE_TEST_SECRET_KEY", default="")
@@ -185,7 +187,9 @@ REST_FRAMEWORK = {
         "invite_accept": config("INVITE_ACCEPT_THROTTLE_RATE"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
         "billing_checkout": config("BILLING_CHECKOUT_THROTTLE_RATE"),
+        "billing_portal": config("BILLING_PORTAL_THROTTLE_RATE"),
         "org_signup": config("ORG_SIGNUP_THROTTLE_RATE"),
+        "password_change": config("PASSWORD_CHANGE_THROTTLE_RATE"),
     },
 }
 
@@ -206,6 +210,15 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+# The refresh token also travels as an HttpOnly cookie, sent back only to the
+# auth endpoints that consume it (refresh, logout). "Lax" suits an SPA on the
+# same site as the API (e.g. app.example.com + api.example.com); a SPA on a
+# different site needs "None", which browsers only accept with Secure.
+REFRESH_COOKIE_NAME = "refresh_token"
+REFRESH_COOKIE_PATH = "/api/v1/users/auth/"
+REFRESH_COOKIE_SECURE = False
+REFRESH_COOKIE_SAMESITE = config("REFRESH_COOKIE_SAMESITE", default="Lax")
 
 INVITATION_EXPIRY = timedelta(seconds=config("INVITATION_EXPIRY_SECONDS", cast=int))
 

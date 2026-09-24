@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -100,7 +101,10 @@ class OrganizationSignupAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
+        self.assertEqual(
+            response.cookies[settings.REFRESH_COOKIE_NAME].value,
+            response.data["refresh"],
+        )
 
         organization = Organization.objects.get(name="Acme Inc")
         self.assertEqual(organization.billing_email, "billing@acme.test")

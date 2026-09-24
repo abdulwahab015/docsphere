@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "09c4bb9c-31a2-448e-9c65-6a213c102b95",
     "name": "DocSphere \u2014 Full Demo Flow",
-    "description": "End-to-end walkthrough of DocSphere: org self-signup, invitations (single + bulk), projects, documents (including personal, project-less documents), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, and admin user removal. Run top-to-bottom against the `demo/full-flow` branch with the `DocSphere Demo` environment selected.",
+    "description": "End-to-end walkthrough of DocSphere: org self-signup, invitations (single + bulk), projects, documents (including personal, project-less documents), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -106,6 +106,52 @@
                   "}",
                   "const uid = decodeJwtUserId(data.access);",
                   "if (uid) pm.environment.set('admin_user_id', uid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Current User (me) - before subscribing",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Any signed-in user, reachable WITHOUT an active subscription (unlike almost everything else, which returns 402). A frontend calls this right after login to learn its role and whether the org has paid - here has_active_subscription is false until checkout completes.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('current user returned', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test('is the org admin', () => pm.expect(data.org_role).to.eql('ADMIN'));",
+                  "pm.test('org not yet subscribed', () => pm.expect(data.organization.has_active_subscription).to.be.false);",
+                  "pm.environment.set('admin_user_id', data.id);"
                 ]
               }
             }
@@ -273,6 +319,52 @@
       "name": "2. Subscription (Stripe Checkout) - run this before Users/Projects/Documents",
       "item": [
         {
+          "name": "List Plans (Prices)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/subscriptions/prices/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "subscriptions",
+                "prices"
+              ]
+            },
+            "description": "Admin-only, no subscription required. The active recurring Stripe prices (synced by dj-stripe), cheapest first - what a plan picker renders. Pass a returned `id` as `price_id` to checkout. If price_id_monthly isn't set in the environment yet, this fills it with the cheapest plan.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('prices listed', () => pm.response.to.have.status(200));",
+                  "const results = pm.response.json().results;",
+                  "if (results.length && !pm.environment.get('price_id_monthly')) {",
+                  "    pm.environment.set('price_id_monthly', results[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Create Checkout Session (monthly)",
           "request": {
             "method": "POST",
@@ -324,6 +416,49 @@
                 "exec": [
                   "pm.test('checkout session created', () => pm.response.to.have.status(200));",
                   "pm.environment.set('checkout_url', pm.response.json().checkout_url);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Open Billing Portal",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/subscriptions/portal/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "subscriptions",
+                "portal"
+              ]
+            },
+            "description": "Admin-only, no subscription required (a lapsed org must still be able to fix its card). Returns a Stripe Customer Portal URL where the admin updates payment details or cancels. Needs an existing Stripe customer, which the checkout above created - an org that never started checkout gets 400.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('portal session created', () => pm.response.to.have.status(200));",
+                  "pm.test('has a portal url', () => pm.expect(pm.response.json().portal_url).to.be.a('string'));"
                 ]
               }
             }
@@ -566,6 +701,249 @@
           "response": []
         },
         {
+          "name": "Invite a Spare Address (for the resend/revoke demo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/invitations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "invitations"
+              ]
+            },
+            "description": "A throwaway invitation, so resending and revoking don't touch the member's real invite.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"spare.invite+{{$timestamp}}@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('spare invitation created', () => pm.response.to.have.status(201));",
+                  "const data = pm.response.json();",
+                  "pm.environment.set('spare_invitation_id', data.id);",
+                  "pm.environment.set('spare_invitation_token', data.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend Invitation (new token, fresh expiry)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/invitations/{{spare_invitation_id}}/resend/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "invitations",
+                "{{spare_invitation_id}}",
+                "resend"
+              ]
+            },
+            "description": "Admin-only, pending invitations only. Issues a NEW token and restarts the expiry window from now (`sent_at`), then re-sends the email. The previously emailed link stops working.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invitation resent', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.test('token was rotated', () => pm.expect(data.token).to.not.eql(pm.environment.get('spare_invitation_token')));",
+                  "pm.environment.set('spare_invitation_token', data.token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revoke Invitation",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/invitations/{{spare_invitation_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "invitations",
+                "{{spare_invitation_id}}"
+              ]
+            },
+            "description": "Admin-only. The record is kept with status REVOKED (not deleted); its link now returns the generic invalid-invitation error.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invitation revoked', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Accept the Revoked Invitation (expect 400, generic message)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/invitations/accept/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "invitations",
+                "accept"
+              ]
+            },
+            "description": "Same message as an unknown, used or expired token - the endpoint never reveals which.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{spare_invitation_token}}\",\n  \"password\": \"Spare-Demo-2026!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('revoked link rejected', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend a Revoked Invitation (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/invitations/{{spare_invitation_id}}/resend/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "invitations",
+                "{{spare_invitation_id}}",
+                "resend"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('only pending invitations can be resent', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Bulk Invite via Excel",
           "request": {
             "method": "POST",
@@ -737,6 +1115,49 @@
           ]
         },
         {
+          "name": "[As Member] Get Current User (me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Same endpoint as the admin's - here org_role is MEMBER, which is how a frontend hides admin-only screens.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('current user returned', () => pm.response.to.have.status(200));",
+                  "pm.test('is a member', () => pm.expect(pm.response.json().org_role).to.eql('MEMBER'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "[As Member] List Organization Users (reduced fields)",
           "request": {
             "method": "GET",
@@ -826,7 +1247,47 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('refreshed', () => pm.response.to.have.status(200));",
-                  "pm.environment.set('access_token_admin', pm.response.json().access);"
+                  "pm.environment.set('access_token_admin', pm.response.json().access);",
+                  "pm.environment.set('refresh_token_admin', pm.response.json().refresh);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Admin Token via HttpOnly Cookie (no body)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/auth/refresh/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Every login-type response also sets the refresh token as an HttpOnly `refresh_token` cookie scoped to /api/v1/users/auth/. Postman's cookie jar replays it here with NO body - exactly what a browser SPA does, so it never has to store the refresh token in JavaScript. The request above just set the cookie to the admin's rotated token.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refreshed from the cookie alone', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.environment.set('access_token_admin', data.access);",
+                  "pm.environment.set('refresh_token_admin', data.refresh);"
                 ]
               }
             }
@@ -910,6 +1371,183 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Change Own Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/password/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "password"
+              ]
+            },
+            "description": "Any signed-in user. Requires the current password; the new one must pass the full password policy. Revokes every refresh token the user holds (other devices are signed out) and returns a fresh pair so this session carries on.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"{{admin_password}}\",\n  \"new_password\": \"{{admin_password}}-Rotated1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('password changed', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.environment.set('access_token_admin', data.access);",
+                  "pm.environment.set('refresh_token_admin', data.refresh);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change Own Password Back",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/password/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "password"
+              ]
+            },
+            "description": "Restores admin_password so the rest of the collection (and re-runs) keep working.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"{{admin_password}}-Rotated1\",\n  \"new_password\": \"{{admin_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('password changed', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.environment.set('access_token_admin', data.access);",
+                  "pm.environment.set('refresh_token_admin', data.refresh);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change Password with a Wrong Current Password (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/password/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "password"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"Not-The-Password-1!\",\n  \"new_password\": \"Whatever-New-1!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wrong current password rejected', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Logout (blacklist refresh token)",
@@ -1006,7 +1644,9 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('project created', () => pm.response.to.have.status(201));",
-                  "pm.environment.set('project_id', pm.response.json().id);"
+                  "pm.environment.set('project_id', pm.response.json().id);",
+                  "pm.test('creator is Owner', () => pm.expect(pm.response.json().access_level).to.eql('OWNER'));",
+                  "pm.test('creator email included', () => pm.expect(pm.response.json().created_by_email).to.eql(pm.environment.get('admin_email')));"
                 ]
               }
             }
@@ -1180,7 +1820,9 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('document created', () => pm.response.to.have.status(201));",
-                  "pm.environment.set('document_id', pm.response.json().id);"
+                  "pm.environment.set('document_id', pm.response.json().id);",
+                  "pm.test('creator is Owner', () => pm.expect(pm.response.json().access_level).to.eql('OWNER'));",
+                  "pm.test('creator email included', () => pm.expect(pm.response.json().created_by_email).to.eql(pm.environment.get('admin_email')));"
                 ]
               }
             }
@@ -1391,7 +2033,18 @@
               ]
             }
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('grants include user_email', () => pm.response.json().results.forEach(row => pm.expect(row.user_email).to.be.a('string')));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "[As Member] View Project (should succeed - Editor via project share)",
@@ -1436,7 +2089,7 @@
           ]
         },
         {
-          "name": "[As Member] View Document BEFORE Document Share (expect 403)",
+          "name": "[As Member] View Document BEFORE Document Share (expect 404)",
           "request": {
             "method": "GET",
             "header": [],
@@ -1452,7 +2105,7 @@
                 "{{document_id}}"
               ]
             },
-            "description": "The member already has EDITOR on the parent project (granted above), but project access grants nothing on a document - DocumentPermission is the only thing that matters. This must 403 until the document is explicitly shared, next.",
+            "description": "The member already has EDITOR on the parent project (granted above), but project access grants nothing on a document - DocumentPermission is the only thing that matters. A private document the caller has no access to is hidden entirely: 404, not 403, so its existence isn't leaked.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1471,7 +2124,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('project access alone does not grant document access', () => pm.response.to.have.status(403));"
+                  "pm.test('project access alone does not grant document access', () => pm.response.to.have.status(404));"
                 ]
               }
             }
@@ -1564,7 +2217,18 @@
               ]
             }
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('grants include user_email', () => pm.response.json().results.forEach(row => pm.expect(row.user_email).to.be.a('string')));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "[As Member] View Document (should succeed - Viewer via explicit share)",
@@ -1698,7 +2362,7 @@
           "response": []
         },
         {
-          "name": "[As Member] View Document AFTER Revoke (expect 403 again - no project fallback)",
+          "name": "[As Member] View Document AFTER Revoke (expect 404 again - no project fallback)",
           "request": {
             "method": "GET",
             "header": [],
@@ -1714,7 +2378,7 @@
                 "{{document_id}}"
               ]
             },
-            "description": "Confirms the revoke above left the member with no access at all - not a fallback to their EDITOR project permission, which the old grant-inheriting model would have done.",
+            "description": "With the share revoked, the private document is hidden from the member again (404). The member's Editor grant on the parent project does not fall back to the document.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1733,7 +2397,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('revoke removes access entirely, no project fallback', () => pm.response.to.have.status(403));"
+                  "pm.test('revoke removes access entirely, no project fallback', () => pm.response.to.have.status(404));"
                 ]
               }
             }
@@ -1846,7 +2510,7 @@
           ]
         },
         {
-          "name": "[As Member] Cannot View Personal Document (expect 403)",
+          "name": "[As Member] Cannot View Personal Document (expect 404)",
           "request": {
             "method": "GET",
             "header": [],
@@ -1862,7 +2526,7 @@
                 "{{personal_document_id}}"
               ]
             },
-            "description": "PRIVATE by default and never shared with the member - same-org-no-access is a 403, not a 404 (existence isn't hidden from other org members).",
+            "description": "A private personal document is invisible to anyone without an explicit grant - 404, not 403, so its existence isn't leaked.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1881,7 +2545,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('member has no access yet', () => pm.response.to.have.status(403));"
+                  "pm.test('private personal document is hidden', () => pm.response.to.have.status(404));"
                 ]
               }
             }
@@ -2408,6 +3072,50 @@
           ]
         },
         {
+          "name": "[As Member] My Access Requests (see it pending)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/access-requests/mine/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "access-requests",
+                "mine"
+              ]
+            },
+            "description": "The requester's own requests in every status, newest first - so the UI can show 'pending / approved / denied' instead of re-POSTing to find out.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('own requests listed', () => pm.response.to.have.status(200));",
+                  "pm.test('latest is pending', () => pm.expect(pm.response.json().results[0].status).to.eql('PENDING'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "[As Member] Duplicate Pending Request (expect 400)",
           "request": {
             "method": "POST",
@@ -2532,6 +3240,51 @@
                 "exec": [
                   "pm.test('owner can list requests', () => pm.response.to.have.status(200));",
                   "pm.test('includes the pending request', () => pm.expect(pm.response.json().results.length).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Owner's Access-Request Inbox (all owned documents)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/access-requests/incoming/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "access-requests",
+                "incoming"
+              ]
+            },
+            "description": "Pending requests across EVERY document the caller owns - one inbox instead of opening each document. Approve/deny still go through the per-document endpoints. Each row carries document_title and requested_by_email.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('inbox listed', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().results;",
+                  "pm.test('includes the member\\'s request', () => pm.expect(rows.map(r => r.requested_by_email)).to.include(pm.environment.get('member_email')));"
                 ]
               }
             }
@@ -2868,6 +3621,51 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('still viewer-only after denial', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] My Access Requests (see approved + denied)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/access-requests/mine/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "access-requests",
+                "mine"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('own requests listed', () => pm.response.to.have.status(200));",
+                  "const statuses = pm.response.json().results.map(r => r.status);",
+                  "pm.test('shows both outcomes', () => { pm.expect(statuses).to.include('APPROVED'); pm.expect(statuses).to.include('DENIED'); });"
                 ]
               }
             }
@@ -3878,7 +4676,7 @@
       "description": ""
     },
     {
-      "name": "11. Admin: Remove a User",
+      "name": "11. Admin: Manage Members",
       "item": [
         {
           "name": "Deactivate Member",
@@ -3968,6 +4766,318 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('deactivated user cannot log in', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Deactivated Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/deactivated/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "deactivated"
+              ]
+            },
+            "description": "Admin-only. The roster at GET /users/ lists active users only; this is where deactivated ones show up for reactivation.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('deactivated users listed', () => pm.response.to.have.status(200));",
+                  "pm.test('member is listed', () => pm.expect(pm.response.json().results.map(u => u.id)).to.include(Number(pm.environment.get('member_user_id'))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reactivate Member",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/{{member_user_id}}/reactivate/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{member_user_id}}",
+                "reactivate"
+              ]
+            },
+            "description": "Admin-only. Reverses a deactivation; an already-active or other-organization user is a 404.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('member reactivated', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[Verify] Member Login works again",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/auth/login/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{member_email}}\",\n  \"password\": \"{{member_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('member can log in again', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json();",
+                  "pm.environment.set('access_token_member', data.access);",
+                  "pm.environment.set('refresh_token_member', data.refresh);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Promote Member to Admin",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/{{member_user_id}}/role/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{member_user_id}}",
+                "role"
+              ]
+            },
+            "description": "Admin-only. org_role is ADMIN or MEMBER.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_role\": \"ADMIN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('role changed', () => pm.response.to.have.status(200));",
+                  "pm.test('now an admin', () => pm.expect(pm.response.json().org_role).to.eql('ADMIN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Demote Back to Member",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/{{member_user_id}}/role/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{member_user_id}}",
+                "role"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_role\": \"MEMBER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('role changed', () => pm.response.to.have.status(200));",
+                  "pm.test('member again', () => pm.expect(pm.response.json().org_role).to.eql('MEMBER'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change Own Role (expect 400)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/{{admin_user_id}}/role/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{admin_user_id}}",
+                "role"
+              ]
+            },
+            "description": "An admin can't change their own role - which also guarantees an organization never loses its last admin.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_role\": \"MEMBER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('own role is locked', () => pm.response.to.have.status(400));"
                 ]
               }
             }
@@ -4072,6 +5182,49 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('document soft-deleted', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Document Trash (deleted documents you own)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/trash/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "trash"
+              ]
+            },
+            "description": "Soft-deleted documents the caller is Owner of, most recently deleted first - exactly what the restore endpoint lets them bring back.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('document trash listed', () => pm.response.to.have.status(200));",
+                  "pm.test('deleted document is in the trash', () => pm.expect(pm.response.json().results.map(d => d.id)).to.include(Number(pm.environment.get('document_id'))));"
                 ]
               }
             }
@@ -4213,6 +5366,49 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('project soft-deleted', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Project Trash (admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/projects/trash/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "projects",
+                "trash"
+              ]
+            },
+            "description": "Admin-only, like project restore. Every soft-deleted project in the organization, most recently deleted first.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('project trash listed', () => pm.response.to.have.status(200));",
+                  "pm.test('deleted project is in the trash', () => pm.expect(pm.response.json().results.map(p => p.id)).to.include(Number(pm.environment.get('project_id'))));"
                 ]
               }
             }
