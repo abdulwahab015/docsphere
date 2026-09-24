@@ -1,3 +1,4 @@
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from projects.choices import Action
@@ -47,6 +48,14 @@ def resolve_project_access(user, project):
         .values_list("access_level", flat=True)
         .first()
     )
+
+
+def check_can_share(user, resource, resource_field, resolve_access_fn):
+    """Owner-level ``Action.RESHARE`` is required to view or change sharing."""
+    if not access_permits(resolve_access_fn(user, resource), Action.RESHARE):
+        raise PermissionDenied(
+            f"You must have Owner access to this {resource_field} to share it."
+        )
 
 
 def _action_for_method(method):
