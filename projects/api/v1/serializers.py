@@ -92,15 +92,17 @@ class ShareSerializer(serializers.Serializer):
         return value
 
 
-class ProjectPermissionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ProjectPermission
-        fields = ["id", "project", "user", "access_level"]
-        read_only_fields = fields
+def _permission_serializer(model, resource_field):
+    """Builds a read-only ModelSerializer exposing id, resource_field, user,
+    and access_level - all read-only - for a permission model."""
+    fields = ["id", resource_field, "user", "access_level"]
+    meta = type(
+        "Meta", (), {"model": model, "fields": fields, "read_only_fields": fields}
+    )
+    return type(
+        f"{model.__name__}Serializer", (serializers.ModelSerializer,), {"Meta": meta}
+    )
 
 
-class DocumentPermissionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DocumentPermission
-        fields = ["id", "document", "user", "access_level"]
-        read_only_fields = fields
+ProjectPermissionSerializer = _permission_serializer(ProjectPermission, "project")
+DocumentPermissionSerializer = _permission_serializer(DocumentPermission, "document")
