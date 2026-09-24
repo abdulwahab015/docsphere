@@ -9,6 +9,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from organizations.api.v1.serializers import OrganizationSummarySerializer
 from users.choices import InvitationStatus
 from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
 from users.models import Invitation
@@ -35,6 +36,18 @@ class UserDetailSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = [*UserSerializer.Meta.fields, "org_role", "created"]
+        read_only_fields = fields
+
+
+class CurrentUserSerializer(serializers.ModelSerializer):
+    """The requesting user's own identity, role and organization - what a
+    client needs after login to decide which screens to offer."""
+
+    organization = OrganizationSummarySerializer(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ["id", "email", "org_role", "organization"]
         read_only_fields = fields
 
 

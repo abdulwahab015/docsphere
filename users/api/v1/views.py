@@ -20,6 +20,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
+    CurrentUserSerializer,
     InvitationAcceptSerializer,
     InvitationCreateSerializer,
     LoginSerializer,
@@ -48,6 +49,18 @@ class LoginView(TokenObtainPairView):
     throttle_scope = "login"
 
 
+class CurrentUserAPIView(generics.RetrieveAPIView):
+    """The requesting user's own profile. Deliberately reachable without an
+    active subscription, so a client can tell an admin (send to billing) from
+    a member (ask your admin) before any gated call returns 402."""
+
+    serializer_class = CurrentUserSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
 class UserListAPIView(generics.ListAPIView):
     """Lists the active members of the requesting user's own organization -
     e.g. to look up a teammate's id when sharing a project or document. Any
@@ -60,7 +73,8 @@ class UserListAPIView(generics.ListAPIView):
     search_fields = ["email"]
 
     def get_serializer_class(self):
-        if self.request.user.org_role == OrganizationRole.ADMIN:
+        user = self.request.user
+        if user.is_authenticated and user.org_role == OrganizationRole.ADMIN:
             return UserDetailSerializer
         return UserSerializer
 

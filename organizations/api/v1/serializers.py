@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -17,14 +19,30 @@ class ActiveSubscriptionSerializer(serializers.Serializer):
     current_period_end = serializers.SerializerMethodField()
     cancel_at_period_end = serializers.SerializerMethodField()
 
-    def get_cancel_at_period_end(self, subscription):
+    def get_cancel_at_period_end(self, subscription) -> bool:
         return bool(subscription.stripe_data.get("cancel_at_period_end"))
 
-    def get_interval(self, subscription):
+    def get_interval(self, subscription) -> str | None:
         return (subscription.stripe_data.get("plan") or {}).get("interval")
 
-    def get_current_period_end(self, subscription):
+    def get_current_period_end(self, subscription) -> datetime | None:
         return get_period_end(subscription)
+
+
+class OrganizationSummarySerializer(serializers.ModelSerializer):
+    """The slice of an organization any member may see about their own org:
+    enough for a client to label it and to route an unpaid org to billing
+    before hitting a 402."""
+
+    has_active_subscription = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = ["id", "name", "has_active_subscription"]
+        read_only_fields = fields
+
+    def get_has_active_subscription(self, organization) -> bool:
+        return bool(organization.active_subscription)
 
 
 class OrganizationSerializer(serializers.ModelSerializer):

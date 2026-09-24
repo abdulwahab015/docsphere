@@ -47,10 +47,13 @@ from users.permissions import IsOrganizationAdmin
 
 def _grant_creator_ownership(permission_model, resource_field, resource, user):
     """Creates an Owner-level permission row for a newly created resource's
-    creator - the same pattern for both Project and Document creation."""
+    creator - the same pattern for both Project and Document creation - and
+    records that level on the instance the way ``visible_to`` would have
+    annotated it, so the create response needn't re-query it."""
     permission_model.objects.create(
         **{resource_field: resource, "user": user, "access_level": AccessLevel.OWNER}
     )
+    resource.user_access_level = AccessLevel.OWNER
 
 
 class ProjectListCreateAPIView(generics.ListCreateAPIView):
@@ -212,11 +215,13 @@ class DocumentRestoreAPIView(APIView):
             Document.objects.inactive_for_organization(request.user.organization),
             pk=pk,
         )
-        if not access_permits(resolve_access(request.user, document), Action.DELETE):
+        level = resolve_access(request.user, document)
+        if not access_permits(level, Action.DELETE):
             raise PermissionDenied(
                 "You must have Owner access to this document to restore it."
             )
 
+        document.user_access_level = level
         document.is_active = True
         document.save(update_fields=["is_active"])
 

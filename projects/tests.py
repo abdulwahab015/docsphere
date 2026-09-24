@@ -138,6 +138,34 @@ class ProjectVisibleToTests(TestCase):
 
         self.assertEqual(list(Project.objects.visible_to(self.user)), [project])
 
+    def test_does_not_duplicate_a_public_project_shared_with_other_users(self):
+        project = ProjectFactory(organization=self.org, visibility=Visibility.PUBLIC)
+        ProjectPermissionFactory.create_batch(2, project=project)
+
+        self.assertEqual(list(Project.objects.visible_to(self.user)), [project])
+
+    def test_annotates_the_explicit_level_over_the_public_default(self):
+        project = ProjectFactory(organization=self.org, visibility=Visibility.PUBLIC)
+        ProjectPermissionFactory(
+            project=project, user=self.user, access_level=AccessLevel.EDITOR
+        )
+
+        self.assertEqual(
+            Project.objects.visible_to(self.user).get().user_access_level,
+            AccessLevel.EDITOR,
+        )
+
+    def test_annotates_implicit_viewer_on_a_public_project(self):
+        ProjectFactory(organization=self.org, visibility=Visibility.PUBLIC)
+        ProjectPermissionFactory(
+            project__organization=self.org, access_level=AccessLevel.OWNER
+        )
+
+        self.assertEqual(
+            Project.objects.visible_to(self.user).get().user_access_level,
+            AccessLevel.VIEWER,
+        )
+
 
 class DocumentVisibleToTests(TestCase):
     def setUp(self):
@@ -477,6 +505,7 @@ class ProjectCreateAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.post(self.url, {"name": "Roadmap"}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["access_level"], AccessLevel.OWNER)
         project = Project.objects.get(name="Roadmap")
         self.assertEqual(project.created_by, self.admin)
         self.assertEqual(project.organization, self.org)
@@ -572,6 +601,36 @@ class ProjectListAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         names = [row["name"] for row in response.data["results"]]
         self.assertEqual(names, ["Alpha", "Bravo"])
+
+    def test_reports_the_callers_own_access_level_on_each_project(self):
+        for name, level in (
+            ("Alpha", AccessLevel.OWNER),
+            ("Bravo", AccessLevel.EDITOR),
+        ):
+            ProjectPermissionFactory(
+                project__organization=self.org,
+                project__name=name,
+                project__visibility=Visibility.PUBLIC,
+                user=self.member,
+                access_level=level,
+            )
+        ProjectFactory(
+            organization=self.org, name="Charlie", visibility=Visibility.PUBLIC
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        levels = {row["name"]: row["access_level"] for row in response.data["results"]}
+        self.assertEqual(
+            levels,
+            {
+                "Alpha": AccessLevel.OWNER,
+                "Bravo": AccessLevel.EDITOR,
+                "Charlie": AccessLevel.VIEWER,
+            },
+        )
 
     def test_excludes_private_projects_without_a_permission(self):
         ProjectFactory(organization=self.org, name="Secret")
@@ -778,11 +837,12 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_admin_can_restore_a_soft_deleted_project(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["name"], "Alpha")
+        self.assertIsNone(response.data["access_level"])
         self.project.refresh_from_db()
         self.assertTrue(self.project.is_active)
 
@@ -888,6 +948,7 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.post(self.url, {"title": "Notes"}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["access_level"], AccessLevel.OWNER)
         document = Document.objects.get(title="Notes")
         self.assertIsNone(document.project)
         self.assertEqual(document.organization, self.org)
@@ -976,6 +1037,24 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         titles = [row["title"] for row in response.data["results"]]
         self.assertEqual(titles, ["Alpha Doc", "Bravo Doc"])
+
+    def test_reports_the_callers_own_access_level_on_each_document(self):
+        public_document = DocumentFactory(
+            project=self.project, title="Alpha Doc", visibility=Visibility.PUBLIC
+        )
+        DocumentPermissionFactory(
+            document=public_document, user=self.member, access_level=AccessLevel.EDITOR
+        )
+        DocumentFactory(
+            project=self.project, title="Bravo Doc", visibility=Visibility.PUBLIC
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        levels = [row["access_level"] for row in response.data["results"]]
+        self.assertEqual(levels, [AccessLevel.EDITOR, AccessLevel.VIEWER])
 
     def test_lists_a_personal_document_the_member_has_a_permission_on(self):
         personal_document = DocumentFactory(
@@ -1128,6 +1207,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["title"], "Doc1")
+        self.assertEqual(response.data["access_level"], AccessLevel.VIEWER)
 
     def test_public_document_viewer_without_an_explicit_permission_can_retrieve(self):
         public_document = DocumentFactory(
@@ -1256,6 +1336,7 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["title"], "Doc1")
+        self.assertEqual(response.data["access_level"], AccessLevel.OWNER)
         self.document.refresh_from_db()
         self.assertTrue(self.document.is_active)
 

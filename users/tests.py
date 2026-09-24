@@ -18,7 +18,7 @@ from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 
 from core.tests import AssumeActiveSubscription
-from organizations.factories import OrganizationFactory
+from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
 from users.choices import InvitationStatus
 from users.constants import MAX_BULK_INVITE_ROWS
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
@@ -524,6 +524,71 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class CurrentUserAPITests(APITestCase):
+    def setUp(self):
+        self.org = OrganizationFactory(name="Acme")
+        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.member = UserFactory(email="member@example.com", organization=self.org)
+        self.url = reverse("user_me")
+
+    def test_admin_of_a_paid_organization_sees_role_and_active_subscription(self):
+        StripeSubscriptionFactory(customer__subscriber=self.org)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            {
+                "id": self.admin.pk,
+                "email": "admin@example.com",
+                "org_role": "ADMIN",
+                "organization": {
+                    "id": self.org.pk,
+                    "name": "Acme",
+                    "has_active_subscription": True,
+                },
+            },
+        )
+
+    def test_member_of_an_unpaid_organization_is_not_blocked_with_402(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["org_role"], "MEMBER")
+        self.assertFalse(response.data["organization"]["has_active_subscription"])
+
+    def test_expired_subscription_is_reported_inactive(self):
+        StripeSubscriptionFactory(customer__subscriber=self.org, status="canceled")
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertFalse(response.data["organization"]["has_active_subscription"])
+
+    def test_user_without_an_organization_gets_a_null_organization(self):
+        rootless_admin = AdminUserFactory(organization=None)
+        self.client.force_authenticate(rootless_admin)
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["organization"])
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class UserListAPITests(AssumeActiveSubscription, APITestCase):

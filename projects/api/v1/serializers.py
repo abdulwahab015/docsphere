@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from projects.choices import AccessLevel
@@ -9,14 +10,39 @@ from projects.models import (
     Project,
     ProjectPermission,
 )
+from projects.permissions import resolve_access, resolve_project_access
 
 User = get_user_model()
 
 
-class ProjectSerializer(serializers.ModelSerializer):
+class AccessLevelModelSerializer(serializers.ModelSerializer):
+    """Adds the requesting user's own read-only ``access_level`` on the
+    resource, so a client knows which actions to offer without probing for
+    403s - or ``null`` when they have none (an admin restoring a private
+    project nobody granted them). Read from the ``user_access_level``
+    annotation ``visible_to`` adds; a resource loaded any other way is
+    resolved with one extra query instead."""
+
+    access_level = serializers.SerializerMethodField()
+
+    resolve_access_fn = None
+
+    @extend_schema_field(
+        serializers.ChoiceField(choices=AccessLevel.choices, allow_null=True)
+    )
+    def get_access_level(self, resource):
+        level = getattr(resource, "user_access_level", None)
+        if not level:
+            level = self.resolve_access_fn(self.context["request"].user, resource)
+        return level
+
+
+class ProjectSerializer(AccessLevelModelSerializer):
     """``created_by`` and ``organization`` are always set server-side from the
     request and never accepted from the client. ``visibility`` is writable, but
     changing it on an existing project is Owner-only (enforced in the view)."""
+
+    resolve_access_fn = staticmethod(resolve_project_access)
 
     class Meta:
         model = Project
@@ -25,6 +51,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "visibility",
+            "access_level",
             "created_by",
             "organization",
             "created",
@@ -56,12 +83,14 @@ class ProjectSerializer(serializers.ModelSerializer):
         return value
 
 
-class DocumentSerializer(serializers.ModelSerializer):
+class DocumentSerializer(AccessLevelModelSerializer):
     """``created_by``, ``organization`` and ``project`` are always set server-side
     in the view (the latter after explicit org-scoped validation, and may be left
     unset entirely for a personal document) and never accepted from the client
     through this serializer. ``visibility`` is writable, but changing it on an
     existing document is Owner-only (enforced in the view)."""
+
+    resolve_access_fn = staticmethod(resolve_access)
 
     class Meta:
         model = Document
@@ -70,6 +99,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "title",
             "content",
             "visibility",
+            "access_level",
             "created_by",
             "organization",
             "project",
