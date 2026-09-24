@@ -7,12 +7,10 @@ from django.conf import settings
 
 logger = logging.getLogger("core.request")
 
-# Response keys whose values must never reach the logs (JWTs, reset tokens, ...).
 _SENSITIVE_KEYS = frozenset(
     {"access", "refresh", "token", "password", "new_password", "uid"}
 )
 
-# Catch a token that slips through under an unexpected key (JWT shape).
 _JWT_RE = re.compile(r"^eyJ[\w-]+\.[\w-]+\.[\w-]+$")
 
 

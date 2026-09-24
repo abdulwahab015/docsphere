@@ -1,7 +1,6 @@
 import json
 import logging
 
-# Attributes the request/response logging middleware attaches via `extra=...`.
 _REQUEST_EXTRA_KEYS = (
     "request_id",
     "method",

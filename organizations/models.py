@@ -11,6 +11,7 @@ class Organization(TimeStampedModel):
 
     name = models.CharField(max_length=100)
     billing_email = models.EmailField(blank=True, null=True, unique=True)
+    last_expiry_reminder_sent_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.name
@@ -25,7 +26,6 @@ class Organization(TimeStampedModel):
     @cached_property
     def active_subscription(self):
         """Returns the org's current active dj-stripe Subscription, or None."""
-
         customer = Customer.objects.filter(subscriber=self).first()
         if not customer:
             return None

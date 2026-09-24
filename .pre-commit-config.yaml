@@ -1,6 +1,3 @@
-# Uses the black/ruff installed in the environment (see requirements/dev.txt)
-# rather than pinning a second set of versions here — keeps pre-commit, CI,
-# and `make lint`/`make format` on exactly the same tool versions.
 repos:
   - repo: local
     hooks:
