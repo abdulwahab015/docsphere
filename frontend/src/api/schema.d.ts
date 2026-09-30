@@ -966,7 +966,7 @@ export interface components {
             /** Format: email */
             readonly email: string;
             readonly org_role: components["schemas"]["OrgRoleEnum"];
-            readonly organization: components["schemas"]["OrganizationSummary"];
+            readonly organization: components["schemas"]["OrganizationSummary"] | null;
         };
         /**
          * @description ``created_by``, ``organization`` and ``project`` are always set server-side

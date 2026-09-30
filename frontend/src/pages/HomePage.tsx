@@ -1,9 +1,9 @@
 import { LogoutButton } from '@/features/auth/components/LogoutButton'
-import { useSignedInUser } from '@/features/auth/hooks'
+import { useSignedInMember } from '@/features/auth/hooks'
 
 // Placeholder until the app shell (sidebar, projects, documents) replaces it.
 export function HomePage() {
-  const user = useSignedInUser()
+  const user = useSignedInMember()
 
   return (
     <main className="flex min-h-svh flex-col items-center justify-center gap-4 p-4 text-center">

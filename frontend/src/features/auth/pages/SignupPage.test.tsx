@@ -69,17 +69,19 @@ describe('SignupPage', () => {
     )
   })
 
-  it('shows password-policy errors from the server on the form', async () => {
+  it("shows the server's password-policy errors under the password field", async () => {
     server.use(
       http.post(apiUrl(SIGNUP_PATH), () =>
-        HttpResponse.json({ non_field_errors: ['This password is too common.'] }, { status: 400 }),
+        HttpResponse.json({ admin_password: ['This password is too common.'] }, { status: 400 }),
       ),
     )
     const { user } = renderRoute('/signup')
 
     await fillForm(user)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('This password is too common.')
+    expect(await screen.findByLabelText('Password')).toHaveAccessibleDescription(
+      expect.stringContaining('This password is too common.'),
+    )
   })
 
   it('checks the password policy and confirmation before sending anything', async () => {

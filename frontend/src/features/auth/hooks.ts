@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 
-import type { TokenPair } from '@/api/types'
+import type { CurrentUser, OrganizationSummary, TokenPair } from '@/api/types'
 import {
   acceptInvitation,
   confirmPasswordReset,
@@ -25,6 +25,19 @@ export function useSignedInUser() {
     throw new Error('useSignedInUser must be used inside RequireAuth.')
   }
   return user
+}
+
+type OrganizationMember = CurrentUser & { organization: OrganizationSummary }
+
+/** The signed-in user with their organization, for components rendered inside
+ * `RequireActiveSubscription` (which turns away accounts without one). */
+export function useSignedInMember(): OrganizationMember {
+  const user = useSignedInUser()
+  const { organization } = user
+  if (!organization) {
+    throw new Error('useSignedInMember must be used inside RequireActiveSubscription.')
+  }
+  return { ...user, organization }
 }
 
 function useSessionStartingMutation<TPayload>(

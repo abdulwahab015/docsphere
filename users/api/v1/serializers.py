@@ -1,6 +1,5 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.utils import timezone
 from django.utils.encoding import force_str
@@ -14,6 +13,7 @@ from users.choices import InvitationStatus
 from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
 from users.models import Invitation
 from users.services import create_invitation
+from users.validators import validate_password_for_field
 
 User = get_user_model()
 
@@ -43,7 +43,8 @@ class CurrentUserSerializer(serializers.ModelSerializer):
     """The requesting user's own identity, role and organization - what a
     client needs after login to decide which screens to offer."""
 
-    organization = OrganizationSummarySerializer(read_only=True)
+    # Null for a superuser, who belongs to no organization.
+    organization = OrganizationSummarySerializer(read_only=True, allow_null=True)
 
     class Meta:
         model = User
@@ -73,7 +74,9 @@ class PasswordChangeSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
-        validate_password(attrs["new_password"], user=self.context["request"].user)
+        validate_password_for_field(
+            "new_password", attrs["new_password"], user=self.context["request"].user
+        )
         return attrs
 
 
@@ -172,7 +175,7 @@ class InvitationAcceptSerializer(serializers.Serializer):
         if timezone.now() - invitation.sent_at > settings.INVITATION_EXPIRY:
             raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
 
-        validate_password(attrs["password"])
+        validate_password_for_field("password", attrs["password"])
 
         attrs["invitation"] = invitation
         return attrs
@@ -214,7 +217,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         if not default_token_generator.check_token(user, attrs["token"]):
             raise serializers.ValidationError("Invalid or expired reset link.")
 
-        validate_password(attrs["new_password"], user=user)
+        validate_password_for_field("new_password", attrs["new_password"], user=user)
 
         attrs["user"] = user
         return attrs

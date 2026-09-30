@@ -1,11 +1,11 @@
 from datetime import datetime
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from organizations.models import Organization
 from subscriptions.utils import get_period_end
+from users.validators import validate_password_for_field
 
 User = get_user_model()
 
@@ -95,5 +95,5 @@ class OrganizationSignupSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
-        validate_password(attrs["admin_password"])
+        validate_password_for_field("admin_password", attrs["admin_password"])
         return attrs

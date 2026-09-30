@@ -4,6 +4,7 @@ type Schemas = components['schemas']
 
 export type CurrentUser = Schemas['CurrentUser']
 export type OrgRole = Schemas['OrgRoleEnum']
+export type OrganizationSummary = Schemas['OrganizationSummary']
 export type TokenPair = Schemas['TokenPair']
 export type LoginPayload = Schemas['Login']
 export type OrganizationSignupPayload = Schemas['OrganizationSignup']

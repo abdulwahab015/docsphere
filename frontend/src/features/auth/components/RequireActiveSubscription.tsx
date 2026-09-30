@@ -6,23 +6,35 @@ import { useSignedInUser } from '@/features/auth/hooks'
 
 const ADMIN_MESSAGE =
   "Your organization doesn't have an active subscription. Subscribe to a plan to start using DocSphere."
+const NO_ORGANIZATION_MESSAGE =
+  "This account isn't part of an organization. Platform administrators manage DocSphere from the admin site."
 const MEMBER_MESSAGE =
   "Your organization doesn't have an active subscription. Ask your organization admin to renew it."
 
 /** Mirrors the API's subscription gate, so an unpaid organization sees why
- * instead of a wall of 402 errors. Must sit inside `RequireAuth`. */
+ * instead of a wall of 402 errors. Also turns away accounts that belong to no
+ * organization (platform superusers), which the app has nothing to show.
+ * Must sit inside `RequireAuth`. */
 export function RequireActiveSubscription() {
   const user = useSignedInUser()
 
-  if (user.organization.has_active_subscription) {
-    return <Outlet />
+  if (!user.organization) {
+    return <BlockedScreen title="No organization" message={NO_ORGANIZATION_MESSAGE} />
   }
+  if (!user.organization.has_active_subscription) {
+    return (
+      <BlockedScreen
+        title="Subscription inactive"
+        message={user.org_role === 'ADMIN' ? ADMIN_MESSAGE : MEMBER_MESSAGE}
+      />
+    )
+  }
+  return <Outlet />
+}
 
+function BlockedScreen({ title, message }: { title: string; message: string }) {
   return (
-    <AuthCard
-      title="Subscription inactive"
-      description={user.org_role === 'ADMIN' ? ADMIN_MESSAGE : MEMBER_MESSAGE}
-    >
+    <AuthCard title={title} description={message}>
       <LogoutButton className="w-full" />
     </AuthCard>
   )
