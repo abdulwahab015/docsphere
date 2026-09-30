@@ -16,9 +16,14 @@ React + TypeScript single-page app for the DocSphere API, built with Vite.
 Requires Node 22 (see `.nvmrc`). Run these from the repository root:
 
 ```sh
-make fe-install   # npm ci
-make fe-dev       # http://localhost:3000
+cp frontend/.env.example frontend/.env   # once; points the app at the local API
+make fe-install                          # npm ci
+make fe-dev                              # http://localhost:3000
 ```
+
+Run the backend on `http://localhost:8000` alongside it (`make run`). Open the app on
+`localhost`, not `127.0.0.1`: the refresh-token cookie is only shared between the app and the
+API when both are on the same site.
 
 The dev server must run on port 3000. The backend's `FRONTEND_URL` and
 `CORS_ALLOWED_ORIGINS` default to `http://localhost:3000`, and so do the links it

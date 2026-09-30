@@ -1,34 +1,39 @@
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { createMemoryRouter, RouterProvider } from 'react-router'
+import { screen } from '@testing-library/react'
 
-import { routes } from '@/app/routes'
-
-function renderAt(path: string) {
-  const router = createMemoryRouter(routes, { initialEntries: [path] })
-  render(<RouterProvider router={router} />)
-  return router
-}
+import { buildCurrentUser } from '@/test/factories'
+import { renderRoute } from '@/test/render'
 
 describe('routes', () => {
-  it('renders the home page at the root path', () => {
-    renderAt('/')
+  it('shows the home page to a signed-in user', () => {
+    renderRoute('/', { signedInAs: buildCurrentUser() })
 
-    expect(screen.getByRole('heading', { name: 'DocSphere' })).toBeInTheDocument()
+    expect(screen.getByText(/Signed in as ada@example.com · Acme/)).toBeInTheDocument()
+  })
+
+  it('sends a signed-out visitor to the login page', async () => {
+    const { router } = renderRoute('/')
+
+    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/login')
+  })
+
+  it('sends a signed-in user away from the login page', () => {
+    const { router } = renderRoute('/login', { signedInAs: buildCurrentUser() })
+
+    expect(router.state.location.pathname).toBe('/')
   })
 
   it('renders the not-found page for an unknown path', () => {
-    renderAt('/does-not-exist')
+    renderRoute('/does-not-exist')
 
     expect(screen.getByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
   })
 
   it('navigates home from the not-found page', async () => {
-    const router = renderAt('/does-not-exist')
+    const { router, user } = renderRoute('/does-not-exist', { signedInAs: buildCurrentUser() })
 
-    await userEvent.click(screen.getByRole('link', { name: 'Go home' }))
+    await user.click(screen.getByRole('link', { name: 'Go home' }))
 
     expect(router.state.location.pathname).toBe('/')
-    expect(screen.getByRole('heading', { name: 'DocSphere' })).toBeInTheDocument()
   })
 })
