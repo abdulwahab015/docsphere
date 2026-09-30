@@ -59,6 +59,18 @@ export function clearSession(queryClient: QueryClient) {
 }
 
 /**
+ * Another tab signed in or out. The refresh cookie is shared between tabs, so
+ * this tab forgets its own token and data and re-reads the session from the
+ * cookie: signed out if the other tab logged out, or the new user if it signed
+ * in as someone else.
+ */
+export function resyncSession(queryClient: QueryClient) {
+  clearAccessToken()
+  removeUserData(queryClient)
+  void queryClient.resetQueries({ queryKey: authKeys.currentUser })
+}
+
+/**
  * Reacts to errors from any query or mutation: a 401 that survived the
  * client's refresh attempt means the session is over; a 402 means the
  * organization's subscription lapsed, so the session is re-read to pick up

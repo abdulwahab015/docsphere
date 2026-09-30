@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 
 import type { TokenPair } from '@/api/types'
 import {
@@ -10,7 +11,8 @@ import {
   signupOrganization,
 } from '@/features/auth/api'
 import { authKeys } from '@/features/auth/query-keys'
-import { clearSession, loadSession, startSession } from '@/features/auth/session'
+import { clearSession, loadSession, resyncSession, startSession } from '@/features/auth/session'
+import { announceSessionChange, onSessionChangeElsewhere } from '@/features/auth/session-broadcast'
 
 export function useCurrentUser() {
   return useQuery({ queryKey: authKeys.currentUser, queryFn: loadSession })
@@ -31,6 +33,7 @@ function useSessionStartingMutation<TPayload>(
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (payload: TPayload) => startSession(queryClient, await obtainTokens(payload)),
+    onSuccess: announceSessionChange,
   })
 }
 
@@ -52,7 +55,10 @@ export function useLogout() {
     mutationFn: logout,
     // Signed out locally even if the server call fails: the cookie may already
     // be gone, and the user asked to leave either way.
-    onSettled: () => clearSession(queryClient),
+    onSettled: () => {
+      clearSession(queryClient)
+      announceSessionChange()
+    },
   })
 }
 
@@ -61,5 +67,13 @@ export function useRequestPasswordReset() {
 }
 
 export function useConfirmPasswordReset() {
-  return useMutation({ mutationFn: confirmPasswordReset })
+  // The backend revokes every session of that user on a reset, so tabs
+  // signed in as them should find out now rather than on their next refresh.
+  return useMutation({ mutationFn: confirmPasswordReset, onSuccess: announceSessionChange })
+}
+
+/** Keeps this tab's session in step with sign-ins and sign-outs in other tabs. */
+export function useSessionSyncAcrossTabs() {
+  const queryClient = useQueryClient()
+  useEffect(() => onSessionChangeElsewhere(() => resyncSession(queryClient)), [queryClient])
 }
