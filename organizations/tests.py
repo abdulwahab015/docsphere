@@ -173,6 +173,8 @@ class OrganizationSignupAPITests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("admin_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
         self.assertFalse(Organization.objects.filter(name="Acme Inc").exists())
 
     def test_signup_is_rate_limited(self):

@@ -22,6 +22,13 @@ describe('RequireActiveSubscription', () => {
     expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument()
   })
 
+  it('turns away an account that belongs to no organization', () => {
+    renderRoute('/', { signedInAs: buildCurrentUser({ organization: null }) })
+
+    expect(screen.getByRole('heading', { name: 'No organization' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument()
+  })
+
   it('tells a member to ask their admin', () => {
     renderRoute('/', {
       signedInAs: buildCurrentUser({ org_role: 'MEMBER', organization: lapsedOrganization }),

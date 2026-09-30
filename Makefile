@@ -4,10 +4,13 @@ DC_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 FE_NPM := npm --prefix frontend
 # Relative to frontend/, where npm runs the script.
 FE_SCHEMA := node_modules/.tmp/openapi.yaml
+FE_TYPES := src/api/schema.d.ts
+FE_TYPES_CHECK := node_modules/.tmp/schema.d.ts
 
 .PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format check \
         up down build logs docker-migrate docker-shell clean \
-        fe-install fe-dev fe-build fe-test fe-test-cov fe-lint fe-format fe-check fe-api-types
+        fe-install fe-dev fe-build fe-test fe-test-cov fe-lint fe-format fe-check fe-api-types \
+        fe-api-types-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -54,6 +57,7 @@ format: ## Run black + ruff --fix
 check: ## Run the full CI check sequence locally (system check, migrations, format, lint, coverage)
 	python manage.py check
 	python manage.py makemigrations --check --dry-run
+	$(MAKE) fe-api-types-check
 	black --check .
 	ruff check .
 	DJANGO_SETTINGS_MODULE=core.settings.test coverage run manage.py test
@@ -90,7 +94,12 @@ fe-check: ## Run the full frontend CI sequence locally (format, lint, types, cov
 fe-api-types: ## Regenerate frontend/src/api/schema.d.ts from the backend's OpenAPI schema
 	mkdir -p frontend/$(dir $(FE_SCHEMA))
 	python manage.py spectacular --file frontend/$(FE_SCHEMA)
-	$(FE_NPM) run api:types -- $(FE_SCHEMA) -o src/api/schema.d.ts
+	$(FE_NPM) run api:types -- $(FE_SCHEMA) -o $(FE_TYPES)
+
+fe-api-types-check: ## Fail if frontend/src/api/schema.d.ts is out of date with the backend
+	$(MAKE) fe-api-types FE_TYPES=$(FE_TYPES_CHECK)
+	@cmp -s frontend/$(FE_TYPES_CHECK) frontend/$(FE_TYPES) || \
+		(echo "frontend/$(FE_TYPES) is out of date: run 'make fe-api-types' and commit the result."; exit 1)
 
 up: ## Start the dev stack (base + dev overlay)
 	$(DC_DEV) up

@@ -357,6 +357,22 @@ class PasswordResetTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_password_reset_confirm_reports_a_weak_password_on_its_field(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset_confirm"),
+                {"uid": uid, "token": token, "new_password": "alllowercase1"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("Old-Pass-123!"))
+
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class PasswordChangeTests(APITestCase):
@@ -411,6 +427,8 @@ class PasswordChangeTests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password(self.password))
 
@@ -610,6 +628,8 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
         self.assertFalse(User.objects.filter(email="new-user@example.com").exists())
 
     def test_accept_invitation_fails_once_expired(self):
@@ -731,6 +751,15 @@ class CurrentUserAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data["organization"])
+
+    def test_schema_documents_the_organization_as_nullable(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        organization = response.data["components"]["schemas"]["CurrentUser"][
+            "properties"
+        ]["organization"]
+        self.assertTrue(organization["nullable"])
 
     def test_anonymous_request_is_rejected(self):
         with self.assertNumQueries(0):
