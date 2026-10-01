@@ -3,6 +3,7 @@ import { Outlet } from 'react-router'
 import { AuthCard } from '@/features/auth/components/AuthCard'
 import { LogoutButton } from '@/features/auth/components/LogoutButton'
 import { useSignedInUser } from '@/features/auth/hooks'
+import { OrganizationMemberContext } from '@/features/auth/session-context'
 
 const ADMIN_MESSAGE =
   "Your organization doesn't have an active subscription. Subscribe to a plan to start using DocSphere."
@@ -17,11 +18,12 @@ const MEMBER_MESSAGE =
  * Must sit inside `RequireAuth`. */
 export function RequireActiveSubscription() {
   const user = useSignedInUser()
+  const { organization } = user
 
-  if (!user.organization) {
+  if (!organization) {
     return <BlockedScreen title="No organization" message={NO_ORGANIZATION_MESSAGE} />
   }
-  if (!user.organization.has_active_subscription) {
+  if (!organization.has_active_subscription) {
     return (
       <BlockedScreen
         title="Subscription inactive"
@@ -29,7 +31,11 @@ export function RequireActiveSubscription() {
       />
     )
   }
-  return <Outlet />
+  return (
+    <OrganizationMemberContext value={{ ...user, organization }}>
+      <Outlet />
+    </OrganizationMemberContext>
+  )
 }
 
 function BlockedScreen({ title, message }: { title: string; message: string }) {

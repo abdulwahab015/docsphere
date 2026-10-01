@@ -35,12 +35,27 @@ puts in emails.
 | ------------------- | ------------------------------------------------------ |
 | `make fe-dev`       | Dev server with hot reload                             |
 | `make fe-test`      | Run the test suite                                     |
-| `make fe-test-cov`  | Run tests under coverage (fails below 90%)             |
+| `make fe-test-cov`  | Run tests under coverage (fails below 95%)             |
 | `make fe-lint`      | oxlint                                                 |
 | `make fe-format`    | Prettier `--write`                                     |
 | `make fe-check`     | Full CI sequence: format, lint, types, coverage, build |
 | `make fe-build`     | Production build into `frontend/dist/`                 |
 | `make fe-api-types` | Regenerate `src/api/schema.d.ts` from the Django API   |
+| `make fe-e2e`       | Playwright end-to-end tests against the real API       |
+
+## End-to-end tests
+
+`make fe-e2e` (backend venv active) runs Playwright in a real browser against the whole
+stack. It starts its own servers, so it never touches your dev database or dev servers:
+
+- **API on :8001:** a fresh SQLite database, migrated and seeded from `e2e/seed.json` by
+  `manage.py seed_e2e`.
+- **App on :3100:** the production build (`vite build` + `vite preview`).
+
+The test accounts live in `e2e/seed.json`, and `e2e/fixtures.ts` reads the same file. Add
+accounts there, not in the tests. The first run needs a browser:
+`cd frontend && npx playwright install chromium`. When a test fails, a screenshot and trace
+are written to `frontend/test-results/`. Open a trace with `npx playwright show-trace <zip>`.
 
 ## API types
 

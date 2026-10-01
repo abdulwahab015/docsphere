@@ -1,16 +1,16 @@
 import { z } from 'zod'
 
+import { organizationNameSchema } from '@/features/organization/schemas'
+import { emailSchema, optionalEmailSchema } from '@/lib/schemas'
+
 // Mirrors the backend's password policy so most mistakes are caught before a
 // round trip. The server stays authoritative: it also rejects common passwords
 // and ones too similar to the email address.
 export const MIN_PASSWORD_LENGTH = 8
 export const MAX_PASSWORD_LENGTH = 128
-const ORGANIZATION_NAME_MAX_LENGTH = 100
 const SPECIAL_CHARACTER = /[!@#$%^&*()_+\-=[\]{};:'"\\|,.<>/?~`]/
 
 const PASSWORDS_DIFFER = { error: 'Passwords do not match.', path: ['confirm_password'] }
-
-const emailSchema = z.email({ error: 'Enter a valid email address.' })
 
 export const passwordSchema = z
   .string()
@@ -30,14 +30,8 @@ export const loginSchema = z.object({
 
 export const signupSchema = z
   .object({
-    name: z
-      .string()
-      .trim()
-      .min(1, { error: 'Enter your organization name.' })
-      .max(ORGANIZATION_NAME_MAX_LENGTH, {
-        error: `Use at most ${ORGANIZATION_NAME_MAX_LENGTH} characters.`,
-      }),
-    billing_email: z.union([z.literal(''), emailSchema]),
+    name: organizationNameSchema,
+    billing_email: optionalEmailSchema,
     admin_email: emailSchema,
     admin_password: passwordSchema,
     confirm_password: z.string(),

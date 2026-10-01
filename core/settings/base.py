@@ -281,3 +281,7 @@ LOGGING = {
         },
     },
 }
+
+# Whether `manage.py seed_e2e` may write fixture organizations and users into
+# the database. Off by default; only the local and test settings enable it.
+E2E_SEEDING_ENABLED = False

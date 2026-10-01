@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from organizations.models import Organization
+from organizations.validators import validate_unique_billing_email
 from subscriptions.utils import get_period_end
 from users.validators import validate_password_for_field
 
@@ -49,7 +50,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
     """``billing_email`` uniqueness is checked here so a collision returns 400
     rather than surfacing as an IntegrityError."""
 
-    active_subscription = ActiveSubscriptionSerializer(read_only=True)
+    # Null while the organization has no active subscription.
+    active_subscription = ActiveSubscriptionSerializer(read_only=True, allow_null=True)
 
     class Meta:
         model = Organization
@@ -64,14 +66,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created", "modified"]
 
     def validate_billing_email(self, value):
-        clashes = Organization.objects.filter(billing_email=value).exclude(
-            pk=self.instance.pk
-        )
-        if clashes.exists():
-            raise serializers.ValidationError(
-                "An organization with this billing email already exists."
-            )
-        return value
+        return validate_unique_billing_email(value, organization=self.instance)
 
 
 class OrganizationSignupSerializer(serializers.Serializer):
@@ -83,11 +78,7 @@ class OrganizationSignupSerializer(serializers.Serializer):
     admin_password = serializers.CharField(write_only=True)
 
     def validate_billing_email(self, value):
-        if Organization.objects.filter(billing_email=value).exists():
-            raise serializers.ValidationError(
-                "An organization with this billing email already exists."
-            )
-        return value
+        return validate_unique_billing_email(value)
 
     def validate_admin_email(self, value):
         if User.objects.filter(email=value).exists():

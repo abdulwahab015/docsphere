@@ -7,4 +7,6 @@ export const PATHS = {
   forgotPassword: '/forgot-password',
   resetPassword: '/reset-password',
   acceptInvite: '/accept-invite',
+  people: '/people',
+  organizationSettings: '/settings/organization',
 } as const

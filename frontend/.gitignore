@@ -28,3 +28,8 @@ coverage
 
 # Local environment (see .env.example)
 .env
+
+# Playwright output
+playwright-report
+test-results
+blob-report

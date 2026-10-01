@@ -3,3 +3,5 @@
 from core.settings.base import *
 
 DEBUG = True
+
+E2E_SEEDING_ENABLED = True

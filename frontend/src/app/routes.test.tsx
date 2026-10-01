@@ -7,7 +7,8 @@ describe('routes', () => {
   it('shows the home page to a signed-in user', () => {
     renderRoute('/', { signedInAs: buildCurrentUser() })
 
-    expect(screen.getByText(/Signed in as ada@example.com · Acme/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'Home' })).toBeInTheDocument()
+    expect(screen.getByText('Signed in as ada@example.com')).toBeInTheDocument()
   })
 
   it('sends a signed-out visitor to the login page', async () => {
