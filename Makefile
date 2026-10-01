@@ -8,6 +8,8 @@ FE_TYPES := src/api/schema.d.ts
 FE_TYPES_CHECK := node_modules/.tmp/schema.d.ts
 # The end-to-end API's throwaway database (repo-relative: no spaces in the URL).
 E2E_DATABASE := frontend/node_modules/.tmp/e2e.sqlite3
+# Where the end-to-end API writes the emails it sends; e2e/fixtures.ts reads them.
+E2E_MAILBOX := frontend/node_modules/.tmp/e2e-mail
 
 .PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format check \
         up down build logs docker-migrate docker-shell clean \
@@ -110,10 +112,13 @@ e2e-api: export DJANGO_SETTINGS_MODULE := core.settings.test
 e2e-api: export DATABASE_URL := sqlite:///$(E2E_DATABASE)
 e2e-api: export FRONTEND_URL := $(E2E_APP_ORIGIN)
 e2e-api: export CORS_ALLOWED_ORIGINS := $(E2E_APP_ORIGIN)
+e2e-api: export EMAIL_BACKEND := django.core.mail.backends.filebased.EmailBackend
+e2e-api: export EMAIL_FILE_PATH := $(E2E_MAILBOX)
 e2e-api: ## (Started by Playwright) Fresh seeded database, then the API on $$E2E_API_PORT
 	@test -n "$(E2E_API_PORT)" -a -n "$(E2E_APP_ORIGIN)" || (echo "Run via 'make fe-e2e'."; exit 1)
 	mkdir -p $(dir $(E2E_DATABASE))
 	rm -f $(E2E_DATABASE)
+	rm -rf $(E2E_MAILBOX)
 	python manage.py migrate --noinput --verbosity 0
 	python manage.py seed_e2e frontend/e2e/seed.json
 	python manage.py runserver $(E2E_API_PORT) --noreload

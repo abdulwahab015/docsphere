@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { type Browser, expect, type Page } from '@playwright/test'
 
@@ -49,6 +51,10 @@ export const SHARING_OWNER = seededAccount('owner@sharing.e2e.test')
 export const SHARING_ALEX = seededAccount('alex@sharing.e2e.test')
 export const SHARING_BLAIR = seededAccount('blair@sharing.e2e.test')
 export const SHARING_CASEY = seededAccount('casey@sharing.e2e.test')
+export const TEAM_ADMIN = seededAccount('admin@team.e2e.test')
+export const TEAM_PROMOTE = seededAccount('promote@team.e2e.test')
+export const TEAM_LEAVER = seededAccount('leaver@team.e2e.test')
+export const TEAM_FORGETFUL = seededAccount('forgetful@team.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -117,4 +123,53 @@ export async function createDocument(page: Page, title: string) {
   await dialog.getByLabel('Title').fill(title)
   await dialog.getByRole('button', { name: 'Create document' }).click()
   await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+}
+
+// Where the e2e API writes every email it sends, one file each (`make e2e-api`
+// uses Django's file-based email backend).
+const MAILBOX = fileURLToPath(new URL('../node_modules/.tmp/e2e-mail/', import.meta.url))
+const MESSAGE_SEPARATOR = '-'.repeat(79)
+
+function emailsTo(recipient: string) {
+  if (!existsSync(MAILBOX)) {
+    return []
+  }
+  const files = readdirSync(MAILBOX)
+    .map((name) => join(MAILBOX, name))
+    .sort((first, second) => statSync(first).mtimeMs - statSync(second).mtimeMs)
+  return files
+    .flatMap((file) => readFileSync(file, 'utf-8').split(MESSAGE_SEPARATOR))
+    .filter((message) => message.includes(`To: ${recipient}`))
+    .map(decodeQuotedPrintable)
+}
+
+/** Undoes the quoted-printable encoding Django gives a long plain-text body,
+ * as a mail client would: joins soft-wrapped lines (`=` at a line end) and
+ * turns `=3D`-style escapes back into characters. Links are ASCII, so
+ * single-byte decoding is enough. */
+function decodeQuotedPrintable(message: string) {
+  if (!message.includes('Content-Transfer-Encoding: quoted-printable')) {
+    return message
+  }
+  return message
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-F]{2})/g, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** The link to `path` (e.g. `/accept-invite`) in the latest email sent to
+ * `recipient`, as the person would click it. */
+export async function emailedLink(recipient: string, path: string) {
+  const linkPattern = new RegExp(`https?://\\S+${escapeRegExp(path)}\\?\\S+`)
+  let link = ''
+  await expect
+    .poll(() => {
+      link = emailsTo(recipient).at(-1)?.match(linkPattern)?.[0] ?? ''
+      return link
+    })
+    .not.toBe('')
+  return link
 }

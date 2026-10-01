@@ -487,6 +487,94 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         self.assertTrue(invitation.token)
         mock_send_mail.assert_called_once()
 
+    def test_invitations_are_listed_without_their_tokens(self):
+        InvitationFactory(
+            organization=self.org_a, invited_by=self.admin_a, email="one@example.com"
+        )
+        InvitationFactory(
+            organization=self.org_a, invited_by=self.admin_a, email="two@example.com"
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("invitation_list_create"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for row in response.data["results"]:
+            self.assertNotIn("token", row)
+            self.assertEqual(row["invited_by_email"], "admin-a@example.com")
+            self.assertEqual(row["status"], InvitationStatus.PENDING)
+
+    @patch("core.email.send_mail")
+    def test_creating_an_invitation_does_not_return_its_token(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "invitee@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotIn("token", response.data)
+        invitation = Invitation.objects.get(email="invitee@example.com")
+        self.assertIn(invitation.token, mock_send_mail.call_args.kwargs["message"])
+
+    def test_a_pending_invitation_past_its_expiry_is_listed_as_expired(self):
+        invitation = InvitationFactory(organization=self.org_a, invited_by=self.admin_a)
+        Invitation.objects.filter(pk=invitation.pk).update(
+            sent_at=timezone.now() - settings.INVITATION_EXPIRY - timedelta(seconds=1)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("invitation_list_create"))
+
+        self.assertEqual(
+            response.data["results"][0]["status"], InvitationStatus.EXPIRED
+        )
+
+    @patch("core.email.send_mail")
+    def test_an_expired_invitation_does_not_block_inviting_the_email_again(
+        self, mock_send_mail
+    ):
+        expired = InvitationFactory(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="again@example.com",
+        )
+        Invitation.objects.filter(pk=expired.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "again@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], InvitationStatus.PENDING)
+
+    @patch("core.email.send_mail")
+    def test_expired_invitations_do_not_count_toward_the_pending_cap(
+        self, mock_send_mail
+    ):
+        expired = InvitationFactory(organization=self.org_a, invited_by=self.admin_a)
+        Invitation.objects.filter(pk=expired.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with (
+            patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1),
+            self.assertNumQueries(5),
+        ):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "extra@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
     def test_non_admin_cannot_create_invitation(self):
         self.client.force_authenticate(self.member_a)
 
@@ -566,7 +654,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             token="valid-token",
         )
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {"token": "valid-token", "password": "Str0ng-New-Pass!"},
@@ -621,7 +709,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             token="valid-token",
         )
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {"token": "valid-token", "password": "alllowercase1"},
@@ -646,6 +734,29 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_accept_invitation_fails_once_its_email_has_an_account(self):
+        """e.g. the invitee signed up an organization of their own meanwhile:
+        a refusal, not a clash creating a second user with the same email."""
+        InvitationFactory(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="taken@example.com",
+            token="valid-token",
+        )
+        UserFactory(email="taken@example.com", organization=self.org_b)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                reverse("invitation_accept"),
+                {"token": "valid-token", "password": "Str0ng-New-Pass!"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["token"], ["This invitation link is invalid or has expired."]
+        )
+        self.assertEqual(User.objects.filter(email="taken@example.com").count(), 1)
 
     def test_accept_invitation_is_rate_limited(self):
         cache.clear()
@@ -789,13 +900,14 @@ class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
         Invitation.objects.filter(pk=self.invitation.pk).update(sent_at=stale)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             response = self.client.post(self.resend_url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.invitation.refresh_from_db()
         self.assertNotEqual(self.invitation.token, "first-token")
-        self.assertEqual(response.data["token"], self.invitation.token)
+        self.assertNotIn("token", response.data)
+        self.assertEqual(response.data["status"], InvitationStatus.PENDING)
         self.assertGreater(self.invitation.sent_at, stale)
         mock_send_mail.assert_called_once()
         self.assertIn(self.invitation.token, mock_send_mail.call_args.kwargs["message"])
@@ -822,6 +934,37 @@ class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
             response = self.client.post(self.resend_url)
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_resend_refuses_an_expired_invitation_replaced_by_a_newer_one(self):
+        Invitation.objects.filter(pk=self.invitation.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        InvitationFactory(
+            organization=self.org, invited_by=self.admin, email=self.invitation.email
+        )
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"], "This email already has a pending invitation."
+        )
+        self.invitation.refresh_from_db()
+        self.assertEqual(self.invitation.token, "first-token")
+
+    def test_resend_refuses_once_the_email_has_an_account(self):
+        UserFactory(email=self.invitation.email)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"], "A user with this email already exists."
+        )
 
     def test_revoke_marks_the_invitation_revoked_and_kills_its_link(self):
         self.client.force_authenticate(self.admin)
@@ -1256,6 +1399,47 @@ class ModelStrTests(TestCase):
             self.assertEqual(str(invitation), "invitee@example.com (PENDING)")
 
 
+class InvitationStatusTests(TestCase):
+    """Expiry is worked out on read: a stored PENDING row past
+    INVITATION_EXPIRY reads as EXPIRED, and drops out of ``pending()``."""
+
+    def setUp(self):
+        self.fresh = InvitationFactory()
+        self.stale = InvitationFactory(organization=self.fresh.organization)
+        Invitation.objects.filter(pk=self.stale.pk).update(
+            sent_at=timezone.now() - settings.INVITATION_EXPIRY - timedelta(seconds=1)
+        )
+        self.stale.refresh_from_db()
+
+    def test_a_fresh_pending_invitation_is_pending(self):
+        self.assertFalse(self.fresh.is_expired)
+        self.assertEqual(self.fresh.current_status, InvitationStatus.PENDING)
+
+    def test_a_pending_invitation_past_its_expiry_reads_as_expired(self):
+        self.assertTrue(self.stale.is_expired)
+        self.assertEqual(self.stale.current_status, InvitationStatus.EXPIRED)
+        self.assertEqual(self.stale.status, InvitationStatus.PENDING)
+
+    def test_a_settled_invitation_keeps_its_status_however_old(self):
+        Invitation.objects.filter(pk=self.stale.pk).update(
+            status=InvitationStatus.ACCEPTED
+        )
+        self.stale.refresh_from_db()
+
+        self.assertFalse(self.stale.is_expired)
+        self.assertEqual(self.stale.current_status, InvitationStatus.ACCEPTED)
+
+    def test_pending_leaves_out_expired_and_settled_invitations(self):
+        InvitationFactory(
+            organization=self.fresh.organization, status=InvitationStatus.REVOKED
+        )
+
+        with self.assertNumQueries(1):
+            pending = list(Invitation.objects.pending())
+
+        self.assertEqual(pending, [self.fresh])
+
+
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
@@ -1374,6 +1558,25 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(reasons["pending@example.com"], "invitation already pending")
         mock_send_mail.assert_called_once()
         self.assertTrue(Invitation.objects.filter(email="new@example.com").exists())
+
+    @patch("core.email.send_mail")
+    def test_an_expired_invitation_does_not_block_its_row(self, mock_send_mail):
+        expired = InvitationFactory(
+            organization=self.org_a, invited_by=self.admin_a, email="late@example.com"
+        )
+        Invitation.objects.filter(pk=expired.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["late@example.com"])
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data, {"created": 1, "skipped": []})
 
     @patch("core.email.send_mail")
     def test_a_user_from_another_organization_is_skipped_not_invited(

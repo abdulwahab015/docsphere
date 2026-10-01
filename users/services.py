@@ -12,7 +12,6 @@ from rest_framework_simplejwt.token_blacklist.models import (
     OutstandingToken,
 )
 
-from users.choices import InvitationStatus
 from users.constants import (
     INVITATION_TOKEN_BYTES,
     MAX_BULK_INVITE_ROWS,
@@ -22,6 +21,9 @@ from users.models import Invitation
 from users.tasks import send_invitation_email_task
 
 User = get_user_model()
+
+USER_EXISTS_MESSAGE = "A user with this email already exists."
+INVITATION_PENDING_MESSAGE = "This email already has a pending invitation."
 
 
 def parse_invitation_emails(file):
@@ -65,6 +67,22 @@ def create_invitation(*, organization, invited_by, email):
     )
 
 
+def find_invitation_conflict(organization, email, *, renewing=None):
+    """Why ``email`` can't be sent an invitation to ``organization`` - they
+    already have an account, or a working invitation is already waiting for
+    them - or ``None`` if it can. ``renewing`` is the invitation being resent,
+    which doesn't count against itself."""
+    if User.objects.filter(email=email).exists():
+        return USER_EXISTS_MESSAGE
+
+    pending = Invitation.objects.for_organization(organization).pending()
+    if renewing:
+        pending = pending.exclude(pk=renewing.pk)
+    if pending.filter(email=email).exists():
+        return INVITATION_PENDING_MESSAGE
+    return None
+
+
 def refresh_invitation(invitation):
     """Give a pending invitation a new token and restart its expiry window.
     The previous link stops working, so only the latest email is usable."""
@@ -95,9 +113,7 @@ def bulk_create_invitations(emails, *, organization, invited_by):
         )
     }
 
-    pending_invites = Invitation.objects.for_organization(organization).filter(
-        status=InvitationStatus.PENDING
-    )
+    pending_invites = Invitation.objects.for_organization(organization).pending()
     pending_invite_emails = {
         stored.lower()
         for stored in pending_invites.filter(email__in=candidate_emails).values_list(

@@ -47,6 +47,12 @@ export type OrganizationSignupPayload = Schemas['OrganizationSignup']
 export type PasswordResetRequestPayload = Schemas['PasswordResetRequest']
 export type PasswordResetConfirmPayload = Schemas['PasswordResetConfirm']
 export type InvitationAcceptPayload = Schemas['InvitationAccept']
+// The invitation serializer is named for creating, but also lists and resends.
+export type Invitation = Schemas['InvitationCreate']
+export type InvitationStatus = Schemas['InvitationCreateStatusEnum']
+export type InvitationBulkResult = Schemas['InvitationBulkResult']
+// What admins see of a member: `RosterUser` narrowed to its admin shape.
+export type UserDetail = Schemas['UserDetail']
 
 /** DRF's page-number pagination envelope, shared by every list endpoint. */
 export interface Paginated<TItem> {

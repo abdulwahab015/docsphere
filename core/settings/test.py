@@ -33,3 +33,8 @@ PASSWORD_HASHERS = [
 ]
 
 E2E_SEEDING_ENABLED = True
+
+# The end-to-end API (`make e2e-api`) sends mail with the file-based backend so
+# the browser tests can follow the links in it (invitations, password resets);
+# this is where the files go. The test runner always uses its in-memory outbox.
+EMAIL_FILE_PATH = config("EMAIL_FILE_PATH", default="")

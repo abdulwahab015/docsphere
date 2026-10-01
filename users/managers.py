@@ -1,10 +1,26 @@
+from django.conf import settings
 from django.contrib.auth.base_user import BaseUserManager
 from django.db import models
+from django.utils import timezone
+
+from users.choices import InvitationStatus
 
 
-class InvitationManager(models.Manager):
+class InvitationQuerySet(models.QuerySet):
     def for_organization(self, organization):
         return self.filter(organization=organization)
+
+    def pending(self):
+        """Invitations whose link still works: neither accepted nor revoked,
+        and sent within ``INVITATION_EXPIRY``. The complement of
+        ``Invitation.is_expired`` among stored ``PENDING`` rows."""
+        return self.filter(
+            status=InvitationStatus.PENDING,
+            sent_at__gte=timezone.now() - settings.INVITATION_EXPIRY,
+        )
+
+
+InvitationManager = models.Manager.from_queryset(InvitationQuerySet)
 
 
 class UserManager(BaseUserManager):

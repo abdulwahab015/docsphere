@@ -633,7 +633,7 @@
                 "invitations"
               ]
             },
-            "description": "Admin-only. Response includes the raw invitation token directly (no need to read email) \u2014 handy for a live demo. In real usage the token is emailed to the invitee.",
+            "description": "Admin-only. The API never returns the token: it only travels in the invitation email. Locally the email is printed in the `runserver` console - copy the token from its `/accept-invite?token=...` link into the `invitation_token` environment variable before running \"Accept Invite\".",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -663,7 +663,7 @@
                 "exec": [
                   "pm.test('invitation created', () => pm.response.to.have.status(201));",
                   "const data = pm.response.json();",
-                  "pm.environment.set('invitation_token', data.token);"
+                  "pm.test('the token is never returned - it only travels in the email', () => pm.expect(data).to.not.have.property('token'));"
                 ]
               }
             }
@@ -722,7 +722,7 @@
                 "invitations"
               ]
             },
-            "description": "A throwaway invitation, so resending and revoking don't touch the member's real invite.",
+            "description": "A throwaway invitation, so resending and revoking don't touch the member's real invite. To see the old link fail after the resend, copy its token from the console email into `spare_invitation_token`.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -752,8 +752,7 @@
                 "exec": [
                   "pm.test('spare invitation created', () => pm.response.to.have.status(201));",
                   "const data = pm.response.json();",
-                  "pm.environment.set('spare_invitation_id', data.id);",
-                  "pm.environment.set('spare_invitation_token', data.token);"
+                  "pm.environment.set('spare_invitation_id', data.id);"
                 ]
               }
             }
@@ -799,8 +798,7 @@
                 "exec": [
                   "pm.test('invitation resent', () => pm.response.to.have.status(200));",
                   "const data = pm.response.json();",
-                  "pm.test('token was rotated', () => pm.expect(data.token).to.not.eql(pm.environment.get('spare_invitation_token')));",
-                  "pm.environment.set('spare_invitation_token', data.token);"
+                  "pm.test('the token is never returned - it only travels in the email', () => pm.expect(data).to.not.have.property('token'));"
                 ]
               }
             }
@@ -1019,7 +1017,7 @@
                 "accept"
               ]
             },
-            "description": "AllowAny. This is the ONLY way a member User row gets created \u2014 invitations never create a User directly. Creates the User (org_role=MEMBER) and logs them in.",
+            "description": "AllowAny. This is the ONLY way a member User row gets created \u2014 invitations never create a User directly. Creates the User (org_role=MEMBER) and logs them in. Before running it, set `invitation_token` from the emailed link (printed in the `runserver` console).",
             "auth": {
               "type": "noauth"
             },
