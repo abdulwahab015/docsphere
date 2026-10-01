@@ -205,6 +205,21 @@ class DocumentVisibleToTests(TestCase):
 
         self.assertEqual(list(Document.objects.visible_to(self.user)), [])
 
+    def test_hides_documents_of_a_trashed_project_until_it_is_restored(self):
+        project = ProjectFactory(organization=self.org)
+        document = DocumentFactory(project=project, visibility=Visibility.PUBLIC)
+        project.is_active = False
+        project.save(update_fields=["is_active"])
+
+        with self.assertNumQueries(1):
+            self.assertEqual(list(Document.objects.visible_to(self.user)), [])
+
+        project.is_active = True
+        project.save(update_fields=["is_active"])
+
+        with self.assertNumQueries(1):
+            self.assertEqual(list(Document.objects.visible_to(self.user)), [document])
+
 
 class ResolveAccessTests(TestCase):
     """An explicit DocumentPermission always wins; otherwise a public document
@@ -888,6 +903,18 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_restoring_a_project_brings_its_documents_back(self):
+        document = DocumentFactory(project=self.project, visibility=Visibility.PUBLIC)
+        self.client.force_authenticate(self.admin)
+        with self.assertNumQueries(2):
+            self.client.post(self.url)
+
+        self.client.force_authenticate(self.member)
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("document_list_create"))
+
+        self.assertEqual([row["id"] for row in response.data["results"]], [document.pk])
+
 
 class ProjectTrashListAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
@@ -1246,6 +1273,20 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_hides_documents_of_a_trashed_project(self):
+        DocumentFactory(project=self.project, visibility=Visibility.PUBLIC)
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            listed = self.client.get(self.url)
+        with self.assertNumQueries(1):
+            filtered = self.client.get(self.url, {"project": self.project.pk})
+
+        self.assertEqual(listed.data["count"], 0)
+        self.assertEqual(filtered.data["count"], 0)
+
 
 class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
@@ -1378,6 +1419,16 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
         self.document.refresh_from_db()
         self.assertTrue(self.document.is_active)
 
+    def test_a_document_in_a_trashed_project_is_a_404_even_for_its_owner(self):
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
 
 class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
@@ -1439,6 +1490,19 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_restoring_a_document_whose_project_is_in_the_trash_is_refused(self):
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("restore the project first", response.data["detail"])
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.is_active)
+
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class DocumentTrashListAPITests(AssumeActiveSubscription, APITestCase):
@@ -1473,6 +1537,20 @@ class DocumentTrashListAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         rows = [(row["title"], row["access_level"]) for row in response.data["results"]]
         self.assertEqual(rows, [("Mine", AccessLevel.OWNER)])
+
+    def test_still_lists_own_deleted_documents_of_a_trashed_project(self):
+        document = DocumentFactory(project=self.project, is_active=False)
+        DocumentPermissionFactory(
+            document=document, user=self.user, access_level=AccessLevel.OWNER
+        )
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual([row["id"] for row in response.data["results"]], [document.pk])
 
 
 class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
@@ -1844,6 +1922,16 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_sharing_a_document_in_a_trashed_project_is_a_404(self):
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
 
 class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
@@ -2140,6 +2228,17 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_requesting_access_to_a_document_in_a_trashed_project_is_a_404(self):
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(DocumentAccessRequest.objects.exists())
+
 
 class DocumentAccessRequestListsAPITests(AssumeActiveSubscription, APITestCase):
     """The requester's own requests, and an Owner's inbox of pending ones
@@ -2248,6 +2347,21 @@ class DocumentAccessRequestListsAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.get(reverse("document_access_request_incoming"))
 
         self.assertEqual(response.data["results"], [])
+
+    def test_leaves_out_requests_on_documents_of_a_trashed_project(self):
+        DocumentAccessRequestFactory(document=self.first, requested_by=self.requester)
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+
+        self.client.force_authenticate(self.requester)
+        with self.assertNumQueries(1):
+            mine = self.client.get(reverse("document_access_request_mine"))
+        self.client.force_authenticate(self.owner)
+        with self.assertNumQueries(1):
+            incoming = self.client.get(reverse("document_access_request_incoming"))
+
+        self.assertEqual(mine.data["count"], 0)
+        self.assertEqual(incoming.data["count"], 0)
 
 
 class DocumentTasksTests(TestCase):

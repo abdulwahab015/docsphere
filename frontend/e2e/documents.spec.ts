@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 
 import {
+  createDocument,
+  createProject,
   DOCS_ADMIN,
   DOCS_READER,
   DOCS_STRANGER,
@@ -159,4 +161,49 @@ test('asks before leaving a document with unsaved changes', async ({ page }) => 
   await projectsLink.click()
   await confirm.getByRole('button', { name: 'Discard changes' }).click()
   await expect(page).toHaveURL(/\/projects$/)
+})
+
+test("deleting a project hides its documents until it's restored", async ({ page }) => {
+  const project = uniqueName('Archive')
+  const kept = uniqueName('Kept doc')
+  const deletedAlone = uniqueName('Deleted doc')
+  const documentsSearch = page.getByRole('searchbox', { name: 'Search documents' })
+  await logIn(page, DOCS_ADMIN)
+
+  // A project with two documents, one of them then deleted on its own.
+  await createProject(page, project, 'Private')
+  await expect(page.getByRole('heading', { level: 1, name: project })).toBeVisible()
+  await createDocument(page, kept)
+  await openProject(page, project)
+  await createDocument(page, deletedAlone)
+  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete document' }).click()
+  await expect(page.getByText(`Moved "${deletedAlone}" to your trash.`)).toBeVisible()
+
+  // Deleting the project takes its remaining document with it.
+  await openProject(page, project)
+  await page.getByRole('button', { name: 'Delete' }).click()
+  const confirm = page.getByRole('alertdialog')
+  await expect(confirm.getByText(/along with every document filed under it/)).toBeVisible()
+  await confirm.getByRole('button', { name: 'Delete project' }).click()
+  await page.goto('/documents')
+  await documentsSearch.fill(kept)
+  await expect(page.getByRole('heading', { name: 'No matches' })).toBeVisible()
+
+  // A document can't come back on its own while its project is in the trash.
+  await page.goto('/documents/trash')
+  await page.getByRole('button', { name: `Restore ${deletedAlone}` }).click()
+  await expect(page.getByText(/restore the project first/)).toBeVisible()
+
+  // Restoring the project brings its document back...
+  await page.goto('/projects/trash')
+  await page.getByRole('button', { name: `Restore ${project}` }).click()
+  await expect(page.getByText(`Restored "${project}".`)).toBeVisible()
+  await openDocument(page, kept)
+
+  // ...and now the separately deleted one can be restored too.
+  await page.goto('/documents/trash')
+  await page.getByRole('button', { name: `Restore ${deletedAlone}` }).click()
+  await expect(page.getByText(`Restored "${deletedAlone}".`)).toBeVisible()
+  await openDocument(page, deletedAlone)
 })

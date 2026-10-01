@@ -37,7 +37,7 @@ export function DeleteProjectButton({ project }: { project: Project }) {
         </Button>
       }
       title={`Delete "${project.name}"?`}
-      description="It moves to the trash and disappears for everyone. An organization admin can restore it."
+      description="It moves to the trash and disappears for everyone, along with every document filed under it. An organization admin can restore it, which brings its documents back too."
       confirmLabel="Delete project"
       onConfirm={moveToTrash}
       isPending={deleteProject.isPending}

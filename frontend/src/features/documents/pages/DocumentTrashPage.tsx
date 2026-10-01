@@ -3,6 +3,8 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 
 import { PATHS } from '@/app/paths'
+import { HTTP_STATUS } from '@/api/constants'
+import { parseApiError } from '@/api/errors'
 import type { Document } from '@/api/types'
 import { VisibilityBadge } from '@/components/AccessBadges'
 import { EmptyState } from '@/components/EmptyState'
@@ -31,7 +33,16 @@ export function DocumentTrashPage() {
   const restoreDocument = (document: Document) =>
     restore.mutate(document.id, {
       onSuccess: () => toast.success(`Restored "${document.title}".`),
-      onError: () => toast.error(`Couldn't restore "${document.title}".`),
+      onError: (error) => {
+        // A 400 carries a reason worth reading - e.g. the document's project is
+        // in the trash and must be restored first. Anything else is generic.
+        const { status, formMessage } = parseApiError(error)
+        toast.error(
+          status === HTTP_STATUS.badRequest && formMessage
+            ? formMessage
+            : `Couldn't restore "${document.title}".`,
+        )
+      },
     })
 
   return (

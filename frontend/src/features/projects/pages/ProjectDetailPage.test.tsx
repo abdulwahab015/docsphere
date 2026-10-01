@@ -167,7 +167,9 @@ describe('ProjectDetailPage', () => {
 
       await user.click(await screen.findByRole('button', { name: 'Delete' }))
       const confirm = await screen.findByRole('alertdialog', { name: 'Delete "Roadmap"?' })
-      expect(within(confirm).getByText(/An organization admin can restore it/)).toBeInTheDocument()
+      expect(
+        within(confirm).getByText(/along with every document filed under it/),
+      ).toBeInTheDocument()
       await user.click(within(confirm).getByRole('button', { name: 'Delete project' }))
 
       expect(await screen.findByText('Moved "Roadmap" to the trash.')).toBeInTheDocument()
