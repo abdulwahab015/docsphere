@@ -58,6 +58,19 @@ export function clearSession(queryClient: QueryClient) {
   queryClient.setQueryData(authKeys.currentUser, null)
 }
 
+/** Ends the session because the user chose to log out. Unlike an expired
+ * session, this doesn't remember the page they were on: whoever signs in next
+ * on this tab may be someone else. Cleared with the rest of the cached data
+ * when the next session starts. */
+export function endSessionDeliberately(queryClient: QueryClient) {
+  clearSession(queryClient)
+  queryClient.setQueryData(authKeys.deliberateSignOut, true)
+}
+
+export function wasSignedOutDeliberately(queryClient: QueryClient) {
+  return Boolean(queryClient.getQueryData(authKeys.deliberateSignOut))
+}
+
 /**
  * Another tab signed in or out. The refresh cookie is shared between tabs, so
  * this tab forgets its own token and data and re-reads the session from the

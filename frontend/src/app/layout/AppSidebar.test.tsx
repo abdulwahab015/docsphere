@@ -24,7 +24,7 @@ describe('AppSidebar', () => {
   it('marks the current section and navigates between sections', async () => {
     const { router, user } = renderRoute('/', { signedInAs: buildCurrentUser() })
 
-    expect(mainNavigation().getByRole('link', { name: 'Home' })).toHaveAttribute(
+    expect(mainNavigation().getByRole('link', { name: 'Projects' })).toHaveAttribute(
       'aria-current',
       'page',
     )

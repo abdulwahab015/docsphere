@@ -11,7 +11,12 @@ import {
   signupOrganization,
 } from '@/features/auth/api'
 import { authKeys } from '@/features/auth/query-keys'
-import { clearSession, loadSession, resyncSession, startSession } from '@/features/auth/session'
+import {
+  endSessionDeliberately,
+  loadSession,
+  resyncSession,
+  startSession,
+} from '@/features/auth/session'
 import { announceSessionChange, onSessionChangeElsewhere } from '@/features/auth/session-broadcast'
 import { OrganizationMemberContext, SignedInUserContext } from '@/features/auth/session-context'
 
@@ -67,7 +72,7 @@ export function useLogout() {
     // Signed out locally even if the server call fails: the cookie may already
     // be gone, and the user asked to leave either way.
     onSettled: () => {
-      clearSession(queryClient)
+      endSessionDeliberately(queryClient)
       announceSessionChange()
     },
   })

@@ -20,9 +20,8 @@ import {
 import { useSignedInMember } from '@/features/auth/hooks'
 
 function NavItemLink({ item }: { item: NavItem }) {
-  // Home is only active on itself; other sections stay active on their sub-pages.
-  const exact = item.path === PATHS.home
-  const isActive = Boolean(useMatch({ path: item.path, end: exact }))
+  // A section stays active on its sub-pages (e.g. a project's own page).
+  const isActive = Boolean(useMatch({ path: item.path, end: false }))
   const { setOpenMobile } = useSidebar()
 
   return (
@@ -30,7 +29,7 @@ function NavItemLink({ item }: { item: NavItem }) {
       <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
         {/* On a phone the navigation is a drawer over the page; close it once a
             destination is picked. (A no-op on larger screens.) */}
-        <NavLink to={item.path} end={exact} onClick={() => setOpenMobile(false)}>
+        <NavLink to={item.path} onClick={() => setOpenMobile(false)}>
           <item.icon aria-hidden />
           <span>{item.label}</span>
         </NavLink>
@@ -50,7 +49,7 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <Link to={PATHS.home}>
+              <Link to={PATHS.projects}>
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <FileTextIcon className="size-4" aria-hidden />
                 </div>

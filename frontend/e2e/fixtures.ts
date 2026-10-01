@@ -8,6 +8,7 @@ interface SeedFile {
     name: string
     users: { email: string; role: 'ADMIN' | 'MEMBER' }[]
     extra_members?: number
+    projects?: { name: string }[]
   }[]
 }
 
@@ -21,19 +22,24 @@ export interface Account {
   organization: string
 }
 
-function seededAccount(organizationName: string, role: 'ADMIN' | 'MEMBER'): Account {
-  const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
-  const user = organization?.users.find((candidate) => candidate.role === role)
-  if (!organization || !user) {
-    throw new Error(`e2e/seed.json has no ${role} in "${organizationName}".`)
+function seededAccount(email: string): Account {
+  const organization = seed.organizations.find((candidate) =>
+    candidate.users.some((user) => user.email === email),
+  )
+  if (!organization) {
+    throw new Error(`e2e/seed.json has no user "${email}".`)
   }
-  return { email: user.email, password: seed.password, organization: organization.name }
+  return { email, password: seed.password, organization: organization.name }
 }
 
-export const ACME_ADMIN = seededAccount('Acme E2E', 'ADMIN')
-export const ACME_MEMBER = seededAccount('Acme E2E', 'MEMBER')
-export const SETTINGS_ADMIN = seededAccount('Settings E2E', 'ADMIN')
-export const LAPSED_ADMIN = seededAccount('Lapsed E2E', 'ADMIN')
+export const ACME_ADMIN = seededAccount('admin@acme.e2e.test')
+export const ACME_MEMBER = seededAccount('member@acme.e2e.test')
+export const SETTINGS_ADMIN = seededAccount('admin@settings.e2e.test')
+export const LAPSED_ADMIN = seededAccount('admin@lapsed.e2e.test')
+export const PROJECTS_ADMIN = seededAccount('admin@projects.e2e.test')
+export const PROJECTS_EDITOR = seededAccount('editor@projects.e2e.test')
+export const PROJECTS_VIEWER = seededAccount('viewer@projects.e2e.test')
+export const PROJECTS_OUTSIDER = seededAccount('outsider@projects.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -50,11 +56,22 @@ export async function fillLoginForm(page: Page, account: Account) {
 export async function logIn(page: Page, account: Account) {
   await page.goto('/login')
   await fillLoginForm(page, account)
-  await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
 }
 
 export async function logOut(page: Page) {
   await page.getByRole('button', { name: 'Account menu' }).click()
   await page.getByRole('menuitem', { name: 'Log out' }).click()
   await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible()
+}
+
+/** A name no seeded project or earlier run uses, for tests that create one. */
+export function uniqueName(prefix: string) {
+  return `${prefix} ${Date.now()}`
+}
+
+export async function openProject(page: Page, name: string) {
+  await page.goto('/projects')
+  await page.getByRole('link', { name, exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
 }

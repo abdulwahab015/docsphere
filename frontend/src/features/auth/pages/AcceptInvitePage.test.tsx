@@ -1,6 +1,7 @@
 import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
+import { findAccountMenu } from '@/test/actions'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
@@ -26,8 +27,8 @@ describe('AcceptInvitePage', () => {
 
     await choosePassword(user)
 
-    expect(await screen.findByText(/Signed in as ada@example.com/)).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe('/')
+    expect(await findAccountMenu()).toHaveTextContent('ada@example.com')
+    expect(router.state.location.pathname).toBe('/projects')
     expect(await accept.mock.calls[0][0].request.json()).toEqual({
       token: 'invite-token',
       password: PASSWORD,

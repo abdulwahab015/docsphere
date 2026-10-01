@@ -13,10 +13,12 @@ export function spyResolver(resolver: HttpResponseResolver) {
   return vi.fn<HttpResponseResolver>(resolver)
 }
 
-// By default nobody is signed in: the browser holds no refresh cookie, which
-// the refresh endpoint answers with a 400.
 export const server = setupServer(
+  // By default nobody is signed in: the browser holds no refresh cookie,
+  // which the refresh endpoint answers with a 400.
   http.post(apiUrl(REFRESH_PATH), () =>
     HttpResponse.json({ refresh: ['This field may not be null.'] }, { status: 400 }),
   ),
+  // Signing in lands on the projects list; by default there are none.
+  http.get(apiUrl('/projects/'), () => HttpResponse.json({ count: 0, results: [] })),
 )

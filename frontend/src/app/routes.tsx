@@ -1,4 +1,4 @@
-import type { RouteObject } from 'react-router'
+import { Navigate, type RouteObject } from 'react-router'
 
 import { AppLayout } from '@/app/layout/AppLayout'
 import { RootLayout } from '@/app/layout/RootLayout'
@@ -14,7 +14,9 @@ import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage'
 import { SignupPage } from '@/features/auth/pages/SignupPage'
 import { OrganizationSettingsPage } from '@/features/organization/pages/OrganizationSettingsPage'
 import { PeoplePage } from '@/features/people/pages/PeoplePage'
-import { HomePage } from '@/pages/HomePage'
+import { ProjectDetailPage } from '@/features/projects/pages/ProjectDetailPage'
+import { ProjectsPage } from '@/features/projects/pages/ProjectsPage'
+import { ProjectTrashPage } from '@/features/projects/pages/ProjectTrashPage'
 import { RouteErrorPage } from '@/pages/RouteErrorPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 
@@ -43,11 +45,14 @@ export const routes: RouteObject[] = [
               {
                 element: <AppLayout />,
                 children: [
-                  { path: PATHS.home, element: <HomePage /> },
+                  { path: PATHS.home, element: <Navigate to={PATHS.projects} replace /> },
+                  { path: PATHS.projects, element: <ProjectsPage /> },
+                  { path: PATHS.projectDetail, element: <ProjectDetailPage /> },
                   { path: PATHS.people, element: <PeoplePage /> },
                   {
                     element: <RequireOrgAdmin />,
                     children: [
+                      { path: PATHS.projectTrash, element: <ProjectTrashPage /> },
                       {
                         path: PATHS.organizationSettings,
                         element: <OrganizationSettingsPage />,

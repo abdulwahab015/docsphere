@@ -1,4 +1,4 @@
-import { BuildingIcon, HouseIcon, type LucideIcon, UsersIcon } from 'lucide-react'
+import { BuildingIcon, FolderIcon, type LucideIcon, UsersIcon } from 'lucide-react'
 
 import { PATHS } from '@/app/paths'
 
@@ -11,7 +11,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { label: 'Home', path: PATHS.home, icon: HouseIcon },
+  { label: 'Projects', path: PATHS.projects, icon: FolderIcon },
   { label: 'People', path: PATHS.people, icon: UsersIcon },
   {
     label: 'Organization',
