@@ -2,6 +2,7 @@ import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import { REFRESH_PATH } from '@/api/constants'
+import { findAccountMenu } from '@/test/actions'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server } from '@/test/server'
@@ -15,7 +16,7 @@ describe('SessionLoader', () => {
     renderRoute('/')
 
     expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument()
-    expect(await screen.findByText(/Signed in as ada@example.com/)).toBeInTheDocument()
+    expect(await findAccountMenu()).toHaveTextContent('ada@example.com')
   })
 
   it('offers a retry when the server is unreachable', async () => {

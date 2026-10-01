@@ -1,16 +1,15 @@
 import type { ActiveSubscription } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { formatLongDate } from '@/lib/format'
 
 const INTERVAL_LABELS: Record<string, string> = { month: 'Monthly', year: 'Yearly' }
-
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'long' })
 
 function renewalText(subscription: ActiveSubscription) {
   if (!subscription.current_period_end) {
     return undefined
   }
-  const date = dateFormat.format(new Date(subscription.current_period_end))
+  const date = formatLongDate(subscription.current_period_end)
   return subscription.cancel_at_period_end ? `Ends on ${date}` : `Renews on ${date}`
 }
 

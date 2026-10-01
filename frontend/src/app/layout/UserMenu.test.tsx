@@ -16,6 +16,19 @@ describe('UserMenu', () => {
     expect(menuButton).toHaveTextContent('Admin · Acme')
   })
 
+  it("doesn't send the next person to sign in back to the previous user's page", async () => {
+    server.use(
+      http.post(apiUrl('/users/auth/logout/'), () => new HttpResponse(null, { status: 205 })),
+      http.get(apiUrl('/users/'), () => HttpResponse.json({ count: 0, results: [] })),
+    )
+    const { router, user } = renderRoute('/people', { signedInAs: buildCurrentUser() })
+
+    await logOutViaAccountMenu(user)
+
+    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument()
+    expect(router.state.location.state).toBeNull()
+  })
+
   it('logs out and returns to the login page', async () => {
     const logout = spyResolver(() => new HttpResponse(null, { status: 205 }))
     server.use(http.post(apiUrl('/users/auth/logout/'), logout))

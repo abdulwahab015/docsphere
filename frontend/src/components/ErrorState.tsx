@@ -17,13 +17,7 @@ export function ErrorState({ error, onRetry }: ErrorStateProps) {
   const { status, formMessage } = parseApiError(error)
 
   if (status === HTTP_STATUS.notFound) {
-    return (
-      <EmptyState
-        icon={SearchXIcon}
-        title="Not found"
-        description="It may have been deleted, or the link may be wrong."
-      />
-    )
+    return <NotFoundState />
   }
   if (status === HTTP_STATUS.forbidden) {
     return <ForbiddenState />
@@ -50,6 +44,16 @@ export function ForbiddenState() {
       icon={LockIcon}
       title="You don't have access"
       description="Ask your organization admin if you need this."
+    />
+  )
+}
+
+export function NotFoundState() {
+  return (
+    <EmptyState
+      icon={SearchXIcon}
+      title="Not found"
+      description="It may have been deleted, or the link may be wrong."
     />
   )
 }

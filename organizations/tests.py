@@ -23,6 +23,7 @@ from organizations.factories import (
     StripeSubscriptionFactory,
 )
 from organizations.models import Organization
+from projects.models import Project
 from users.factories import AdminUserFactory, UserFactory
 
 User = get_user_model()
@@ -391,6 +392,28 @@ class SeedE2ECommandTests(TestCase):
                 "subscribed": False,
                 "users": [{"email": "member@unpaid.test", "role": "MEMBER"}],
             },
+            {
+                "name": "Project Org",
+                "subscribed": True,
+                "users": [
+                    {"email": "owner@projects.test", "role": "ADMIN"},
+                    {"email": "editor@projects.test", "role": "MEMBER"},
+                ],
+                "projects": [
+                    {
+                        "name": "Roadmap",
+                        "visibility": "PRIVATE",
+                        "owner": "owner@projects.test",
+                        "shared_with": {"editor@projects.test": "EDITOR"},
+                    },
+                    {
+                        "name": "Archived",
+                        "visibility": "PUBLIC",
+                        "owner": "owner@projects.test",
+                        "in_trash": True,
+                    },
+                ],
+            },
         ],
     }
 
@@ -400,7 +423,7 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(20):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
@@ -411,6 +434,21 @@ class SeedE2ECommandTests(TestCase):
         admin = User.objects.get(email="admin@paid.test")
         self.assertEqual(admin.org_role, "ADMIN")
         self.assertTrue(admin.check_password("Seed-Pass-123!"))
+
+    def test_seeds_projects_with_their_owner_and_shares(self):
+        with self.assertNumQueries(20):
+            call_command("seed_e2e", self.seed_path, stdout=StringIO())
+
+        roadmap = Project.objects.get(name="Roadmap")
+        self.assertEqual(roadmap.created_by.email, "owner@projects.test")
+        self.assertTrue(roadmap.is_active)
+        self.assertEqual(
+            dict(roadmap.permissions.values_list("user__email", "access_level")),
+            {"owner@projects.test": "OWNER", "editor@projects.test": "EDITOR"},
+        )
+        archived = Project.objects.get(name="Archived")
+        self.assertFalse(archived.is_active)
+        self.assertEqual(archived.visibility, "PUBLIC")
 
     @override_settings(E2E_SEEDING_ENABLED=False)
     def test_refuses_to_run_where_seeding_is_disabled(self):

@@ -2,6 +2,7 @@ import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import { REFRESH_PATH } from '@/api/constants'
+import { findAccountMenu } from '@/test/actions'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
@@ -32,7 +33,7 @@ describe('LoginPage', () => {
 
     await fillAndSubmit(user)
 
-    expect(await screen.findByText(/Signed in as ada@example.com/)).toBeInTheDocument()
+    expect(await findAccountMenu()).toHaveTextContent('ada@example.com')
     expect(await login.mock.calls[0][0].request.json()).toEqual({
       email: 'ada@example.com',
       password: 'Sup3r-secret!',
@@ -41,12 +42,13 @@ describe('LoginPage', () => {
 
   it('returns to the page the user was headed to', async () => {
     serveLogin()
-    const { router, user } = renderRoute('/?tab=recent')
+    server.use(http.get(apiUrl('/users/'), () => HttpResponse.json({ count: 0, results: [] })))
+    const { router, user } = renderRoute('/people?search=ada')
 
     await fillAndSubmit(user)
 
-    await screen.findByText(/Signed in as/)
-    expect(router.state.location).toMatchObject({ pathname: '/', search: '?tab=recent' })
+    await findAccountMenu()
+    expect(router.state.location).toMatchObject({ pathname: '/people', search: '?search=ada' })
   })
 
   it("shows the server's message for wrong credentials without refreshing", async () => {

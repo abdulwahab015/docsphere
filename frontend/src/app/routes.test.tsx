@@ -4,11 +4,11 @@ import { buildCurrentUser } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 
 describe('routes', () => {
-  it('shows the home page to a signed-in user', () => {
-    renderRoute('/', { signedInAs: buildCurrentUser() })
+  it('opens a signed-in user on their projects', async () => {
+    const { router } = renderRoute('/', { signedInAs: buildCurrentUser() })
 
-    expect(screen.getByRole('heading', { level: 1, name: 'Home' })).toBeInTheDocument()
-    expect(screen.getByText('Signed in as ada@example.com')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/projects')
   })
 
   it('sends a signed-out visitor to the login page', async () => {
@@ -21,7 +21,7 @@ describe('routes', () => {
   it('sends a signed-in user away from the login page', () => {
     const { router } = renderRoute('/login', { signedInAs: buildCurrentUser() })
 
-    expect(router.state.location.pathname).toBe('/')
+    expect(router.state.location.pathname).toBe('/projects')
   })
 
   it('renders the not-found page for an unknown path', () => {
@@ -35,6 +35,6 @@ describe('routes', () => {
 
     await user.click(screen.getByRole('link', { name: 'Go home' }))
 
-    expect(router.state.location.pathname).toBe('/')
+    expect(router.state.location.pathname).toBe('/projects')
   })
 })

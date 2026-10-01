@@ -1,15 +1,16 @@
 import { screen } from '@testing-library/react'
 
+import { findAccountMenu } from '@/test/actions'
 import { buildCurrentUser } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 
 const lapsedOrganization = { id: 1, name: 'Acme', has_active_subscription: false }
 
 describe('RequireActiveSubscription', () => {
-  it('lets members of a subscribed organization through', () => {
+  it('lets members of a subscribed organization through', async () => {
     renderRoute('/', { signedInAs: buildCurrentUser() })
 
-    expect(screen.getByText(/Signed in as/)).toBeInTheDocument()
+    expect(await findAccountMenu()).toBeInTheDocument()
   })
 
   it('asks an admin to subscribe', () => {
@@ -19,7 +20,7 @@ describe('RequireActiveSubscription', () => {
 
     expect(screen.getByRole('heading', { name: 'Subscription inactive' })).toBeInTheDocument()
     expect(screen.getByText(/Subscribe to a plan/)).toBeInTheDocument()
-    expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Account menu' })).not.toBeInTheDocument()
   })
 
   it('turns away an account that belongs to no organization', () => {

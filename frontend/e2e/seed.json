@@ -5,20 +5,86 @@
       "name": "Acme E2E",
       "subscribed": true,
       "users": [
-        { "email": "admin@acme.e2e.test", "role": "ADMIN" },
-        { "email": "member@acme.e2e.test", "role": "MEMBER" }
+        {
+          "email": "admin@acme.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@acme.e2e.test",
+          "role": "MEMBER"
+        }
       ],
       "extra_members": 22
     },
     {
       "name": "Settings E2E",
       "subscribed": true,
-      "users": [{ "email": "admin@settings.e2e.test", "role": "ADMIN" }]
+      "users": [
+        {
+          "email": "admin@settings.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
     },
     {
       "name": "Lapsed E2E",
       "subscribed": false,
-      "users": [{ "email": "admin@lapsed.e2e.test", "role": "ADMIN" }]
+      "users": [
+        {
+          "email": "admin@lapsed.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
+    },
+    {
+      "name": "Projects E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@projects.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "editor@projects.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "viewer@projects.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "outsider@projects.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Roadmap",
+          "description": "Where the team is headed.",
+          "visibility": "PRIVATE",
+          "owner": "admin@projects.e2e.test",
+          "shared_with": {
+            "editor@projects.e2e.test": "EDITOR",
+            "viewer@projects.e2e.test": "VIEWER"
+          }
+        },
+        {
+          "name": "Handbook",
+          "visibility": "PUBLIC",
+          "owner": "admin@projects.e2e.test"
+        },
+        {
+          "name": "Secret plans",
+          "visibility": "PRIVATE",
+          "owner": "admin@projects.e2e.test"
+        },
+        {
+          "name": "Archived launch",
+          "visibility": "PRIVATE",
+          "owner": "admin@projects.e2e.test",
+          "in_trash": true
+        }
+      ]
     }
   ]
 }

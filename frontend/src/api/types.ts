@@ -13,6 +13,17 @@ export type OrganizationUpdatePayload = Pick<
 export type ActiveSubscription = Schemas['ActiveSubscription']
 // Admins also receive `org_role` and `created`; members get only `id` and `email`.
 export type RosterUser = Schemas['RosterUser']
+export type AccessLevel = Schemas['AccessLevelEnum']
+export type Visibility = Schemas['VisibilityEnum']
+// The API always returns `visibility`. The schema marks it optional only
+// because the field has a model default (so it may be omitted when
+// creating), and drf-spectacular carries that into the response type.
+export type Project = Omit<Schemas['Project'], 'visibility'> & { visibility: Visibility }
+export type ProjectCreatePayload = Pick<Schemas['Project'], 'name' | 'description' | 'visibility'>
+export type ProjectUpdatePayload = Pick<
+  Schemas['PatchedProject'],
+  'name' | 'description' | 'visibility'
+>
 export type TokenPair = Schemas['TokenPair']
 export type LoginPayload = Schemas['Login']
 export type OrganizationSignupPayload = Schemas['OrganizationSignup']

@@ -9,8 +9,10 @@ test.describe('signing in and out', () => {
     // A fresh page load has no access token in memory: the session comes back
     // from the HttpOnly refresh cookie.
     await page.reload()
-    await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
-    await expect(page.getByText(`Signed in as ${ACME_MEMBER.email}`)).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Account menu' })).toContainText(
+      ACME_MEMBER.email,
+    )
 
     await logOut(page)
     await page.reload()

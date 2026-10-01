@@ -6,9 +6,11 @@ import { REFRESH_PATH } from '@/api/constants'
 import { authKeys } from '@/features/auth/query-keys'
 import {
   clearSession,
+  endSessionDeliberately,
   handleSessionError,
   loadSession,
   startSession,
+  wasSignedOutDeliberately,
 } from '@/features/auth/session'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
 import { createTestQueryClient } from '@/test/render'
@@ -91,6 +93,32 @@ describe('clearSession', () => {
     expect(getAccessToken()).toBeNull()
     expect(queryClient.getQueryData(authKeys.currentUser)).toBeNull()
     expect(queryClient.getQueryData(OTHER_DATA_KEY)).toBeUndefined()
+  })
+})
+
+describe('endSessionDeliberately', () => {
+  it('ends the session and remembers it was a choice, until the next sign-in', async () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
+
+    endSessionDeliberately(queryClient)
+
+    expect(queryClient.getQueryData(authKeys.currentUser)).toBeNull()
+    expect(wasSignedOutDeliberately(queryClient)).toBe(true)
+
+    serveCurrentUser()
+    await startSession(queryClient, buildTokenPair())
+
+    expect(wasSignedOutDeliberately(queryClient)).toBe(false)
+  })
+
+  it('is not how an expired session ends', () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
+
+    clearSession(queryClient)
+
+    expect(wasSignedOutDeliberately(queryClient)).toBe(false)
   })
 })
 

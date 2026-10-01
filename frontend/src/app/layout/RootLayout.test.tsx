@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { getAccessToken } from '@/api/access-token'
 import { REFRESH_PATH } from '@/api/constants'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
-import { logOutViaAccountMenu } from '@/test/actions'
+import { findAccountMenu, logOutViaAccountMenu } from '@/test/actions'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server } from '@/test/server'
 
@@ -51,7 +51,9 @@ describe('RootLayout', () => {
 
       otherTab.postMessage(SESSION_CHANGED)
 
-      expect(await screen.findByText(/Signed in as grace@example.com/)).toBeInTheDocument()
+      await expect
+        .poll(async () => (await findAccountMenu()).textContent)
+        .toContain('grace@example.com')
     })
 
     it('ignores unrelated messages on the channel', async () => {
@@ -60,7 +62,7 @@ describe('RootLayout', () => {
       otherTab.postMessage('something-else')
       await new Promise((resolve) => setTimeout(resolve, 50))
 
-      expect(screen.getByText(/Signed in as ada@example.com/)).toBeInTheDocument()
+      expect(await findAccountMenu()).toHaveTextContent('ada@example.com')
     })
   })
 
