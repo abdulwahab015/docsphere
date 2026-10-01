@@ -123,6 +123,16 @@ class DocumentSerializer(AccessLevelModelSerializer):
         ]
 
 
+class DocumentCreateSerializer(DocumentSerializer):
+    """The create request: ``DocumentSerializer`` plus the optional ``project``
+    to file the new document under (omitted or null for a personal document).
+    The view resolves and checks that project itself - one the caller can't
+    see is a 404, one they can't edit a 403 - so this field only documents
+    the input; responses keep using ``DocumentSerializer``."""
+
+    project = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+
+
 class ShareSerializer(serializers.Serializer):
     """Validates a grant/re-share request: a target user (by id) and the
     ``AccessLevel`` to give them. The target user must belong to the same

@@ -10,10 +10,17 @@ export const PATHS = {
   projects: '/projects',
   projectDetail: '/projects/:projectId',
   projectTrash: '/projects/trash',
+  documents: '/documents',
+  documentDetail: '/documents/:documentId',
+  documentTrash: '/documents/trash',
   people: '/people',
   organizationSettings: '/settings/organization',
 } as const
 
 export function projectPath(projectId: number) {
   return `${PATHS.projects}/${projectId}`
+}
+
+export function documentPath(documentId: number) {
+  return `${PATHS.documents}/${documentId}`
 }

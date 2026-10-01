@@ -10,14 +10,19 @@ from organizations.factories import (
     StripeSubscriptionFactory,
 )
 from projects.choices import AccessLevel
-from projects.factories import ProjectFactory, ProjectPermissionFactory
+from projects.factories import (
+    DocumentFactory,
+    DocumentPermissionFactory,
+    ProjectFactory,
+    ProjectPermissionFactory,
+)
 from users.factories import UserFactory
 
 
 class Command(BaseCommand):
     help = (
-        "Creates the organizations, users, subscriptions and projects described "
-        "in a JSON seed file, for the frontend's end-to-end tests. Only runs "
+        "Creates the organizations, users, subscriptions, projects and documents "
+        "described in a JSON seed file, for the frontend's end-to-end tests. Only runs "
         "where E2E_SEEDING_ENABLED is on (never in production)."
     )
 
@@ -59,8 +64,16 @@ class Command(BaseCommand):
             spec.get("extra_members", 0), organization=organization, password=password
         )
 
-        for project_spec in spec.get("projects", []):
-            self._seed_project(project_spec, organization, users_by_email)
+        projects_by_name = {
+            project_spec["name"]: self._seed_project(
+                project_spec, organization, users_by_email
+            )
+            for project_spec in spec.get("projects", [])
+        }
+        for document_spec in spec.get("documents", []):
+            self._seed_document(
+                document_spec, organization, users_by_email, projects_by_name
+            )
 
     def _seed_project(self, spec, organization, users_by_email):
         """Mirrors project creation through the API: the creator gets an Owner
@@ -80,4 +93,28 @@ class Command(BaseCommand):
         for email, access_level in spec.get("shared_with", {}).items():
             ProjectPermissionFactory(
                 project=project, user=users_by_email[email], access_level=access_level
+            )
+        return project
+
+    def _seed_document(self, spec, organization, users_by_email, projects_by_name):
+        """Mirrors document creation through the API: personal, or filed under
+        a seeded project by name; the creator gets an Owner permission row.
+        Access to the project grants nothing here - only the listed shares do."""
+        owner = users_by_email[spec["owner"]]
+        project_name = spec.get("project")
+        document = DocumentFactory(
+            organization=organization,
+            project=projects_by_name[project_name] if project_name else None,
+            created_by=owner,
+            title=spec["title"],
+            content=spec.get("content", ""),
+            visibility=spec["visibility"],
+            is_active=not spec.get("in_trash", False),
+        )
+        DocumentPermissionFactory(
+            document=document, user=owner, access_level=AccessLevel.OWNER
+        )
+        for email, access_level in spec.get("shared_with", {}).items():
+            DocumentPermissionFactory(
+                document=document, user=users_by_email[email], access_level=access_level
             )

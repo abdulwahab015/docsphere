@@ -19,6 +19,8 @@ export const server = setupServer(
   http.post(apiUrl(REFRESH_PATH), () =>
     HttpResponse.json({ refresh: ['This field may not be null.'] }, { status: 400 }),
   ),
-  // Signing in lands on the projects list; by default there are none.
+  // Signing in lands on the projects list; by default there are none, and no
+  // documents either (a project's page lists its documents).
   http.get(apiUrl('/projects/'), () => HttpResponse.json({ count: 0, results: [] })),
+  http.get(apiUrl('/documents/'), () => HttpResponse.json({ count: 0, results: [] })),
 )

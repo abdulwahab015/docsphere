@@ -24,6 +24,16 @@ export type ProjectUpdatePayload = Pick<
   Schemas['PatchedProject'],
   'name' | 'description' | 'visibility'
 >
+// Same default-value quirk as `Project.visibility`.
+export type Document = Omit<Schemas['Document'], 'visibility'> & { visibility: Visibility }
+export type DocumentCreatePayload = Pick<
+  Schemas['DocumentCreate'],
+  'title' | 'content' | 'visibility' | 'project'
+>
+export type DocumentUpdatePayload = Pick<
+  Schemas['PatchedDocument'],
+  'title' | 'content' | 'visibility'
+>
 export type TokenPair = Schemas['TokenPair']
 export type LoginPayload = Schemas['Login']
 export type OrganizationSignupPayload = Schemas['OrganizationSignup']

@@ -10,3 +10,13 @@ export function formatDate(isoTimestamp: string) {
 export function formatLongDate(isoTimestamp: string) {
   return longDateFormat.format(new Date(isoTimestamp))
 }
+
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
+/** An API timestamp as a date and time, e.g. when something was last saved. */
+export function formatDateTime(isoTimestamp: string) {
+  return dateTimeFormat.format(new Date(isoTimestamp))
+}

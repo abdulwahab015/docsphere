@@ -85,6 +85,82 @@
           "in_trash": true
         }
       ]
+    },
+    {
+      "name": "Documents E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@docs.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "writer@docs.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "reader@docs.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "stranger@docs.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Research",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "shared_with": {
+            "writer@docs.e2e.test": "EDITOR",
+            "reader@docs.e2e.test": "VIEWER"
+          }
+        }
+      ],
+      "documents": [
+        {
+          "title": "Findings",
+          "content": "Early results look promising.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "project": "Research",
+          "shared_with": {
+            "writer@docs.e2e.test": "EDITOR",
+            "reader@docs.e2e.test": "VIEWER"
+          }
+        },
+        {
+          "title": "Draft notes",
+          "content": "Not ready to share.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "project": "Research"
+        },
+        {
+          "title": "Shared brief",
+          "content": "For your eyes only.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "project": "Research",
+          "shared_with": {
+            "stranger@docs.e2e.test": "VIEWER"
+          }
+        },
+        {
+          "title": "Team guide",
+          "content": "Welcome aboard.",
+          "visibility": "PUBLIC",
+          "owner": "admin@docs.e2e.test"
+        },
+        {
+          "title": "Old memo",
+          "content": "Outdated.",
+          "visibility": "PRIVATE",
+          "owner": "writer@docs.e2e.test",
+          "in_trash": true
+        }
+      ]
     }
   ]
 }
