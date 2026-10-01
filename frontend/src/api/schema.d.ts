@@ -1086,7 +1086,7 @@ export interface components {
             readonly id: number;
             name: string;
             billing_email?: (string) | null;
-            readonly active_subscription: components["schemas"]["ActiveSubscription"];
+            readonly active_subscription: components["schemas"]["ActiveSubscription"] | null;
             /** Format: date-time */
             readonly created: string;
             /** Format: date-time */
@@ -1216,6 +1216,21 @@ export interface components {
             previous?: string | null;
             results: components["schemas"]["ProjectPermission"][];
         };
+        PaginatedRosterUserList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=4
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=2
+             */
+            previous?: string | null;
+            results: components["schemas"]["RosterUser"][];
+        };
         PaginatedUserDetailList: {
             /** @example 123 */
             count: number;
@@ -1230,21 +1245,6 @@ export interface components {
              */
             previous?: string | null;
             results: components["schemas"]["UserDetail"][];
-        };
-        PaginatedUserList: {
-            /** @example 123 */
-            count: number;
-            /**
-             * Format: uri
-             * @example http://api.example.org/accounts/?page=4
-             */
-            next?: string | null;
-            /**
-             * Format: uri
-             * @example http://api.example.org/accounts/?page=2
-             */
-            previous?: string | null;
-            results: components["schemas"]["User"][];
         };
         /**
          * @description A signed-in user's own password change: the current password proves
@@ -1294,7 +1294,7 @@ export interface components {
             readonly id?: number;
             name?: string;
             billing_email?: (string) | null;
-            readonly active_subscription?: components["schemas"]["ActiveSubscription"];
+            readonly active_subscription?: components["schemas"]["ActiveSubscription"] | null;
             /** Format: date-time */
             readonly created?: string;
             /** Format: date-time */
@@ -1367,6 +1367,7 @@ export interface components {
             readonly user_email: string;
             readonly access_level: components["schemas"]["AccessLevelEnum"];
         };
+        RosterUser: components["schemas"]["UserDetail"] | components["schemas"]["User"];
         /**
          * @description Validates a grant/re-share request: a target user (by id) and the
          *     ``AccessLevel`` to give them. The target user must belong to the same
@@ -2295,7 +2296,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PaginatedUserList"];
+                    "application/json": components["schemas"]["PaginatedRosterUserList"];
                 };
             };
         };

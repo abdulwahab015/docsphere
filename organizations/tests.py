@@ -1,10 +1,16 @@
+import json
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -128,6 +134,26 @@ class OrganizationSignupAPITests(APITestCase):
         organization = Organization.objects.get(name="Acme Inc")
         self.assertIsNone(organization.billing_email)
 
+    def test_signup_with_a_null_billing_email_ignores_other_organizations_without_one(
+        self,
+    ):
+        OrganizationFactory(billing_email=None)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                reverse("organization_signup"),
+                {
+                    "name": "Acme Inc",
+                    "billing_email": None,
+                    "admin_email": "admin@acme.test",
+                    "admin_password": "Str0ng-New-Pass!",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(Organization.objects.get(name="Acme Inc").billing_email)
+
     def test_signup_rejects_duplicate_billing_email(self):
         OrganizationFactory(billing_email="billing@acme.test")
 
@@ -219,6 +245,15 @@ class OrganizationProfileAPITests(APITestCase):
         self.assertEqual(response.data["name"], "Acme Inc")
         self.assertIsNone(response.data["active_subscription"])
 
+    def test_schema_documents_the_active_subscription_as_nullable(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        active_subscription = response.data["components"]["schemas"]["Organization"][
+            "properties"
+        ]["active_subscription"]
+        self.assertTrue(active_subscription["nullable"])
+
     def test_retrieve_includes_the_active_subscription_summary(self):
         customer = StripeCustomerFactory(subscriber=self.org)
         StripeSubscriptionFactory(
@@ -292,6 +327,23 @@ class OrganizationProfileAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_admin_can_clear_the_billing_email_while_others_have_none(self):
+        self.org.billing_email = "billing@acme.test"
+        self.org.save(update_fields=["billing_email"])
+        OrganizationFactory(billing_email=None)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(
+                reverse("organization_profile"),
+                {"billing_email": None},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.org.refresh_from_db()
+        self.assertIsNone(self.org.billing_email)
+
     def test_update_keeping_own_billing_email_succeeds(self):
         self.org.billing_email = "billing@acme.test"
         self.org.save(update_fields=["billing_email"])
@@ -322,3 +374,50 @@ class OrganizationProfileAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class SeedE2ECommandTests(TestCase):
+    seed = {
+        "password": "Seed-Pass-123!",
+        "organizations": [
+            {
+                "name": "Paid Org",
+                "subscribed": True,
+                "users": [{"email": "admin@paid.test", "role": "ADMIN"}],
+                "extra_members": 2,
+            },
+            {
+                "name": "Unpaid Org",
+                "subscribed": False,
+                "users": [{"email": "member@unpaid.test", "role": "MEMBER"}],
+            },
+        ],
+    }
+
+    def setUp(self):
+        seed_dir = Path(self.enterContext(TemporaryDirectory()))
+        self.seed_path = seed_dir / "seed.json"
+        self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
+
+    def test_seeds_organizations_users_and_subscriptions(self):
+        with self.assertNumQueries(10):
+            call_command("seed_e2e", self.seed_path, stdout=StringIO())
+
+        paid = Organization.objects.get(name="Paid Org")
+        unpaid = Organization.objects.get(name="Unpaid Org")
+        self.assertIsNotNone(paid.active_subscription)
+        self.assertIsNone(unpaid.active_subscription)
+        self.assertEqual(paid.users.count(), 3)
+        admin = User.objects.get(email="admin@paid.test")
+        self.assertEqual(admin.org_role, "ADMIN")
+        self.assertTrue(admin.check_password("Seed-Pass-123!"))
+
+    @override_settings(E2E_SEEDING_ENABLED=False)
+    def test_refuses_to_run_where_seeding_is_disabled(self):
+        with (
+            self.assertNumQueries(0),
+            self.assertRaisesMessage(CommandError, "E2E seeding is disabled"),
+        ):
+            call_command("seed_e2e", self.seed_path, stdout=StringIO())
+
+        self.assertFalse(Organization.objects.exists())

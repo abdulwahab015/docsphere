@@ -99,6 +99,22 @@ describe('apiClient', () => {
     expect(refresh).not.toHaveBeenCalled()
   })
 
+  it('passes errors that never reached the API straight through', async () => {
+    const failure = new TypeError('Bad request setup')
+    const interceptor = apiClient.interceptors.request.use(() => {
+      throw failure
+    })
+    const refresh = refreshResponding(() => HttpResponse.json(buildTokenPair()))
+
+    try {
+      await expect(apiClient.get(PROBE_PATH)).rejects.toBe(failure)
+    } finally {
+      apiClient.interceptors.request.eject(interceptor)
+    }
+
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
   it('passes other errors straight through', async () => {
     setAccessToken('current-token')
     server.use(

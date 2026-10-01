@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { getAccessToken } from '@/api/access-token'
 import { REFRESH_PATH } from '@/api/constants'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
+import { logOutViaAccountMenu } from '@/test/actions'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server } from '@/test/server'
 
@@ -27,7 +28,7 @@ afterEach(() => {
   otherTab.close()
 })
 
-describe('SessionSyncLayout', () => {
+describe('RootLayout', () => {
   describe('when another tab changes the session', () => {
     it('signs this tab out after a logout elsewhere', async () => {
       renderRoute('/', { signedInAs: buildCurrentUser() })
@@ -86,7 +87,7 @@ describe('SessionSyncLayout', () => {
       const { user } = renderRoute('/', { signedInAs: buildCurrentUser() })
       const announcement = nextMessageInOtherTab()
 
-      await user.click(screen.getByRole('button', { name: 'Log out' }))
+      await logOutViaAccountMenu(user)
 
       await expect(announcement).resolves.toBe(SESSION_CHANGED)
     })

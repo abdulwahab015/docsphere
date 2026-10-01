@@ -31,3 +31,5 @@ CELERY_TASK_EAGER_PROPAGATES = True
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",
 ]
+
+E2E_SEEDING_ENABLED = True

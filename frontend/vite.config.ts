@@ -23,8 +23,14 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // Playwright owns e2e/; Vitest runs only the unit/component tests in src/.
+    include: ['src/**/*.test.{ts,tsx}'],
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Interaction-heavy tests (typing into several fields) take ~1-2s but spiked
+    // past the 5s default under full parallel load with coverage; CI runners
+    // have fewer cores. A real hang still fails quickly enough.
+    testTimeout: 15_000,
     env: {
       VITE_API_BASE_URL: 'http://api.test',
     },
@@ -39,11 +45,12 @@ export default defineConfig({
         'src/components/ui/**',
         'src/main.tsx',
       ],
+      // Same bar as the backend's .coveragerc fail_under.
       thresholds: {
-        lines: 90,
-        functions: 90,
-        branches: 90,
-        statements: 90,
+        lines: 95,
+        functions: 95,
+        branches: 95,
+        statements: 95,
       },
     },
   },

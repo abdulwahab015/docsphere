@@ -911,6 +911,21 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
         for row in response.data["results"]:
             self.assertEqual(set(row.keys()), {"id", "email", "org_role", "created"})
 
+    def test_schema_documents_both_the_admin_and_member_shapes(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        schemas = response.data["components"]["schemas"]
+        rows = schemas["PaginatedRosterUserList"]["properties"]["results"]["items"]
+        self.assertEqual(rows["$ref"], "#/components/schemas/RosterUser")
+        self.assertEqual(
+            schemas["RosterUser"]["oneOf"],
+            [
+                {"$ref": "#/components/schemas/UserDetail"},
+                {"$ref": "#/components/schemas/User"},
+            ],
+        )
+
     def test_excludes_users_from_other_organizations(self):
         UserFactory(email="outsider@example.com", organization=self.other_org)
         self.client.force_authenticate(self.member)

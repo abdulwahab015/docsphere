@@ -1,0 +1,24 @@
+{
+  "password": "E2e-Pass-123!",
+  "organizations": [
+    {
+      "name": "Acme E2E",
+      "subscribed": true,
+      "users": [
+        { "email": "admin@acme.e2e.test", "role": "ADMIN" },
+        { "email": "member@acme.e2e.test", "role": "MEMBER" }
+      ],
+      "extra_members": 22
+    },
+    {
+      "name": "Settings E2E",
+      "subscribed": true,
+      "users": [{ "email": "admin@settings.e2e.test", "role": "ADMIN" }]
+    },
+    {
+      "name": "Lapsed E2E",
+      "subscribed": false,
+      "users": [{ "email": "admin@lapsed.e2e.test", "role": "ADMIN" }]
+    }
+  ]
+}

@@ -69,6 +69,21 @@ describe('parseApiError', () => {
     expect(parseApiError(error).formMessage).toBe('This invitation is no longer pending.')
   })
 
+  it('falls back to a generic message for a non-JSON body', async () => {
+    const error = await errorFrom(
+      new HttpResponse('<html>Bad Request</html>', {
+        status: 400,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    )
+
+    expect(parseApiError(error)).toMatchObject({
+      status: 400,
+      formMessage: UNEXPECTED_ERROR_MESSAGE,
+      fieldErrors: {},
+    })
+  })
+
   it('falls back to a generic message for a body it cannot read', async () => {
     const error = await failWith(400, { detail: 42 })
 

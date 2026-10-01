@@ -24,15 +24,16 @@ apiClient.interceptors.request.use((config) => {
 })
 
 apiClient.interceptors.response.use(undefined, async (error: unknown) => {
-  const config = isAxiosError(error) ? error.config : undefined
-  const expiredToken =
-    isAxiosError(error) &&
-    error.response?.status === HTTP_STATUS.unauthorized &&
-    config?.headers.Authorization
+  if (!isAxiosError(error) || !error.config) {
+    throw error
+  }
+  const { config } = error
 
   // A 401 on a request that carried no token (e.g. wrong login credentials)
   // is an answer, not an expired session.
-  if (!config || !expiredToken || config.isReplayAfterRefresh) {
+  const tokenRejected =
+    error.response?.status === HTTP_STATUS.unauthorized && Boolean(config.headers.Authorization)
+  if (!tokenRejected || config.isReplayAfterRefresh) {
     throw error
   }
 

@@ -8,11 +8,20 @@ import { apiUrl, server, spyResolver } from '@/test/server'
 
 const LOGOUT_PATH = '/users/auth/logout/'
 
+// The lapsed-subscription screen is where the standalone button appears.
+function renderLapsedOrganization() {
+  return renderRoute('/', {
+    signedInAs: buildCurrentUser({
+      organization: { id: 1, name: 'Acme', has_active_subscription: false },
+    }),
+  })
+}
+
 describe('LogoutButton', () => {
   it('ends the session and returns to the login page', async () => {
     const logout = spyResolver(() => new HttpResponse(null, { status: 205 }))
     server.use(http.post(apiUrl(LOGOUT_PATH), logout))
-    const { user } = renderRoute('/', { signedInAs: buildCurrentUser() })
+    const { user } = renderLapsedOrganization()
 
     await user.click(screen.getByRole('button', { name: 'Log out' }))
 
@@ -27,7 +36,7 @@ describe('LogoutButton', () => {
         HttpResponse.json({ detail: 'refresh token is required.' }, { status: 400 }),
       ),
     )
-    const { user } = renderRoute('/', { signedInAs: buildCurrentUser() })
+    const { user } = renderLapsedOrganization()
 
     await user.click(screen.getByRole('button', { name: 'Log out' }))
 

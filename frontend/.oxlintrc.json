@@ -22,7 +22,8 @@
       "files": ["src/components/ui/**"],
       "rules": {
         "react/only-export-components": "off",
-        "jsx-a11y/prefer-tag-over-role": "off"
+        "jsx-a11y/prefer-tag-over-role": "off",
+        "eslint/no-shadow": "off"
       }
     }
   ],

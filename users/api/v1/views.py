@@ -1,7 +1,11 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
-from drf_spectacular.utils import OpenApiResponse, extend_schema
+from drf_spectacular.utils import (
+    OpenApiResponse,
+    PolymorphicProxySerializer,
+    extend_schema,
+)
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
@@ -109,6 +113,16 @@ class CurrentUserAPIView(generics.RetrieveAPIView):
         return self.request.user
 
 
+@extend_schema(
+    # The serializer depends on the caller's role, so document both shapes:
+    # admins also get ``org_role`` and ``created``.
+    responses=PolymorphicProxySerializer(
+        component_name="RosterUser",
+        serializers=[UserDetailSerializer, UserSerializer],
+        resource_type_field_name=None,
+        many=True,
+    )
+)
 class UserListAPIView(generics.ListAPIView):
     """Lists the active members of the requesting user's own organization -
     e.g. to look up a teammate's id when sharing a project or document. Any
