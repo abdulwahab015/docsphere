@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 
 import { configure } from '@testing-library/react'
+import { toast } from 'sonner'
 
 import { clearAccessToken } from '@/api/access-token'
 import { server } from '@/test/server'
@@ -40,6 +41,10 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()
   clearAccessToken()
+  // Sonner keeps active toasts in a module-level store and replays them to
+  // every newly mounted <Toaster />, so one test's toasts would reappear in
+  // the next. Dismissed toasts aren't replayed.
+  toast.dismiss()
 })
 
 afterAll(() => server.close())

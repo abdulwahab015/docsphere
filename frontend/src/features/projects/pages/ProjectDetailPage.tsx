@@ -9,10 +9,11 @@ import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ProjectDocuments } from '@/features/documents/components/ProjectDocuments'
 import { DeleteProjectButton } from '@/features/projects/components/DeleteProjectButton'
 import { EditProjectDialog } from '@/features/projects/components/EditProjectDialog'
-import { ProjectVisibilityCard } from '@/features/projects/components/ProjectVisibilityCard'
-import { useProject } from '@/features/projects/hooks'
+import { VisibilityCard } from '@/components/VisibilityCard'
+import { useProject, useUpdateProject } from '@/features/projects/hooks'
 import { useIdParam } from '@/hooks/use-id-param'
 import { can } from '@/lib/access'
 import { formatDate } from '@/lib/format'
@@ -52,6 +53,8 @@ function ProjectDetail({ projectId }: { projectId: number }) {
 }
 
 function ProjectOverview({ project }: { project: Project }) {
+  const updateProject = useUpdateProject(project.id)
+
   return (
     <>
       <PageHeader
@@ -65,7 +68,12 @@ function ProjectOverview({ project }: { project: Project }) {
         }
       />
       <div className="grid gap-6 lg:grid-cols-2">
-        <ProjectVisibilityCard project={project} />
+        <VisibilityCard
+          resourceName="project"
+          visibility={project.visibility}
+          accessLevel={project.access_level}
+          update={updateProject}
+        />
         <Card>
           <CardHeader>
             <CardTitle>
@@ -88,6 +96,7 @@ function ProjectOverview({ project }: { project: Project }) {
           </CardContent>
         </Card>
       </div>
+      <ProjectDocuments project={project} />
     </>
   )
 }

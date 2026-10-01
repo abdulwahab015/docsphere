@@ -14,8 +14,8 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 
 interface ConfirmDialogProps {
-  /** The control that opens the dialog. */
-  trigger: ReactNode
+  /** The control that opens the dialog; omit it to open the dialog from code. */
+  trigger?: ReactNode
   title: string
   description: ReactNode
   confirmLabel: string
@@ -41,7 +41,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+      {trigger && <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>}
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>

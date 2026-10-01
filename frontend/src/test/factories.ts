@@ -1,4 +1,4 @@
-import type { CurrentUser, Project, TokenPair } from '@/api/types'
+import type { CurrentUser, Document, Project, TokenPair } from '@/api/types'
 
 export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   return {
@@ -24,6 +24,23 @@ export function buildProject(overrides: Partial<Project> = {}): Project {
     created_by: 1,
     created_by_email: 'ada@example.com',
     organization: 1,
+    created: '2026-09-01T09:00:00Z',
+    modified: '2026-09-15T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildDocument(overrides: Partial<Document> = {}): Document {
+  return {
+    id: 11,
+    title: 'Findings',
+    content: 'First draft.',
+    visibility: 'PRIVATE',
+    access_level: 'OWNER',
+    created_by: 1,
+    created_by_email: 'ada@example.com',
+    organization: 1,
+    project: null,
     created: '2026-09-01T09:00:00Z',
     modified: '2026-09-15T09:00:00Z',
     ...overrides,

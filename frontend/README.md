@@ -67,14 +67,16 @@ with the backend change.
 ## Project layout
 
 ```text
+e2e/              # Playwright specs, fixtures.ts, seed.json (also loaded by manage.py seed_e2e)
 src/
-├── api/          # schema.d.ts (generated) and, later, the HTTP client
-├── app/          # App root, providers, route table, route paths
-├── components/   # Shared components; ui/ holds shadcn-generated primitives
-├── features/     # One folder per domain (auth, projects, documents, ...)
-├── lib/          # Small framework-agnostic helpers
-├── pages/        # Route-level pages that don't belong to a single feature
-└── test/         # Test setup and shared test utilities
+├── api/          # HTTP client (token refresh), error parsing, generated schema.d.ts + type aliases
+├── app/          # App root, route table, paths, sidebar navigation, layouts (shell, sidebar, menus)
+├── components/   # Shared components (page header, states, dialogs, badges, form/); ui/ = shadcn
+├── features/     # One folder per domain: auth, people, organization, projects, documents
+├── hooks/        # Shared hooks (URL list params, page title, id params)
+├── lib/          # Framework-agnostic helpers (env, access rules, formatting, form errors)
+├── pages/        # Route-level pages that belong to no single feature (not found, error)
+└── test/         # Test setup, MSW server, render helper, factories
 ```
 
 Add shadcn components with `npx shadcn@latest add <name>` from `frontend/`.

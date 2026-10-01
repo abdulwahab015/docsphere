@@ -1056,6 +1056,20 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_schema_documents_the_optional_project_on_create(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        operation = response.data["paths"]["/api/v1/documents/"]["post"]
+        request_ref = operation["requestBody"]["content"]["application/json"]["schema"]
+        component = request_ref["$ref"].split("/")[-1]
+        project = response.data["components"]["schemas"][component]["properties"][
+            "project"
+        ]
+        self.assertEqual(project["type"], "integer")
+        self.assertTrue(project["nullable"])
+        self.assertNotIn("project", operation.get("required", []))
+
 
 class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
@@ -1165,6 +1179,15 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
 
         titles = [row["title"] for row in response.data["results"]]
         self.assertEqual(titles, ["Budget Doc"])
+
+    def test_schema_documents_the_project_filter(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        parameters = response.data["paths"]["/api/v1/documents/"]["get"]["parameters"]
+        project = next(param for param in parameters if param["name"] == "project")
+        self.assertEqual(project["in"], "query")
+        self.assertEqual(project["schema"]["type"], "integer")
 
     def test_project_filter_returns_only_that_projects_documents(self):
         DocumentFactory(

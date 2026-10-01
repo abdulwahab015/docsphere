@@ -9,6 +9,7 @@ interface SeedFile {
     users: { email: string; role: 'ADMIN' | 'MEMBER' }[]
     extra_members?: number
     projects?: { name: string }[]
+    documents?: { title: string }[]
   }[]
 }
 
@@ -40,6 +41,10 @@ export const PROJECTS_ADMIN = seededAccount('admin@projects.e2e.test')
 export const PROJECTS_EDITOR = seededAccount('editor@projects.e2e.test')
 export const PROJECTS_VIEWER = seededAccount('viewer@projects.e2e.test')
 export const PROJECTS_OUTSIDER = seededAccount('outsider@projects.e2e.test')
+export const DOCS_ADMIN = seededAccount('admin@docs.e2e.test')
+export const DOCS_WRITER = seededAccount('writer@docs.e2e.test')
+export const DOCS_READER = seededAccount('reader@docs.e2e.test')
+export const DOCS_STRANGER = seededAccount('stranger@docs.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -74,4 +79,10 @@ export async function openProject(page: Page, name: string) {
   await page.goto('/projects')
   await page.getByRole('link', { name, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
+}
+
+export async function openDocument(page: Page, title: string) {
+  await page.goto('/documents')
+  await page.getByRole('link', { name: title, exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
 }

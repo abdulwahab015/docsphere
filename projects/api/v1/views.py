@@ -1,5 +1,5 @@
 from django.db import transaction
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import generics, mixins
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
@@ -12,6 +12,7 @@ from core.permissions import HasActiveSubscription
 from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
     DocumentAccessRequestSerializer,
+    DocumentCreateSerializer,
     DocumentPermissionSerializer,
     DocumentSerializer,
     ProjectPermissionSerializer,
@@ -140,6 +141,20 @@ class ProjectRestoreAPIView(APIView):
         return Response(ProjectSerializer(project, context={"request": request}).data)
 
 
+@extend_schema_view(
+    get=extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "project",
+                int,
+                description="Only documents filed under this project.",
+            )
+        ]
+    ),
+    post=extend_schema(
+        request=DocumentCreateSerializer, responses={201: DocumentSerializer}
+    ),
+)
 class DocumentListCreateAPIView(generics.ListCreateAPIView):
     """Lists the org's documents (``?search=`` matches title, ``?project=``
     narrows to one project); creates one either under a project the caller has

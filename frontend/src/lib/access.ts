@@ -27,3 +27,12 @@ export const VISIBILITY_LABELS: Record<Visibility, string> = {
   PRIVATE: 'Private',
   PUBLIC: 'Public',
 }
+
+/** What each visibility means, worded for the signed-in user's organization.
+ * Projects and documents follow the same rule. */
+export function visibilityDescriptions(organizationName: string): Record<Visibility, string> {
+  return {
+    PRIVATE: 'Only people you share it with can see it.',
+    PUBLIC: `Everyone in ${organizationName} can view it.`,
+  }
+}

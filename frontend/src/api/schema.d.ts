@@ -1019,6 +1019,29 @@ export interface components {
          * @enum {string}
          */
         DocumentAccessRequestStatusEnum: "PENDING" | "APPROVED" | "DENIED";
+        /**
+         * @description The create request: ``DocumentSerializer`` plus the optional ``project``
+         *     to file the new document under (omitted or null for a personal document).
+         *     The view resolves and checks that project itself - one the caller can't
+         *     see is a 404, one they can't edit a 403 - so this field only documents
+         *     the input; responses keep using ``DocumentSerializer``.
+         */
+        DocumentCreate: {
+            readonly id: number;
+            title: string;
+            content?: string | null;
+            visibility?: components["schemas"]["VisibilityEnum"];
+            readonly access_level: (components["schemas"]["AccessLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly created_by: number;
+            /** Format: email */
+            readonly created_by_email: string;
+            readonly organization: number;
+            project?: number | null;
+            /** Format: date-time */
+            readonly created: string;
+            /** Format: date-time */
+            readonly modified: string;
+        };
         DocumentPermission: {
             readonly id: number;
             readonly document: number;
@@ -1431,6 +1454,8 @@ export interface operations {
                 page?: number;
                 /** @description Number of results to return per page. */
                 page_size?: number;
+                /** @description Only documents filed under this project. */
+                project?: number;
                 /** @description A search term. */
                 search?: string;
             };
@@ -1459,9 +1484,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Document"];
-                "application/x-www-form-urlencoded": components["schemas"]["Document"];
-                "multipart/form-data": components["schemas"]["Document"];
+                "application/json": components["schemas"]["DocumentCreate"];
+                "application/x-www-form-urlencoded": components["schemas"]["DocumentCreate"];
+                "multipart/form-data": components["schemas"]["DocumentCreate"];
             };
         };
         responses: {
