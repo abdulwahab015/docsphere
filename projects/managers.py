@@ -58,9 +58,25 @@ class VisibilityScopedQuerySet(models.QuerySet):
         )
 
 
+def outside_trashed_projects(prefix=""):
+    """Matches documents that are personal or whose project isn't in the trash.
+    ``prefix`` reaches documents through a relation, e.g. ``"document__"``."""
+    return models.Q(**{f"{prefix}project__isnull": True}) | models.Q(
+        **{f"{prefix}project__is_active": True}
+    )
+
+
 class DocumentQuerySet(VisibilityScopedQuerySet):
     """Documents are scoped directly to their organization, not through the
     optional parent project."""
+
+    def for_organization(self, organization):
+        """Also hides documents filed under a project that's in the trash:
+        they leave and return with their project. The documents' own
+        ``is_active`` is untouched, so restoring the project brings back
+        exactly the documents that were live, and the document trash still
+        holds only documents deleted on their own."""
+        return super().for_organization(organization).filter(outside_trashed_projects())
 
     def for_project(self, project):
         """Convenience narrowing to a single project's active documents."""

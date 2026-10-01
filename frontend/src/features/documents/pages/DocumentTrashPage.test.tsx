@@ -56,6 +56,26 @@ describe('DocumentTrashPage', () => {
     expect(await screen.findByText('Couldn\'t restore "Old memo".')).toBeInTheDocument()
   })
 
+  it("explains why a document in a trashed project can't be restored yet", async () => {
+    serveTrash([buildDocument({ id: 1, title: 'Old memo', project: 7 })])
+    server.use(
+      http.post(apiUrl('/documents/1/restore/'), () =>
+        HttpResponse.json(
+          {
+            detail:
+              "This document's project is in the trash. Ask an organization admin to restore the project first.",
+          },
+          { status: 400 },
+        ),
+      ),
+    )
+    const { user } = renderRoute(TRASH_URL, { signedInAs: member })
+
+    await user.click(await screen.findByRole('button', { name: 'Restore Old memo' }))
+
+    expect(await screen.findByText(/restore the project first/)).toBeInTheDocument()
+  })
+
   it('says when the trash is empty', async () => {
     serveTrash([])
     renderRoute(TRASH_URL, { signedInAs: member })

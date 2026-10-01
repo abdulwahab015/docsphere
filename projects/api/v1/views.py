@@ -1,5 +1,10 @@
 from django.db import transaction
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 from rest_framework import generics, mixins
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
@@ -20,6 +25,7 @@ from projects.api.v1.serializers import (
     ShareSerializer,
 )
 from projects.choices import AccessLevel, AccessRequestStatus, Action
+from projects.managers import outside_trashed_projects
 from projects.models import (
     Document,
     DocumentAccessRequest,
@@ -44,6 +50,11 @@ from projects.tasks import (
 )
 from projects.validators import ensure_not_last_owner
 from users.permissions import IsOrganizationAdmin
+
+DOCUMENT_IN_TRASHED_PROJECT_MESSAGE = (
+    "This document's project is in the trash. Ask an organization admin to "
+    "restore the project first."
+)
 
 
 def _grant_creator_ownership(permission_model, resource_field, resource, user):
@@ -232,20 +243,30 @@ class DocumentRetrieveUpdateDestroyAPIView(
 class DocumentRestoreAPIView(APIView):
     """Reverses a soft-delete. Unlike ``ProjectRestoreAPIView`` (admin-only),
     document creation isn't admin-gated, so restoring requires the same
-    Owner-level access that deleting it did."""
+    Owner-level access that deleting it did. A document whose project is in
+    the trash can't be restored on its own - it would stay hidden."""
 
-    @extend_schema(request=None, responses={200: DocumentSerializer})
+    @extend_schema(
+        request=None,
+        responses={
+            200: DocumentSerializer,
+            400: OpenApiResponse(description="The document's project is in the trash."),
+        },
+    )
     def post(self, request, pk):
         document = get_object_or_404(
             Document.objects.inactive_for_organization(request.user.organization)
             .with_access_level(request.user)
-            .select_related("created_by"),
+            .select_related("created_by", "project"),
             pk=pk,
         )
         if not access_permits(document.user_access_level, Action.DELETE):
             raise PermissionDenied(
                 "You must have Owner access to this document to restore it."
             )
+        # Restored on its own, it would stay hidden with its trashed project.
+        if document.project and not document.project.is_active:
+            raise ValidationError({"detail": DOCUMENT_IN_TRASHED_PROJECT_MESSAGE})
 
         document.is_active = True
         document.save(update_fields=["is_active"])
@@ -542,7 +563,8 @@ class DocumentTrashListAPIView(generics.ListAPIView):
 class MyDocumentAccessRequestListAPIView(generics.ListAPIView):
     """The caller's own access requests in every status, newest first, so a
     requester can see whether theirs was approved or denied. Requests on
-    documents since soft-deleted are left out."""
+    documents since soft-deleted, or hidden in a trashed project, are left
+    out."""
 
     serializer_class = DocumentAccessRequestSerializer
 
@@ -550,6 +572,7 @@ class MyDocumentAccessRequestListAPIView(generics.ListAPIView):
         user = self.request.user
         return (
             DocumentAccessRequest.objects.filter(
+                outside_trashed_projects("document__"),
                 requested_by=user,
                 document__organization=user.organization,
                 document__is_active=True,

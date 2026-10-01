@@ -1,6 +1,7 @@
-import { expect, type Page, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
 import {
+  createProject,
   logIn,
   logOut,
   openProject,
@@ -10,16 +11,6 @@ import {
   PROJECTS_VIEWER,
   uniqueName,
 } from './fixtures'
-
-async function createProject(page: Page, name: string, visibility: 'Private' | 'Public') {
-  await page.goto('/projects')
-  await page.getByRole('button', { name: 'New project' }).click()
-  const dialog = page.getByRole('dialog', { name: 'New project' })
-  await dialog.getByLabel('Name').fill(name)
-  await dialog.getByLabel('Description (optional)').fill('Created by an end-to-end test.')
-  await dialog.getByRole('radio', { name: visibility }).check()
-  await dialog.getByRole('button', { name: 'Create project' }).click()
-}
 
 test.describe('as an admin', () => {
   test('creates a project and becomes its owner', async ({ page }) => {

@@ -157,7 +157,8 @@ export interface paths {
         /**
          * @description Reverses a soft-delete. Unlike ``ProjectRestoreAPIView`` (admin-only),
          *     document creation isn't admin-gated, so restoring requires the same
-         *     Owner-level access that deleting it did.
+         *     Owner-level access that deleting it did. A document whose project is in
+         *     the trash can't be restored on its own - it would stay hidden.
          */
         post: operations["api_v1_documents_restore_create"];
         delete?: never;
@@ -249,7 +250,8 @@ export interface paths {
         /**
          * @description The caller's own access requests in every status, newest first, so a
          *     requester can see whether theirs was approved or denied. Requests on
-         *     documents since soft-deleted are left out.
+         *     documents since soft-deleted, or hidden in a trashed project, are left
+         *     out.
          */
         get: operations["api_v1_documents_access_requests_mine_list"];
         put?: never;
@@ -1710,6 +1712,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Document"];
                 };
+            };
+            /** @description The document's project is in the trash. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

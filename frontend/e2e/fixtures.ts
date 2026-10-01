@@ -86,3 +86,23 @@ export async function openDocument(page: Page, title: string) {
   await page.getByRole('link', { name: title, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
 }
+
+/** Creates a project through the New project dialog (admins only). */
+export async function createProject(page: Page, name: string, visibility: 'Private' | 'Public') {
+  await page.goto('/projects')
+  await page.getByRole('button', { name: 'New project' }).click()
+  const dialog = page.getByRole('dialog', { name: 'New project' })
+  await dialog.getByLabel('Name').fill(name)
+  await dialog.getByLabel('Description (optional)').fill('Created by an end-to-end test.')
+  await dialog.getByRole('radio', { name: visibility }).check()
+  await dialog.getByRole('button', { name: 'Create project' }).click()
+}
+
+/** Creates a document through the open page's New document dialog. */
+export async function createDocument(page: Page, title: string) {
+  await page.getByRole('button', { name: 'New document' }).click()
+  const dialog = page.getByRole('dialog', { name: 'New document' })
+  await dialog.getByLabel('Title').fill(title)
+  await dialog.getByRole('button', { name: 'Create document' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+}

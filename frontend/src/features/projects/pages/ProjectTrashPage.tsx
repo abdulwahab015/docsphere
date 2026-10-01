@@ -44,7 +44,7 @@ export function ProjectTrashPage() {
       </Button>
       <PageHeader
         title="Project trash"
-        description="Deleted projects stay here until an admin restores them. Their names stay reserved meanwhile."
+        description="Deleted projects stay here until an admin restores them, along with their documents. Their names stay reserved meanwhile."
       />
       {trash.isError ? (
         <ErrorState error={trash.error} onRetry={() => void trash.refetch()} />
