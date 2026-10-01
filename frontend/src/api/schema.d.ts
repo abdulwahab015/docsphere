@@ -119,7 +119,8 @@ export interface paths {
         put?: never;
         /**
          * @description Owner-only. Upgrades the requester to Editor and marks the request
-         *     approved, inside one transaction.
+         *     approved, inside one transaction. Approval only ever raises access: a
+         *     requester who has been given Editor or Owner since asking keeps it.
          */
         post: operations["api_v1_documents_access_requests_approve_create"];
         delete?: never;
@@ -249,9 +250,9 @@ export interface paths {
         };
         /**
          * @description The caller's own access requests in every status, newest first, so a
-         *     requester can see whether theirs was approved or denied. Requests on
-         *     documents since soft-deleted, or hidden in a trashed project, are left
-         *     out.
+         *     requester can see whether theirs was approved or denied (``?document=``
+         *     narrows to one document). Requests on documents since soft-deleted, or
+         *     hidden in a trashed project, are left out.
          */
         get: operations["api_v1_documents_access_requests_mine_list"];
         put?: never;
@@ -432,16 +433,16 @@ export interface paths {
         /**
          * @description Lists a project's ``ProjectPermission`` grants, or grants/updates one
          *     for a target user - Owner-level access required. Granting an already-
-         *     permitted user updates their level in place; each grant emails the
-         *     target user.
+         *     permitted user updates their level in place (never lowering the last
+         *     Owner); each grant emails the target user.
          */
         get: operations["api_v1_projects_share_list"];
         put?: never;
         /**
          * @description Lists a project's ``ProjectPermission`` grants, or grants/updates one
          *     for a target user - Owner-level access required. Granting an already-
-         *     permitted user updates their level in place; each grant emails the
-         *     target user.
+         *     permitted user updates their level in place (never lowering the last
+         *     Owner); each grant emails the target user.
          */
         post: operations["api_v1_projects_share_create"];
         delete?: never;
@@ -1823,6 +1824,8 @@ export interface operations {
     api_v1_documents_access_requests_mine_list: {
         parameters: {
             query?: {
+                /** @description Only requests for this document. */
+                document?: number;
                 /** @description A page number within the paginated result set. */
                 page?: number;
                 /** @description Number of results to return per page. */

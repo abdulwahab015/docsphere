@@ -78,3 +78,18 @@ export function parseApiError(error: unknown): ParsedApiError {
   }
   return parsed
 }
+
+/**
+ * One line to report a failed action (in a toast, say). A 400 carries the
+ * API's reason, which is worth reading - e.g. "Cannot revoke the document's
+ * last Owner." - so it's shown, whether it came as a form-level or a field
+ * message. Anything else gets `fallback`.
+ */
+export function actionErrorMessage(error: unknown, fallback: string) {
+  const { status, formMessage, fieldErrors } = parseApiError(error)
+  if (status !== HTTP_STATUS.badRequest) {
+    return fallback
+  }
+  // parseApiError leaves the form message unset only when there are field errors.
+  return formMessage ?? Object.values(fieldErrors).join(' ')
+}

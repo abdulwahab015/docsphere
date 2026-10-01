@@ -1,4 +1,11 @@
-import { BuildingIcon, FileTextIcon, FolderIcon, type LucideIcon, UsersIcon } from 'lucide-react'
+import {
+  BuildingIcon,
+  FileTextIcon,
+  FolderIcon,
+  InboxIcon,
+  type LucideIcon,
+  UsersIcon,
+} from 'lucide-react'
 
 import { PATHS } from '@/app/paths'
 
@@ -13,6 +20,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: 'Projects', path: PATHS.projects, icon: FolderIcon },
   { label: 'Documents', path: PATHS.documents, icon: FileTextIcon },
+  { label: 'Requests', path: PATHS.accessRequests, icon: InboxIcon },
   { label: 'People', path: PATHS.people, icon: UsersIcon },
   {
     label: 'Organization',

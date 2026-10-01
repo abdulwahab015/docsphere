@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-import { expect, type Page } from '@playwright/test'
+import { type Browser, expect, type Page } from '@playwright/test'
 
 interface SeedFile {
   password: string
@@ -45,6 +45,10 @@ export const DOCS_ADMIN = seededAccount('admin@docs.e2e.test')
 export const DOCS_WRITER = seededAccount('writer@docs.e2e.test')
 export const DOCS_READER = seededAccount('reader@docs.e2e.test')
 export const DOCS_STRANGER = seededAccount('stranger@docs.e2e.test')
+export const SHARING_OWNER = seededAccount('owner@sharing.e2e.test')
+export const SHARING_ALEX = seededAccount('alex@sharing.e2e.test')
+export const SHARING_BLAIR = seededAccount('blair@sharing.e2e.test')
+export const SHARING_CASEY = seededAccount('casey@sharing.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -62,6 +66,14 @@ export async function logIn(page: Page, account: Account) {
   await page.goto('/login')
   await fillLoginForm(page, account)
   await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
+}
+
+/** A second browser session, with its own cookies, signed in as `account` -
+ * for flows where two people take turns. Close it with `page.context().close()`. */
+export async function logInElsewhere(browser: Browser, account: Account) {
+  const page = await (await browser.newContext()).newPage()
+  await logIn(page, account)
+  return page
 }
 
 export async function logOut(page: Page) {

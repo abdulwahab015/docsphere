@@ -1577,7 +1577,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(11):
+        with self.assertNumQueries(12):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
@@ -1598,7 +1598,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(11):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.OWNER},
@@ -1612,6 +1612,47 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(permissions.count(), 1)
         self.assertEqual(permissions.first().access_level, AccessLevel.OWNER)
         mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_owner_can_downgrade_a_co_owner_when_another_owner_remains(
+        self, mock_send_mail
+    ):
+        ProjectPermission.objects.filter(project=self.project, user=self.viewer).update(
+            access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(12):
+            response = self.client.post(
+                self.url,
+                {"user": self.viewer.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            resolve_project_access(self.viewer, self.project), AccessLevel.EDITOR
+        )
+
+    def test_owner_cannot_downgrade_the_projects_last_owner(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                self.url,
+                {"user": self.owner.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "Cannot downgrade the project's last Owner. "
+            "Make someone else an Owner first.",
+        )
+        self.assertEqual(
+            resolve_project_access(self.owner, self.project), AccessLevel.OWNER
+        )
 
     def test_owner_can_list_current_grants(self):
         self.client.force_authenticate(self.owner)
@@ -1810,7 +1851,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(11):
+        with self.assertNumQueries(12):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -1834,7 +1875,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(11):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.OWNER},
@@ -1848,6 +1889,43 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(permissions.count(), 1)
         self.assertEqual(permissions.first().access_level, AccessLevel.OWNER)
         mock_send_mail.assert_called_once()
+
+    @patch("core.email.send_mail")
+    def test_owner_can_downgrade_a_co_owner_when_another_owner_remains(
+        self, mock_send_mail
+    ):
+        DocumentPermissionFactory(
+            document=self.document, user=self.target, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(12):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(resolve_access(self.target, self.document), AccessLevel.VIEWER)
+
+    def test_owner_cannot_downgrade_the_documents_last_owner(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                self.url,
+                {"user": self.owner.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "Cannot downgrade the document's last Owner. "
+            "Make someone else an Owner first.",
+        )
+        self.assertEqual(resolve_access(self.owner, self.document), AccessLevel.OWNER)
 
     def test_owner_can_list_current_grants(self):
         DocumentPermissionFactory(
@@ -2158,7 +2236,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(13):
+        with self.assertNumQueries(11):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -2170,6 +2248,48 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(
             mock_send_mail.call_args.kwargs["recipient_list"], [self.viewer.email]
         )
+
+    @patch("core.email.send_mail")
+    def test_approving_upgrades_an_explicit_viewer_grant(self, mock_send_mail):
+        DocumentPermissionFactory(
+            document=self.document, user=self.viewer, access_level=AccessLevel.VIEWER
+        )
+        access_request = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.viewer
+        )
+        self.client.force_authenticate(self.owner)
+        url = reverse(
+            "document_access_request_approve",
+            args=[self.document.pk, access_request.pk],
+        )
+
+        with self.assertNumQueries(9):
+            response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(resolve_access(self.viewer, self.document), AccessLevel.EDITOR)
+
+    @patch("core.email.send_mail")
+    def test_approving_never_lowers_a_requester_made_owner_since(self, mock_send_mail):
+        access_request = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.viewer
+        )
+        DocumentPermissionFactory(
+            document=self.document, user=self.viewer, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+        url = reverse(
+            "document_access_request_approve",
+            args=[self.document.pk, access_request.pk],
+        )
+
+        with self.assertNumQueries(8):
+            response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.status, AccessRequestStatus.APPROVED)
+        self.assertEqual(resolve_access(self.viewer, self.document), AccessLevel.OWNER)
 
     @patch("core.email.send_mail")
     def test_owner_can_deny_a_request(self, mock_send_mail):
@@ -2298,6 +2418,37 @@ class DocumentAccessRequestListsAPITests(AssumeActiveSubscription, APITestCase):
                 ),
             ],
         )
+
+    def test_requester_can_narrow_their_requests_to_one_document(self):
+        DocumentAccessRequestFactory(
+            document=self.first,
+            requested_by=self.requester,
+            status=AccessRequestStatus.DENIED,
+        )
+        DocumentAccessRequestFactory(document=self.second, requested_by=self.requester)
+        self.client.force_authenticate(self.requester)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(
+                reverse("document_access_request_mine"), {"document": self.first.pk}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [row["document"] for row in response.data["results"]], [self.first.pk]
+        )
+
+    def test_a_non_numeric_document_filter_matches_nothing(self):
+        DocumentAccessRequestFactory(document=self.first, requested_by=self.requester)
+        self.client.force_authenticate(self.requester)
+
+        with self.assertNumQueries(0):
+            response = self.client.get(
+                reverse("document_access_request_mine"), {"document": "first"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 0)
 
     def test_requester_list_leaves_out_soft_deleted_documents(self):
         DocumentAccessRequestFactory(document=self.first, requested_by=self.requester)

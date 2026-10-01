@@ -161,6 +161,61 @@
           "in_trash": true
         }
       ]
+    },
+    {
+      "name": "Sharing E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "owner@sharing.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "alex@sharing.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "blair@sharing.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "casey@sharing.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Atlas",
+          "visibility": "PRIVATE",
+          "owner": "owner@sharing.e2e.test"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Plan",
+          "content": "Shared, re-levelled, then revoked.",
+          "visibility": "PRIVATE",
+          "owner": "owner@sharing.e2e.test"
+        },
+        {
+          "title": "Solo",
+          "content": "Only one Owner.",
+          "visibility": "PRIVATE",
+          "owner": "owner@sharing.e2e.test"
+        },
+        {
+          "title": "Policy",
+          "content": "Requested and approved.",
+          "visibility": "PUBLIC",
+          "owner": "owner@sharing.e2e.test"
+        },
+        {
+          "title": "Notice",
+          "content": "Requested and denied.",
+          "visibility": "PUBLIC",
+          "owner": "owner@sharing.e2e.test"
+        }
+      ]
     }
   ]
 }

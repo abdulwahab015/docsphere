@@ -15,8 +15,10 @@ import { DocumentEditor } from '@/features/documents/components/DocumentEditor'
 import { DocumentProjectLink } from '@/features/documents/components/DocumentProjectLink'
 import { DocumentReader } from '@/features/documents/components/DocumentReader'
 import { useDocument, useUpdateDocument } from '@/features/documents/hooks'
+import { RequestEditAccessCard } from '@/features/sharing/components/RequestEditAccessCard'
+import { ShareDialog } from '@/features/sharing/components/ShareDialog'
 import { useIdParam } from '@/hooks/use-id-param'
-import { can } from '@/lib/access'
+import { can, canRequestEditAccess } from '@/lib/access'
 import { formatDate } from '@/lib/format'
 
 export function DocumentPage() {
@@ -55,7 +57,16 @@ function DocumentView({ document }: { document: Document }) {
       <PageHeader
         title={document.title}
         actions={
-          can(document.access_level, 'DELETE') && <DeleteDocumentButton document={document} />
+          <>
+            {can(document.access_level, 'RESHARE') && (
+              <ShareDialog
+                resource={{ kind: 'document', id: document.id }}
+                name={document.title}
+                visibility={document.visibility}
+              />
+            )}
+            {can(document.access_level, 'DELETE') && <DeleteDocumentButton document={document} />}
+          </>
         }
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -65,6 +76,9 @@ function DocumentView({ document }: { document: Document }) {
           <DocumentReader document={document} />
         )}
         <div className="flex flex-col gap-6">
+          {canRequestEditAccess(document.access_level) && (
+            <RequestEditAccessCard documentId={document.id} />
+          )}
           <Card>
             <CardHeader>
               <CardTitle>
