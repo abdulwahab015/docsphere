@@ -66,3 +66,19 @@ class Invitation(TimeStampedModel):
 
     def __str__(self):
         return f"{self.email} ({self.status})"
+
+    @property
+    def is_expired(self):
+        """Still stored as pending, but sent longer ago than
+        ``INVITATION_EXPIRY``, so its link no longer works. Expiry is worked
+        out on read and never written back; a resend restarts the window."""
+        return (
+            self.status == InvitationStatus.PENDING
+            and timezone.now() - self.sent_at > settings.INVITATION_EXPIRY
+        )
+
+    @property
+    def current_status(self):
+        """``status`` as the invitee would find it: ``EXPIRED`` once a
+        pending link has run out."""
+        return InvitationStatus.EXPIRED if self.is_expired else self.status

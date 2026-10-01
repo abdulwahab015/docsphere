@@ -57,6 +57,10 @@ accounts there, not in the tests. The first run needs a browser:
 `cd frontend && npx playwright install chromium`. When a test fails, a screenshot and trace
 are written to `frontend/test-results/`. Open a trace with `npx playwright show-trace <zip>`.
 
+The API writes the emails it sends (invitations, password resets) to files in
+`node_modules/.tmp/e2e-mail/`, and `emailedLink()` in `e2e/fixtures.ts` reads the link out of
+the latest one, so tests can follow an emailed link like a person would.
+
 ## API types
 
 `src/api/schema.d.ts` is generated from the backend's OpenAPI schema. Never edit
@@ -72,7 +76,7 @@ src/
 ├── api/          # HTTP client (token refresh), error parsing, generated schema.d.ts + type aliases
 ├── app/          # App root, route table, paths, sidebar navigation, layouts (shell, sidebar, menus)
 ├── components/   # Shared components (page header, states, dialogs, badges, form/); ui/ = shadcn
-├── features/     # One folder per domain: auth, people, organization, projects, documents, sharing
+├── features/     # One folder per domain: auth, people, organization, projects, documents, sharing, team
 ├── hooks/        # Shared hooks (URL list params, page title, id params)
 ├── lib/          # Framework-agnostic helpers (env, access rules, formatting, form errors)
 ├── pages/        # Route-level pages that belong to no single feature (not found, error)

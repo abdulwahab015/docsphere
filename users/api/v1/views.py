@@ -23,6 +23,7 @@ from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
     CurrentUserSerializer,
     InvitationAcceptSerializer,
+    InvitationBulkResultSerializer,
     InvitationCreateSerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -46,6 +47,7 @@ from users.permissions import IsOrganizationAdmin
 from users.services import (
     blacklist_outstanding_tokens,
     bulk_create_invitations,
+    find_invitation_conflict,
     parse_invitation_emails,
     refresh_invitation,
 )
@@ -64,7 +66,10 @@ def _get_pending_invitation(request, pk):
     """An invitation in the requester's organization that is still pending;
     one from another organization is a 404, an already-settled one a 400."""
     invitation = get_object_or_404(
-        Invitation.objects.for_organization(request.user.organization), pk=pk
+        Invitation.objects.for_organization(request.user.organization).select_related(
+            "invited_by"
+        ),
+        pk=pk,
     )
     if invitation.status != InvitationStatus.PENDING:
         raise ValidationError({"detail": "This invitation is no longer pending."})
@@ -157,9 +162,11 @@ class InvitationListCreateAPIView(generics.ListCreateAPIView):
     permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
     def get_queryset(self):
-        return Invitation.objects.for_organization(
-            self.request.user.organization
-        ).order_by("-created")
+        return (
+            Invitation.objects.for_organization(self.request.user.organization)
+            .select_related("invited_by")
+            .order_by("-created")
+        )
 
     def perform_create(self, serializer):
         invitation = serializer.save()
@@ -181,7 +188,7 @@ class InvitationBulkCreateAPIView(APIView):
             }
         },
         responses={
-            201: OpenApiResponse(description="Summary of created/skipped rows."),
+            201: InvitationBulkResultSerializer,
             400: OpenApiResponse(
                 description="Missing file, invalid .xlsx, or row-count cap exceeded."
             ),
@@ -204,8 +211,9 @@ class InvitationBulkCreateAPIView(APIView):
             organization=request.user.organization,
             invited_by=request.user,
         )
+        summary = {"created": len(result["created"]), "skipped": result["skipped"]}
         return Response(
-            {"created": len(result["created"]), "skipped": result["skipped"]},
+            InvitationBulkResultSerializer(summary).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -234,7 +242,7 @@ class InvitationAcceptAPIView(APIView):
                 .select_related("organization")
                 .get(pk=invitation_id)
             )
-            if invitation.status != InvitationStatus.PENDING:
+            if invitation.current_status != InvitationStatus.PENDING:
                 return Response(
                     {"token": INVALID_INVITATION_MESSAGE},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -490,13 +498,30 @@ class InvitationRevokeAPIView(APIView):
 
 class InvitationResendAPIView(APIView):
     """Re-sends a pending invitation with a new token and a fresh expiry
-    window; the previously emailed link stops working."""
+    window; the previously emailed link stops working. An expired invitation
+    can be resent too - unless the address has joined, or been sent a newer
+    invitation, since."""
 
     permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
-    @extend_schema(request=None, responses={200: InvitationCreateSerializer})
+    @extend_schema(
+        request=None,
+        responses={
+            200: InvitationCreateSerializer,
+            400: OpenApiResponse(
+                description="No longer pending, the address has an account, "
+                "or it has a newer pending invitation."
+            ),
+        },
+    )
     def post(self, request, pk):
         invitation = _get_pending_invitation(request, pk)
+        conflict = find_invitation_conflict(
+            request.user.organization, invitation.email, renewing=invitation
+        )
+        if conflict:
+            raise ValidationError({"detail": conflict})
+
         refresh_invitation(invitation)
         send_invitation_email_task.delay(invitation.pk)
 

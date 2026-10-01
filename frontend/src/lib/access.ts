@@ -1,4 +1,4 @@
-import type { AccessLevel, Visibility } from '@/api/types'
+import type { AccessLevel, OrgRole, Visibility } from '@/api/types'
 
 /** What each access level may do - the same table as the backend's
  * `projects/mappings.py::ALLOWED_ACTIONS` (Owner > Editor > Viewer). */
@@ -50,4 +50,9 @@ export function visibilityDescriptions(organizationName: string): Record<Visibil
     PRIVATE: 'Only people you share it with can see it.',
     PUBLIC: `Everyone in ${organizationName} can view it.`,
   }
+}
+
+export const ORG_ROLE_LABELS: Record<OrgRole, string> = {
+  ADMIN: 'Admin',
+  MEMBER: 'Member',
 }

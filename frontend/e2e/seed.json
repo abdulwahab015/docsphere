@@ -216,6 +216,28 @@
           "owner": "owner@sharing.e2e.test"
         }
       ]
+    },
+    {
+      "name": "Team E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@team.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "promote@team.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "leaver@team.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "forgetful@team.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
     }
   ]
 }

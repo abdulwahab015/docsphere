@@ -10,8 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { SidebarMenuButton } from '@/components/ui/sidebar'
 import { useLogout, useSignedInMember } from '@/features/auth/hooks'
-
-const ROLE_LABELS = { ADMIN: 'Admin', MEMBER: 'Member' } as const
+import { ORG_ROLE_LABELS } from '@/lib/access'
 
 export function UserMenu() {
   const user = useSignedInMember()
@@ -24,7 +23,7 @@ export function UserMenu() {
           <div className="grid flex-1 text-left text-sm leading-tight">
             <span className="truncate font-medium">{user.email}</span>
             <span className="truncate text-xs text-muted-foreground">
-              {ROLE_LABELS[user.org_role]} · {user.organization.name}
+              {ORG_ROLE_LABELS[user.org_role]} · {user.organization.name}
             </span>
           </div>
           <ChevronsUpDownIcon className="ml-auto" aria-hidden />

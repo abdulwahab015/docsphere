@@ -1,4 +1,13 @@
-import type { AccessRequest, CurrentUser, Document, Grant, Project, TokenPair } from '@/api/types'
+import type {
+  AccessRequest,
+  CurrentUser,
+  Document,
+  Grant,
+  Invitation,
+  Project,
+  TokenPair,
+  UserDetail,
+} from '@/api/types'
 
 export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   return {
@@ -70,6 +79,31 @@ export function buildAccessRequest(overrides: Partial<AccessRequest> = {}): Acce
     status: 'PENDING',
     created: '2026-09-20T09:00:00Z',
     modified: '2026-09-20T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildUserDetail(overrides: Partial<UserDetail> = {}): UserDetail {
+  return {
+    id: 2,
+    email: 'grace@example.com',
+    org_role: 'MEMBER',
+    created: '2026-08-01T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildInvitation(overrides: Partial<Invitation> = {}): Invitation {
+  return {
+    id: 41,
+    email: 'newcomer@example.com',
+    organization: 1,
+    invited_by: 1,
+    invited_by_email: 'ada@example.com',
+    status: 'PENDING',
+    created: '2026-09-25T09:00:00Z',
+    sent_at: '2026-09-25T09:00:00Z',
+    accepted_at: null,
     ...overrides,
   }
 }

@@ -814,7 +814,9 @@ export interface paths {
         put?: never;
         /**
          * @description Re-sends a pending invitation with a new token and a fresh expiry
-         *     window; the previously emailed link stops working.
+         *     window; the previously emailed link stops working. An expired invitation
+         *     can be resent too - unless the address has joined, or been sent a newer
+         *     invitation, since.
          */
         post: operations["api_v1_users_invitations_resend_create"];
         delete?: never;
@@ -1058,8 +1060,24 @@ export interface components {
             password: string;
         };
         /**
-         * @description Creates a pending Invitation. `organization`, `invited_by`, `token`, and
-         *     `status` are all set server-side — never accepted from the client.
+         * @description What a bulk upload did: how many invitations were sent, and every row
+         *     that wasn't, with why.
+         */
+        InvitationBulkResult: {
+            created: number;
+            skipped: components["schemas"]["InvitationBulkSkip"][];
+        };
+        InvitationBulkSkip: {
+            /** @description The row as it appeared in the file. */
+            email: string;
+            reason: string;
+        };
+        /**
+         * @description Creates a pending Invitation, and is how invitations are listed.
+         *     `organization`, `invited_by` and `status` are all set server-side - never
+         *     accepted from the client. The token is never returned: it only travels in
+         *     the invitation email, so nobody but the invitee can accept it. `status`
+         *     reads ``EXPIRED`` once a pending link has run out.
          */
         InvitationCreate: {
             readonly id: number;
@@ -1067,7 +1085,8 @@ export interface components {
             email: string;
             readonly organization: number;
             readonly invited_by: number | null;
-            readonly token: string;
+            /** Format: email */
+            readonly invited_by_email: string | null;
             readonly status: components["schemas"]["InvitationCreateStatusEnum"];
             /** Format: date-time */
             readonly created: string;
@@ -2691,6 +2710,13 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationCreate"];
                 };
             };
+            /** @description No longer pending, the address has an account, or it has a newer pending invitation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     api_v1_users_invitations_accept_create: {
@@ -2734,12 +2760,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Summary of created/skipped rows. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["InvitationBulkResult"];
+                };
             };
             /** @description Missing file, invalid .xlsx, or row-count cap exceeded. */
             400: {

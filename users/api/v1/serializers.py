@@ -1,7 +1,5 @@
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
@@ -12,7 +10,7 @@ from organizations.api.v1.serializers import OrganizationSummarySerializer
 from users.choices import InvitationStatus
 from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
 from users.models import Invitation
-from users.services import create_invitation
+from users.services import create_invitation, find_invitation_conflict
 from users.validators import validate_password_for_field
 
 User = get_user_model()
@@ -94,8 +92,18 @@ class LoginSerializer(TokenObtainPairSerializer):
 
 
 class InvitationCreateSerializer(serializers.ModelSerializer):
-    """Creates a pending Invitation. `organization`, `invited_by`, `token`, and
-    `status` are all set server-side — never accepted from the client."""
+    """Creates a pending Invitation, and is how invitations are listed.
+    `organization`, `invited_by` and `status` are all set server-side - never
+    accepted from the client. The token is never returned: it only travels in
+    the invitation email, so nobody but the invitee can accept it. `status`
+    reads ``EXPIRED`` once a pending link has run out."""
+
+    invited_by_email = serializers.EmailField(
+        source="invited_by.email", read_only=True, allow_null=True
+    )
+    status = serializers.ChoiceField(
+        source="current_status", choices=InvitationStatus.choices, read_only=True
+    )
 
     class Meta:
         model = Invitation
@@ -104,7 +112,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "email",
             "organization",
             "invited_by",
-            "token",
+            "invited_by_email",
             "status",
             "created",
             "sent_at",
@@ -114,32 +122,22 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "id",
             "organization",
             "invited_by",
-            "token",
-            "status",
             "created",
             "sent_at",
             "accepted_at",
         ]
 
     def validate_email(self, value):
-        org = self.context["request"].user.organization
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        if (
-            Invitation.objects.for_organization(org)
-            .filter(email=value, status=InvitationStatus.PENDING)
-            .exists()
-        ):
-            raise serializers.ValidationError(
-                "This email already has a pending invitation."
-            )
+        conflict = find_invitation_conflict(
+            self.context["request"].user.organization, value
+        )
+        if conflict:
+            raise serializers.ValidationError(conflict)
         return value
 
     def validate(self, attrs):
         org = self.context["request"].user.organization
-        pending = Invitation.objects.for_organization(org).filter(
-            status=InvitationStatus.PENDING
-        )
+        pending = Invitation.objects.for_organization(org).pending()
         if pending.count() >= MAX_PENDING_INVITATIONS_PER_ORG:
             raise serializers.ValidationError(
                 "This organization has too many pending invitations."
@@ -169,16 +167,31 @@ class InvitationAcceptSerializer(serializers.Serializer):
                 {"token": INVALID_INVITATION_MESSAGE}
             ) from None
 
-        if invitation.status != InvitationStatus.PENDING:
-            raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
-
-        if timezone.now() - invitation.sent_at > settings.INVITATION_EXPIRY:
+        # Accepted, revoked or expired - or the address has an account by now
+        # (e.g. it signed up a new organization), which a new user would clash with.
+        if (
+            invitation.current_status != InvitationStatus.PENDING
+            or User.objects.filter(email=invitation.email).exists()
+        ):
             raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
 
         validate_password_for_field("password", attrs["password"])
 
         attrs["invitation"] = invitation
         return attrs
+
+
+class InvitationBulkSkipSerializer(serializers.Serializer):
+    email = serializers.CharField(help_text="The row as it appeared in the file.")
+    reason = serializers.CharField()
+
+
+class InvitationBulkResultSerializer(serializers.Serializer):
+    """What a bulk upload did: how many invitations were sent, and every row
+    that wasn't, with why."""
+
+    created = serializers.IntegerField()
+    skipped = InvitationBulkSkipSerializer(many=True)
 
 
 class TokenPairSerializer(serializers.Serializer):
