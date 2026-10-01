@@ -72,7 +72,7 @@ src/
 ├── api/          # HTTP client (token refresh), error parsing, generated schema.d.ts + type aliases
 ├── app/          # App root, route table, paths, sidebar navigation, layouts (shell, sidebar, menus)
 ├── components/   # Shared components (page header, states, dialogs, badges, form/); ui/ = shadcn
-├── features/     # One folder per domain: auth, people, organization, projects, documents
+├── features/     # One folder per domain: auth, people, organization, projects, documents, sharing
 ├── hooks/        # Shared hooks (URL list params, page title, id params)
 ├── lib/          # Framework-agnostic helpers (env, access rules, formatting, form errors)
 ├── pages/        # Route-level pages that belong to no single feature (not found, error)

@@ -1,4 +1,4 @@
-import { type Action, can } from '@/lib/access'
+import { type Action, can, canRequestEditAccess } from '@/lib/access'
 
 const EVERY_ACTION: Action[] = ['READ', 'WRITE', 'DELETE', 'RESHARE']
 
@@ -15,5 +15,14 @@ describe('can', () => {
 
   it('allows nothing without an access level', () => {
     expect(allowedActions(null)).toEqual([])
+  })
+})
+
+describe('canRequestEditAccess', () => {
+  it('lets only a Viewer ask for Editor access', () => {
+    expect(canRequestEditAccess('VIEWER')).toBe(true)
+    expect(canRequestEditAccess('EDITOR')).toBe(false)
+    expect(canRequestEditAccess('OWNER')).toBe(false)
+    expect(canRequestEditAccess(null)).toBe(false)
   })
 })

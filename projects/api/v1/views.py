@@ -68,6 +68,35 @@ def _grant_creator_ownership(permission_model, resource_field, resource, user):
     resource.user_access_level = AccessLevel.OWNER
 
 
+def _grant_access(permission_model, resource_field, resource, user, access_level):
+    """Gives ``user`` ``access_level`` on ``resource``, updating an existing
+    grant in place. Lowering the resource's last Owner is refused, the same
+    as revoking them."""
+    existing = permission_model.objects.filter(
+        user=user, **{resource_field: resource}
+    ).first()
+    if existing and access_level != AccessLevel.OWNER:
+        ensure_not_last_owner(
+            existing, permission_model, resource_field, resource, verb="downgrade"
+        )
+
+    permission, _ = permission_model.objects.update_or_create(
+        user=user, defaults={"access_level": access_level}, **{resource_field: resource}
+    )
+    return permission
+
+
+def _filter_by_id_param(queryset, request, param, field):
+    """Narrows ``queryset`` to ``field`` = the ``?param=`` id when one is
+    given; a non-numeric value matches nothing rather than erroring."""
+    value = request.query_params.get(param)
+    if not value:
+        return queryset
+    if not value.isdigit():
+        return queryset.none()
+    return queryset.filter(**{field: value})
+
+
 class ProjectListCreateAPIView(generics.ListCreateAPIView):
     """Lists the org's projects (``?search=`` matches name); creates one -
     admin-only - granting the creator Owner access."""
@@ -177,16 +206,12 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
     search_fields = ("title",)
 
     def get_queryset(self):
-        user = self.request.user
-        queryset = Document.objects.visible_to(user).select_related("created_by")
-
-        project_id = self.request.query_params.get("project")
-        if project_id:
-            if not project_id.isdigit():
-                return queryset.none()
-            queryset = queryset.filter(project_id=project_id)
-
-        return queryset.order_by("title")
+        queryset = Document.objects.visible_to(self.request.user).select_related(
+            "created_by"
+        )
+        return _filter_by_id_param(
+            queryset, self.request, "project", "project_id"
+        ).order_by("title")
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -277,8 +302,8 @@ class DocumentRestoreAPIView(APIView):
 class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     """Lists a project's ``ProjectPermission`` grants, or grants/updates one
     for a target user - Owner-level access required. Granting an already-
-    permitted user updates their level in place; each grant emails the
-    target user."""
+    permitted user updates their level in place (never lowering the last
+    Owner); each grant emails the target user."""
 
     serializer_class = ProjectPermissionSerializer
 
@@ -313,10 +338,8 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
 
-        permission, _ = ProjectPermission.objects.update_or_create(
-            project=project,
-            user=serializer.validated_data["user"],
-            defaults={"access_level": serializer.validated_data["access_level"]},
+        permission = _grant_access(
+            ProjectPermission, "project", project, **serializer.validated_data
         )
         send_project_shared_email_task.delay(permission.pk)
 
@@ -388,10 +411,8 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
 
-        permission, _ = DocumentPermission.objects.update_or_create(
-            document=document,
-            user=serializer.validated_data["user"],
-            defaults={"access_level": serializer.validated_data["access_level"]},
+        permission = _grant_access(
+            DocumentPermission, "document", document, **serializer.validated_data
         )
         send_document_shared_email_task.delay(permission.pk)
 
@@ -485,7 +506,8 @@ def _get_pending_access_request_to_review(user, document_id, request_id):
 
 class DocumentAccessRequestApproveAPIView(APIView):
     """Owner-only. Upgrades the requester to Editor and marks the request
-    approved, inside one transaction."""
+    approved, inside one transaction. Approval only ever raises access: a
+    requester who has been given Editor or Owner since asking keeps it."""
 
     @extend_schema(request=None, responses={200: DocumentAccessRequestSerializer})
     def post(self, request, pk, request_id):
@@ -494,11 +516,14 @@ class DocumentAccessRequestApproveAPIView(APIView):
         )
 
         with transaction.atomic():
-            DocumentPermission.objects.update_or_create(
+            permission, _ = DocumentPermission.objects.get_or_create(
                 document=access_request.document,
                 user=access_request.requested_by,
                 defaults={"access_level": AccessLevel.EDITOR},
             )
+            if permission.access_level == AccessLevel.VIEWER:
+                permission.access_level = AccessLevel.EDITOR
+                permission.save(update_fields=["access_level"])
             access_request.status = AccessRequestStatus.APPROVED
             access_request.reviewed_by = request.user
             access_request.save(update_fields=["status", "reviewed_by", "modified"])
@@ -560,23 +585,35 @@ class DocumentTrashListAPIView(generics.ListAPIView):
         )
 
 
+@extend_schema_view(
+    get=extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "document",
+                int,
+                description="Only requests for this document.",
+            )
+        ]
+    )
+)
 class MyDocumentAccessRequestListAPIView(generics.ListAPIView):
     """The caller's own access requests in every status, newest first, so a
-    requester can see whether theirs was approved or denied. Requests on
-    documents since soft-deleted, or hidden in a trashed project, are left
-    out."""
+    requester can see whether theirs was approved or denied (``?document=``
+    narrows to one document). Requests on documents since soft-deleted, or
+    hidden in a trashed project, are left out."""
 
     serializer_class = DocumentAccessRequestSerializer
 
     def get_queryset(self):
         user = self.request.user
+        queryset = DocumentAccessRequest.objects.filter(
+            outside_trashed_projects("document__"),
+            requested_by=user,
+            document__organization=user.organization,
+            document__is_active=True,
+        )
         return (
-            DocumentAccessRequest.objects.filter(
-                outside_trashed_projects("document__"),
-                requested_by=user,
-                document__organization=user.organization,
-                document__is_active=True,
-            )
+            _filter_by_id_param(queryset, self.request, "document", "document_id")
             .select_related("document", "requested_by", "reviewed_by")
             .order_by("-created")
         )

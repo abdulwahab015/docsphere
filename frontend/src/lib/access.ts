@@ -17,10 +17,25 @@ export function can(level: AccessLevel | null, action: Action) {
   return Boolean(level && ALLOWED_ACTIONS[level].has(action))
 }
 
+/** Whether someone at `level` may ask the owners for Editor access: only a
+ * Viewer may, as the API requires. */
+export function canRequestEditAccess(level: AccessLevel | null) {
+  return can(level, 'READ') && !can(level, 'WRITE')
+}
+
+/** Lowest to highest, the order a level picker lists them in. */
+export const ACCESS_LEVELS: readonly AccessLevel[] = ['VIEWER', 'EDITOR', 'OWNER']
+
 export const ACCESS_LEVEL_LABELS: Record<AccessLevel, string> = {
   VIEWER: 'Viewer',
   EDITOR: 'Editor',
   OWNER: 'Owner',
+}
+
+export const ACCESS_LEVEL_DESCRIPTIONS: Record<AccessLevel, string> = {
+  VIEWER: 'Can view.',
+  EDITOR: 'Can view and edit.',
+  OWNER: 'Can edit, delete, and manage who has access.',
 }
 
 export const VISIBILITY_LABELS: Record<Visibility, string> = {

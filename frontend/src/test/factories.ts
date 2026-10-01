@@ -1,4 +1,4 @@
-import type { CurrentUser, Document, Project, TokenPair } from '@/api/types'
+import type { AccessRequest, CurrentUser, Document, Grant, Project, TokenPair } from '@/api/types'
 
 export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   return {
@@ -43,6 +43,33 @@ export function buildDocument(overrides: Partial<Document> = {}): Document {
     project: null,
     created: '2026-09-01T09:00:00Z',
     modified: '2026-09-15T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildGrant(overrides: Partial<Grant> = {}): Grant {
+  return {
+    id: 21,
+    project: 7,
+    user: 1,
+    user_email: 'ada@example.com',
+    access_level: 'OWNER',
+    ...overrides,
+  }
+}
+
+export function buildAccessRequest(overrides: Partial<AccessRequest> = {}): AccessRequest {
+  return {
+    id: 31,
+    document: 11,
+    document_title: 'Findings',
+    requested_by: 2,
+    requested_by_email: 'grace@example.com',
+    reviewed_by: null,
+    reviewed_by_email: null,
+    status: 'PENDING',
+    created: '2026-09-20T09:00:00Z',
+    modified: '2026-09-20T09:00:00Z',
     ...overrides,
   }
 }

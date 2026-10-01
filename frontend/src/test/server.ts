@@ -13,6 +13,20 @@ export function spyResolver(resolver: HttpResponseResolver) {
   return vi.fn<HttpResponseResolver>(resolver)
 }
 
+/** A response held back until `release()` is called, so a test can look at
+ * the UI while the request is still in flight. */
+export function heldResponse(response: () => Response) {
+  let release = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const resolver = async () => {
+    await released
+    return response()
+  }
+  return { resolver, release }
+}
+
 export const server = setupServer(
   // By default nobody is signed in: the browser holds no refresh cookie,
   // which the refresh endpoint answers with a 400.
@@ -23,4 +37,8 @@ export const server = setupServer(
   // documents either (a project's page lists its documents).
   http.get(apiUrl('/projects/'), () => HttpResponse.json({ count: 0, results: [] })),
   http.get(apiUrl('/documents/'), () => HttpResponse.json({ count: 0, results: [] })),
+  // A Viewer's document page looks up their earlier requests for edit access.
+  http.get(apiUrl('/documents/access-requests/mine/'), () =>
+    HttpResponse.json({ count: 0, results: [] }),
+  ),
 )

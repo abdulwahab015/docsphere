@@ -14,6 +14,7 @@ import { DeleteProjectButton } from '@/features/projects/components/DeleteProjec
 import { EditProjectDialog } from '@/features/projects/components/EditProjectDialog'
 import { VisibilityCard } from '@/components/VisibilityCard'
 import { useProject, useUpdateProject } from '@/features/projects/hooks'
+import { ShareDialog } from '@/features/sharing/components/ShareDialog'
 import { useIdParam } from '@/hooks/use-id-param'
 import { can } from '@/lib/access'
 import { formatDate } from '@/lib/format'
@@ -63,6 +64,13 @@ function ProjectOverview({ project }: { project: Project }) {
         actions={
           <>
             {can(project.access_level, 'WRITE') && <EditProjectDialog project={project} />}
+            {can(project.access_level, 'RESHARE') && (
+              <ShareDialog
+                resource={{ kind: 'project', id: project.id }}
+                name={project.name}
+                visibility={project.visibility}
+              />
+            )}
             {can(project.access_level, 'DELETE') && <DeleteProjectButton project={project} />}
           </>
         }

@@ -13,6 +13,7 @@ export const PATHS = {
   documents: '/documents',
   documentDetail: '/documents/:documentId',
   documentTrash: '/documents/trash',
+  accessRequests: '/requests',
   people: '/people',
   organizationSettings: '/settings/organization',
 } as const

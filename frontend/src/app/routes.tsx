@@ -20,6 +20,7 @@ import { DocumentTrashPage } from '@/features/documents/pages/DocumentTrashPage'
 import { ProjectDetailPage } from '@/features/projects/pages/ProjectDetailPage'
 import { ProjectsPage } from '@/features/projects/pages/ProjectsPage'
 import { ProjectTrashPage } from '@/features/projects/pages/ProjectTrashPage'
+import { RequestsPage } from '@/features/sharing/pages/RequestsPage'
 import { RouteErrorPage } from '@/pages/RouteErrorPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 
@@ -54,6 +55,7 @@ export const routes: RouteObject[] = [
                   { path: PATHS.documents, element: <DocumentsPage /> },
                   { path: PATHS.documentTrash, element: <DocumentTrashPage /> },
                   { path: PATHS.documentDetail, element: <DocumentPage /> },
+                  { path: PATHS.accessRequests, element: <RequestsPage /> },
                   { path: PATHS.people, element: <PeoplePage /> },
                   {
                     element: <RequireOrgAdmin />,

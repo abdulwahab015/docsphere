@@ -18,6 +18,7 @@ describe('AppSidebar', () => {
     renderRoute('/', { signedInAs: buildCurrentUser({ org_role: 'MEMBER' }) })
 
     expect(mainNavigation().getByRole('link', { name: 'People' })).toBeInTheDocument()
+    expect(mainNavigation().getByRole('link', { name: 'Requests' })).toBeInTheDocument()
     expect(mainNavigation().queryByRole('link', { name: 'Organization' })).not.toBeInTheDocument()
   })
 

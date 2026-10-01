@@ -34,6 +34,13 @@ export type DocumentUpdatePayload = Pick<
   Schemas['PatchedDocument'],
   'title' | 'content' | 'visibility'
 >
+export type ProjectPermission = Schemas['ProjectPermission']
+export type DocumentPermission = Schemas['DocumentPermission']
+/** One person's access to a project or document; only the shared fields are used. */
+export type Grant = ProjectPermission | DocumentPermission
+export type SharePayload = Schemas['Share']
+export type AccessRequest = Schemas['DocumentAccessRequest']
+export type AccessRequestStatus = Schemas['DocumentAccessRequestStatusEnum']
 export type TokenPair = Schemas['TokenPair']
 export type LoginPayload = Schemas['Login']
 export type OrganizationSignupPayload = Schemas['OrganizationSignup']

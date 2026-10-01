@@ -2,6 +2,7 @@ import { http, HttpResponse, type JsonBodyType } from 'msw'
 
 import { apiClient } from '@/api/client'
 import {
+  actionErrorMessage,
   getErrorStatus,
   NETWORK_ERROR_MESSAGE,
   parseApiError,
@@ -121,5 +122,28 @@ describe('getErrorStatus', () => {
 
   it('returns undefined for errors without a response', () => {
     expect(getErrorStatus(new Error('boom'))).toBeUndefined()
+  })
+})
+
+describe('actionErrorMessage', () => {
+  const FALLBACK = "Couldn't do it."
+
+  it("gives the API's reason for a 400", async () => {
+    const error = await failWith(400, { detail: "Cannot revoke the project's last Owner." })
+
+    expect(actionErrorMessage(error, FALLBACK)).toBe("Cannot revoke the project's last Owner.")
+  })
+
+  it('gives a field message when a 400 has no form-level one', async () => {
+    const error = await failWith(400, { user: ['This user does not belong to your organization.'] })
+
+    expect(actionErrorMessage(error, FALLBACK)).toBe(
+      'This user does not belong to your organization.',
+    )
+  })
+
+  it('falls back for any other failure', async () => {
+    expect(actionErrorMessage(await failWith(403, { detail: 'No.' }), FALLBACK)).toBe(FALLBACK)
+    expect(actionErrorMessage(new Error('boom'), FALLBACK)).toBe(FALLBACK)
   })
 })
