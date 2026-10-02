@@ -11,6 +11,9 @@ export type OrganizationUpdatePayload = Pick<
   'name' | 'billing_email'
 >
 export type ActiveSubscription = Schemas['ActiveSubscription']
+export type Price = Schemas['Price']
+export type CheckoutSessionResponse = Schemas['CheckoutSessionResponse']
+export type BillingPortalSessionResponse = Schemas['BillingPortalSessionResponse']
 // Admins also receive `org_role` and `created`; members get only `id` and `email`.
 export type RosterUser = Schemas['RosterUser']
 export type AccessLevel = Schemas['AccessLevelEnum']

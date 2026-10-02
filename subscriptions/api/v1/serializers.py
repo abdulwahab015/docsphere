@@ -3,6 +3,11 @@ from rest_framework import serializers
 
 from subscriptions.utils import active_recurring_prices
 
+ALREADY_SUBSCRIBED_MESSAGE = (
+    "Your organization already has an active subscription. "
+    "Manage it from the billing portal."
+)
+
 
 class PriceSerializer(serializers.ModelSerializer):
     """A subscribable plan, as a client needs it to render a plan picker and
@@ -45,6 +50,9 @@ class CheckoutSessionSerializer(serializers.Serializer):
         organization = self.context["organization"]
         if not organization.billing_email:
             raise serializers.ValidationError("Organization billing email is not set.")
+        # A second checkout would start a second, separately billed subscription.
+        if organization.active_subscription:
+            raise serializers.ValidationError(ALREADY_SUBSCRIBED_MESSAGE)
         return attrs
 
 

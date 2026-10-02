@@ -1,5 +1,6 @@
-// Paths the backend puts in emails (acceptInvite, resetPassword) must keep
-// their exact shape.
+// Paths the backend sends people to (acceptInvite and resetPassword in emails;
+// billing, billingSuccess and billingCancel as Stripe's return addresses) must
+// keep their exact shape.
 export const PATHS = {
   home: '/',
   login: '/login',
@@ -16,6 +17,9 @@ export const PATHS = {
   accessRequests: '/requests',
   people: '/people',
   organizationSettings: '/settings/organization',
+  billing: '/billing',
+  billingSuccess: '/billing/success',
+  billingCancel: '/billing/cancel',
 } as const
 
 export function projectPath(projectId: number) {

@@ -1,5 +1,17 @@
 {
   "password": "E2e-Pass-123!",
+  "prices": [
+    {
+      "nickname": "Monthly",
+      "unit_amount": 1500,
+      "interval": "month"
+    },
+    {
+      "nickname": "Yearly",
+      "unit_amount": 15000,
+      "interval": "year"
+    }
+  ],
   "organizations": [
     {
       "name": "Acme E2E",
@@ -33,6 +45,10 @@
         {
           "email": "admin@lapsed.e2e.test",
           "role": "ADMIN"
+        },
+        {
+          "email": "member@lapsed.e2e.test",
+          "role": "MEMBER"
         }
       ]
     },
@@ -236,6 +252,27 @@
         {
           "email": "forgetful@team.e2e.test",
           "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Unpaid E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@unpaid.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
+    },
+    {
+      "name": "Paid E2E",
+      "billing_email": "billing@paid.e2e.test",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@paid.e2e.test",
+          "role": "ADMIN"
         }
       ]
     }

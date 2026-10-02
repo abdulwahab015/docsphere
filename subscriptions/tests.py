@@ -170,7 +170,7 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
         price = StripePriceFactory()
         self.client.force_authenticate(admin)
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(11):
             response = self.client.post(self.url, {"price_id": price.id})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -200,7 +200,7 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
         with patch.object(
             ScopedRateThrottle, "THROTTLE_RATES", {"billing_checkout": "1/min"}
         ):
-            with self.assertNumQueries(10):
+            with self.assertNumQueries(11):
                 first = self.client.post(self.url, {"price_id": price.id})
             self.assertEqual(first.status_code, status.HTTP_200_OK)
 
@@ -218,6 +218,31 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
             response = self.client.post(self.url, {"price_id": price.id})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("stripe.checkout.Session.create")
+    def test_organization_with_an_active_subscription_gets_400_without_calling_stripe(
+        self, mock_session_create
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(
+            customer=StripeCustomerFactory(subscriber=organization)
+        )
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory()
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["non_field_errors"],
+            [
+                "Your organization already has an active subscription. "
+                "Manage it from the billing portal."
+            ],
+        )
+        mock_session_create.assert_not_called()
 
     def test_non_admin_gets_403(self):
         organization = OrganizationFactory(billing_email="billing@example.com")

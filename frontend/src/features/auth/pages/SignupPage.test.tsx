@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
-import { buildCurrentUser, buildTokenPair } from '@/test/factories'
+import { buildCurrentUser, buildOrganization, buildTokenPair } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
@@ -36,13 +36,21 @@ describe('SignupPage', () => {
     server.use(
       http.post(apiUrl(SIGNUP_PATH), signup),
       http.get(apiUrl('/users/me/'), () => HttpResponse.json(newAdmin)),
+      http.get(apiUrl('/organizations/profile/'), () =>
+        HttpResponse.json(buildOrganization({ active_subscription: null, billing_email: null })),
+      ),
+      http.get(apiUrl('/subscriptions/prices/'), () =>
+        HttpResponse.json({ count: 0, results: [] }),
+      ),
     )
     const { user } = renderRoute('/signup')
 
     await fillForm(user)
 
-    // A brand-new organization has no subscription yet.
-    expect(await screen.findByText(/Subscribe to a plan/)).toBeInTheDocument()
+    // A brand-new organization has no subscription yet: its admin picks a plan.
+    expect(
+      await screen.findByRole('heading', { name: 'Subscribe to continue' }),
+    ).toBeInTheDocument()
     expect(await signup.mock.calls[0][0].request.json()).toEqual({
       name: 'Acme',
       billing_email: null,

@@ -7,6 +7,8 @@ from django.db import transaction
 from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
+    StripePriceFactory,
+    StripeProductFactory,
     StripeSubscriptionFactory,
 )
 from projects.choices import AccessLevel
@@ -21,9 +23,9 @@ from users.factories import UserFactory
 
 class Command(BaseCommand):
     help = (
-        "Creates the organizations, users, subscriptions, projects and documents "
-        "described in a JSON seed file, for the frontend's end-to-end tests. Only runs "
-        "where E2E_SEEDING_ENABLED is on (never in production)."
+        "Creates the plans (prices), organizations, users, subscriptions, projects "
+        "and documents described in a JSON seed file, for the frontend's end-to-end "
+        "tests. Only runs where E2E_SEEDING_ENABLED is on (never in production)."
     )
 
     def add_arguments(self, parser):
@@ -37,6 +39,7 @@ class Command(BaseCommand):
             seed = json.load(seed_json)
 
         with transaction.atomic():
+            self._seed_prices(seed.get("prices", []))
             for organization_spec in seed["organizations"]:
                 self._seed_organization(organization_spec, seed["password"])
 
@@ -44,8 +47,24 @@ class Command(BaseCommand):
             self.style.SUCCESS(f"Seeded {len(seed['organizations'])} organizations.")
         )
 
+    def _seed_prices(self, price_specs):
+        """The plans an organization can subscribe to - all recurring prices of
+        one product, as dj-stripe would have synced them from Stripe."""
+        if not price_specs:
+            return
+        product = StripeProductFactory(name="DocSphere")
+        for spec in price_specs:
+            StripePriceFactory(
+                product=product,
+                nickname=spec["nickname"],
+                unit_amount=spec["unit_amount"],
+                interval=spec["interval"],
+            )
+
     def _seed_organization(self, spec, password):
-        organization = OrganizationFactory(name=spec["name"])
+        organization = OrganizationFactory(
+            name=spec["name"], billing_email=spec.get("billing_email")
+        )
         if spec["subscribed"]:
             StripeSubscriptionFactory(
                 customer=StripeCustomerFactory(subscriber=organization)

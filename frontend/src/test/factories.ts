@@ -4,6 +4,8 @@ import type {
   Document,
   Grant,
   Invitation,
+  Organization,
+  Price,
   Project,
   TokenPair,
   UserDetail,
@@ -104,6 +106,36 @@ export function buildInvitation(overrides: Partial<Invitation> = {}): Invitation
     created: '2026-09-25T09:00:00Z',
     sent_at: '2026-09-25T09:00:00Z',
     accepted_at: null,
+    ...overrides,
+  }
+}
+
+export function buildOrganization(overrides: Partial<Organization> = {}): Organization {
+  return {
+    id: 1,
+    name: 'Acme',
+    billing_email: 'billing@acme.test',
+    active_subscription: {
+      id: 'sub_1',
+      status: 'active',
+      interval: 'year',
+      current_period_end: '2027-03-01T12:00:00Z',
+      cancel_at_period_end: false,
+    },
+    created: '2026-01-01T00:00:00Z',
+    modified: '2026-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildPrice(overrides: Partial<Price> = {}): Price {
+  return {
+    id: 'price_monthly',
+    nickname: 'Monthly',
+    product_name: 'DocSphere',
+    unit_amount: 1500,
+    currency: 'usd',
+    interval: 'month',
     ...overrides,
   }
 }

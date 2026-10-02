@@ -12,6 +12,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from djstripe.models import Price
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
@@ -380,9 +381,14 @@ class OrganizationProfileAPITests(APITestCase):
 class SeedE2ECommandTests(TestCase):
     seed = {
         "password": "Seed-Pass-123!",
+        "prices": [
+            {"nickname": "Monthly", "unit_amount": 1500, "interval": "month"},
+            {"nickname": "Yearly", "unit_amount": 15000, "interval": "year"},
+        ],
         "organizations": [
             {
                 "name": "Paid Org",
+                "billing_email": "billing@paid.test",
                 "subscribed": True,
                 "users": [{"email": "admin@paid.test", "role": "ADMIN"}],
                 "extra_members": 2,
@@ -439,7 +445,7 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(25):
+        with self.assertNumQueries(28):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
@@ -451,8 +457,26 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(admin.org_role, "ADMIN")
         self.assertTrue(admin.check_password("Seed-Pass-123!"))
 
+    def test_seeds_plans_and_billing_emails(self):
+        with self.assertNumQueries(28):
+            call_command("seed_e2e", self.seed_path, stdout=StringIO())
+
+        prices = Price.objects.order_by("stripe_data__unit_amount")
+        self.assertEqual(
+            [
+                (price.nickname, price.stripe_data["unit_amount"], price.product.name)
+                for price in prices
+            ],
+            [("Monthly", 1500, "DocSphere"), ("Yearly", 15000, "DocSphere")],
+        )
+        self.assertEqual(prices.last().stripe_data["recurring"], {"interval": "year"})
+        self.assertEqual(
+            Organization.objects.get(name="Paid Org").billing_email, "billing@paid.test"
+        )
+        self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
+
     def test_seeds_projects_with_their_owner_and_shares(self):
-        with self.assertNumQueries(25):
+        with self.assertNumQueries(28):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         roadmap = Project.objects.get(name="Roadmap")
@@ -467,7 +491,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(archived.visibility, "PUBLIC")
 
     def test_seeds_documents_in_projects_or_personal(self):
-        with self.assertNumQueries(25):
+        with self.assertNumQueries(28):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         spec = Document.objects.get(title="Spec")

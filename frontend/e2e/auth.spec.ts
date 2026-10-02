@@ -38,12 +38,12 @@ test.describe('signing in and out', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'People' })).toBeVisible()
   })
 
-  test('explains a lapsed subscription to its admin', async ({ page }) => {
+  test("offers the plans to a lapsed organization's admin", async ({ page }) => {
     await page.goto('/login')
     await fillLoginForm(page, LAPSED_ADMIN)
 
-    await expect(page.getByRole('heading', { name: 'Subscription inactive' })).toBeVisible()
-    await expect(page.getByText(/Subscribe to a plan/)).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Subscribe to continue' })).toBeVisible()
+    await expect(page.getByRole('list', { name: 'Plans' })).toBeVisible()
   })
 
   test('creates a new organization and signs its admin in', async ({ page }) => {
@@ -56,8 +56,8 @@ test.describe('signing in and out', () => {
     await page.getByLabel('Confirm password').fill('Founder-Pass-123!')
     await page.getByRole('button', { name: 'Create organization' }).click()
 
-    // A brand-new organization has no subscription yet.
-    await expect(page.getByRole('heading', { name: 'Subscription inactive' })).toBeVisible()
+    // A brand-new organization has no subscription yet: its admin picks a plan.
+    await expect(page.getByRole('heading', { name: 'Subscribe to continue' })).toBeVisible()
   })
 })
 
