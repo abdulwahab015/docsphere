@@ -90,6 +90,7 @@ class StripePriceFactory(factory.django.DjangoModelFactory):
 
     class Params:
         interval = "month"
+        unit_amount = 1000
 
     id = factory.Sequence(lambda n: f"price_test{n}")
     product = factory.SubFactory(StripeProductFactory)
@@ -100,7 +101,7 @@ class StripePriceFactory(factory.django.DjangoModelFactory):
             "id": price.id,
             "type": "recurring",
             "currency": price.currency,
-            "unit_amount": 1000,
+            "unit_amount": price.unit_amount,
             "recurring": {"interval": price.interval},
         }
     )

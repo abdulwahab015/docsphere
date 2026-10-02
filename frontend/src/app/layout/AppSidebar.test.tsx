@@ -12,6 +12,7 @@ describe('AppSidebar', () => {
     renderRoute('/', { signedInAs: buildCurrentUser({ org_role: 'ADMIN' }) })
 
     expect(mainNavigation().getByRole('link', { name: 'Organization' })).toBeInTheDocument()
+    expect(mainNavigation().getByRole('link', { name: 'Billing' })).toBeInTheDocument()
   })
 
   it('hides admin-only sections from members', () => {
@@ -20,6 +21,7 @@ describe('AppSidebar', () => {
     expect(mainNavigation().getByRole('link', { name: 'People' })).toBeInTheDocument()
     expect(mainNavigation().getByRole('link', { name: 'Requests' })).toBeInTheDocument()
     expect(mainNavigation().queryByRole('link', { name: 'Organization' })).not.toBeInTheDocument()
+    expect(mainNavigation().queryByRole('link', { name: 'Billing' })).not.toBeInTheDocument()
   })
 
   it('marks the current section and navigates between sections', async () => {

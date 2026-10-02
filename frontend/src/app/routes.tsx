@@ -12,6 +12,9 @@ import { ForgotPasswordPage } from '@/features/auth/pages/ForgotPasswordPage'
 import { LoginPage } from '@/features/auth/pages/LoginPage'
 import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage'
 import { SignupPage } from '@/features/auth/pages/SignupPage'
+import { BillingPage } from '@/features/billing/pages/BillingPage'
+import { CheckoutCancelPage } from '@/features/billing/pages/CheckoutCancelPage'
+import { CheckoutSuccessPage } from '@/features/billing/pages/CheckoutSuccessPage'
 import { OrganizationSettingsPage } from '@/features/organization/pages/OrganizationSettingsPage'
 import { PeoplePage } from '@/features/people/pages/PeoplePage'
 import { DocumentPage } from '@/features/documents/pages/DocumentPage'
@@ -43,6 +46,10 @@ export const routes: RouteObject[] = [
       {
         element: <RequireAuth />,
         children: [
+          // Stripe Checkout's return addresses: reached before the subscription is
+          // active (the webhook confirming it may still be on its way).
+          { path: PATHS.billingSuccess, element: <CheckoutSuccessPage /> },
+          { path: PATHS.billingCancel, element: <CheckoutCancelPage /> },
           {
             element: <RequireActiveSubscription />,
             children: [
@@ -65,6 +72,7 @@ export const routes: RouteObject[] = [
                         path: PATHS.organizationSettings,
                         element: <OrganizationSettingsPage />,
                       },
+                      { path: PATHS.billing, element: <BillingPage /> },
                     ],
                   },
                 ],

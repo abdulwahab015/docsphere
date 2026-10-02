@@ -40,7 +40,8 @@ class CheckoutSessionCreateAPIView(APIView):
     organization and returns its URL for the frontend to redirect to.
 
     Deliberately excludes ``HasActiveSubscription`` — an organization
-    starting checkout has no subscription yet, that's the point.
+    starting checkout has no subscription yet, that's the point. One that
+    already has one is refused rather than sold a second.
     """
 
     permission_classes = [IsOrganizationAdmin]
@@ -52,7 +53,8 @@ class CheckoutSessionCreateAPIView(APIView):
         responses={
             200: CheckoutSessionResponseSerializer,
             400: OpenApiResponse(
-                description="Invalid price, or organization has no billing email set."
+                description="Invalid price, no billing email set, or the "
+                "organization already has an active subscription."
             ),
         },
     )

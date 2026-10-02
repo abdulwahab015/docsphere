@@ -39,6 +39,9 @@ export const ACME_ADMIN = seededAccount('admin@acme.e2e.test')
 export const ACME_MEMBER = seededAccount('member@acme.e2e.test')
 export const SETTINGS_ADMIN = seededAccount('admin@settings.e2e.test')
 export const LAPSED_ADMIN = seededAccount('admin@lapsed.e2e.test')
+export const LAPSED_MEMBER = seededAccount('member@lapsed.e2e.test')
+export const UNPAID_ADMIN = seededAccount('admin@unpaid.e2e.test')
+export const PAID_ADMIN = seededAccount('admin@paid.e2e.test')
 export const PROJECTS_ADMIN = seededAccount('admin@projects.e2e.test')
 export const PROJECTS_EDITOR = seededAccount('editor@projects.e2e.test')
 export const PROJECTS_VIEWER = seededAccount('viewer@projects.e2e.test')
@@ -172,4 +175,28 @@ export async function emailedLink(recipient: string, path: string) {
     })
     .not.toBe('')
   return link
+}
+
+/**
+ * Answers one of the API's Stripe-backed endpoints (checkout, billing portal)
+ * from the browser instead: the e2e API has no Stripe account to call. Only
+ * these endpoints are stubbed - everything around them is the real API. Returns
+ * the JSON bodies the app sent, for the test to check.
+ */
+export async function stubStripeEndpoint(page: Page, path: string, response: object) {
+  const sentBodies: unknown[] = []
+  await page.route(`**/api/v1${path}`, async (route) => {
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': new URL(page.url()).origin,
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Allow-Headers': 'authorization, content-type',
+    }
+    if (route.request().method() === 'OPTIONS') {
+      await route.fulfill({ status: 204, headers: corsHeaders })
+      return
+    }
+    sentBodies.push(route.request().postDataJSON())
+    await route.fulfill({ json: response, headers: corsHeaders })
+  })
+  return sentBodies
 }

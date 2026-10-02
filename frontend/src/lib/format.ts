@@ -20,3 +20,15 @@ const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
 export function formatDateTime(isoTimestamp: string) {
   return dateTimeFormat.format(new Date(isoTimestamp))
 }
+
+/** An amount in a currency's smallest unit - as Stripe reports prices, e.g.
+ * cents - in the viewer's locale. Zero-decimal currencies (yen) need no
+ * conversion; the currency's own number of decimals decides. */
+export function formatMoney(minorUnits: number, currency: string) {
+  const format = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+  })
+  const decimals = format.resolvedOptions().maximumFractionDigits ?? 0
+  return format.format(minorUnits / 10 ** decimals)
+}

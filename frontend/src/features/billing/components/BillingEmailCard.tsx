@@ -7,23 +7,24 @@ import { FormAlert } from '@/components/form/FormAlert'
 import { SubmitButton } from '@/components/form/SubmitButton'
 import { TextField } from '@/components/form/TextField'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { billingEmailSchema } from '@/features/billing/schemas'
 import { useUpdateOrganization } from '@/features/organization/hooks'
-import { organizationSettingsSchema } from '@/features/organization/schemas'
 import { applyApiErrors } from '@/lib/form-errors'
 
-export function OrganizationSettingsForm({ organization }: { organization: Organization }) {
+/** Where Stripe sends invoices and receipts. Checkout needs one. */
+export function BillingEmailCard({ organization }: { organization: Organization }) {
   const update = useUpdateOrganization()
   const form = useForm({
-    resolver: zodResolver(organizationSettingsSchema),
-    values: { name: organization.name },
+    resolver: zodResolver(billingEmailSchema),
+    values: { billing_email: organization.billing_email ?? '' },
   })
   const { errors, isDirty } = form.formState
 
-  const onSubmit = form.handleSubmit(({ name }) =>
+  const onSubmit = form.handleSubmit(({ billing_email }) =>
     update.mutate(
-      { name },
+      { billing_email: billing_email || null },
       {
-        onSuccess: () => toast.success('Organization details saved.'),
+        onSuccess: () => toast.success('Billing email saved.'),
         onError: (error) => applyApiErrors(error, form),
       },
     ),
@@ -33,21 +34,22 @@ export function OrganizationSettingsForm({ organization }: { organization: Organ
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Details</h2>
+          <h2>Billing email</h2>
         </CardTitle>
-        <CardDescription>How your organization appears to its members.</CardDescription>
+        <CardDescription>Where invoices and receipts are sent.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} noValidate className="flex max-w-md flex-col gap-4">
           <FormAlert message={errors.root?.server?.message} />
           <TextField
-            label="Organization name"
-            autoComplete="organization"
-            error={errors.name?.message}
-            {...form.register('name')}
+            label="Billing email"
+            type="email"
+            autoComplete="email"
+            error={errors.billing_email?.message}
+            {...form.register('billing_email')}
           />
           <SubmitButton isPending={update.isPending} disabled={!isDirty} className="self-start">
-            Save changes
+            Save billing email
           </SubmitButton>
         </form>
       </CardContent>

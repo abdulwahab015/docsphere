@@ -36,7 +36,6 @@ test.describe('organization settings', () => {
       .getByRole('link', { name: 'Organization' })
       .click()
 
-    await expect(page.getByText('Active', { exact: true })).toBeVisible()
     await page.getByLabel('Organization name').fill(newName)
     await page.getByRole('button', { name: 'Save changes' }).click()
 

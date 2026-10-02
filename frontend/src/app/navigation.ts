@@ -1,5 +1,6 @@
 import {
   BuildingIcon,
+  CreditCardIcon,
   FileTextIcon,
   FolderIcon,
   InboxIcon,
@@ -28,4 +29,5 @@ export const NAV_ITEMS: NavItem[] = [
     icon: BuildingIcon,
     adminOnly: true,
   },
+  { label: 'Billing', path: PATHS.billing, icon: CreditCardIcon, adminOnly: true },
 ]

@@ -507,7 +507,8 @@ export interface paths {
          *     organization and returns its URL for the frontend to redirect to.
          *
          *     Deliberately excludes ``HasActiveSubscription`` — an organization
-         *     starting checkout has no subscription yet, that's the point.
+         *     starting checkout has no subscription yet, that's the point. One that
+         *     already has one is refused rather than sold a second.
          */
         post: operations["api_v1_subscriptions_checkout_create"];
         delete?: never;
@@ -2272,7 +2273,7 @@ export interface operations {
                     "application/json": components["schemas"]["CheckoutSessionResponse"];
                 };
             };
-            /** @description Invalid price, or organization has no billing email set. */
+            /** @description Invalid price, no billing email set, or the organization already has an active subscription. */
             400: {
                 headers: {
                     [name: string]: unknown;
