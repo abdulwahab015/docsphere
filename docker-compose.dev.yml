@@ -9,6 +9,9 @@ services:
 
   web:
     command: python manage.py runserver 0.0.0.0:8000
+    # For the Vite dev server (make fe-dev), which calls the API directly.
+    ports:
+      - "8000:8000"
     volumes:
       - .:/app
     environment:

@@ -17,3 +17,4 @@ htmlcov/
 .pre-commit-config.yaml
 *.md
 frontend/
+scripts/

@@ -33,6 +33,9 @@ RUN mkdir -p /app/staticfiles && chown app:app /app/staticfiles
 
 USER app
 
+# collectstatic loads the production settings, which refuse to start without
+# their required values - placeholders here; the real ones come at run time.
+# A setting added without a default needs a line here too (CI builds this image).
 RUN DJANGO_SETTINGS_MODULE=core.settings.production \
     SECRET_KEY=collectstatic-build-time-placeholder \
     ALLOWED_HOSTS=collectstatic \
@@ -48,6 +51,9 @@ RUN DJANGO_SETTINGS_MODULE=core.settings.production \
     INVITE_ACCEPT_THROTTLE_RATE=10/min \
     PASSWORD_RESET_THROTTLE_RATE=5/hour \
     BILLING_CHECKOUT_THROTTLE_RATE=10/min \
+    BILLING_PORTAL_THROTTLE_RATE=10/min \
+    ORG_SIGNUP_THROTTLE_RATE=5/hour \
+    PASSWORD_CHANGE_THROTTLE_RATE=5/hour \
     DJSTRIPE_WEBHOOK_SECRET=whsec_collectstatic-build-time-placeholder \
     python manage.py collectstatic --noinput
 
