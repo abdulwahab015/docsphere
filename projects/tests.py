@@ -1654,6 +1654,25 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
             resolve_project_access(self.owner, self.project), AccessLevel.OWNER
         )
 
+    def test_a_deactivated_co_owner_does_not_count_as_another_owner(self):
+        co_owner = UserFactory(organization=self.org, is_active=False)
+        ProjectPermissionFactory(
+            project=self.project, user=co_owner, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                self.url,
+                {"user": self.owner.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            resolve_project_access(self.owner, self.project), AccessLevel.OWNER
+        )
+
     def test_owner_can_list_current_grants(self):
         self.client.force_authenticate(self.owner)
 
@@ -1782,6 +1801,38 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
 
     def test_owner_can_revoke_a_co_owner_when_another_owner_remains(self):
         co_owner = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=co_owner, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(5):
+            response = self.client.delete(
+                reverse("project_share_revoke", args=[self.project.pk, co_owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(resolve_project_access(co_owner, self.project))
+
+    def test_owner_cannot_leave_when_the_only_other_owner_is_deactivated(self):
+        co_owner = UserFactory(organization=self.org, is_active=False)
+        ProjectPermissionFactory(
+            project=self.project, user=co_owner, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(
+                reverse("project_share_revoke", args=[self.project.pk, self.owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            resolve_project_access(self.owner, self.project), AccessLevel.OWNER
+        )
+
+    def test_owner_can_remove_a_deactivated_co_owner(self):
+        co_owner = UserFactory(organization=self.org, is_active=False)
         ProjectPermissionFactory(
             project=self.project, user=co_owner, access_level=AccessLevel.OWNER
         )
@@ -2054,6 +2105,21 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(resolve_access(self.target, self.document), AccessLevel.VIEWER)
 
     def test_owner_cannot_revoke_the_documents_last_owner(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.delete(
+                reverse("document_share_revoke", args=[self.document.pk, self.owner.pk])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resolve_access(self.owner, self.document), AccessLevel.OWNER)
+
+    def test_owner_cannot_leave_when_the_only_other_owner_is_deactivated(self):
+        co_owner = UserFactory(organization=self.org, is_active=False)
+        DocumentPermissionFactory(
+            document=self.document, user=co_owner, access_level=AccessLevel.OWNER
+        )
         self.client.force_authenticate(self.owner)
 
         with self.assertNumQueries(4):
@@ -2546,3 +2612,76 @@ class DocumentTasksTests(TestCase):
         send_access_request_created_email_task(access_request.pk)
 
         mock_send_mail.assert_not_called()
+
+
+class SoleOwnershipAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.admin = AdminUserFactory()
+        self.org = self.admin.organization
+        self.member = UserFactory(organization=self.org)
+        self.url = reverse("sole_ownership", args=[self.member.pk])
+
+    def _grant_project(self, user, level, **project_fields):
+        project = ProjectFactory(organization=self.org, **project_fields)
+        ProjectPermissionFactory(project=project, user=user, access_level=level)
+        return project
+
+    def _grant_document(self, user, level, **document_fields):
+        document = DocumentFactory(organization=self.org, **document_fields)
+        DocumentPermissionFactory(document=document, user=user, access_level=level)
+        return document
+
+    def test_counts_what_nobody_else_active_could_manage(self):
+        # Counted: owned alone, or alongside a deactivated co-owner.
+        self._grant_project(self.member, AccessLevel.OWNER)
+        shared_with_leaver = self._grant_project(self.member, AccessLevel.OWNER)
+        ProjectPermissionFactory(
+            project=shared_with_leaver,
+            user=UserFactory(organization=self.org, is_active=False),
+            access_level=AccessLevel.OWNER,
+        )
+        self._grant_document(self.member, AccessLevel.OWNER, project=None)
+        # Not counted: an active co-owner, a lower level, the trash.
+        co_owned = self._grant_project(self.member, AccessLevel.OWNER)
+        ProjectPermissionFactory(
+            project=co_owned, user=self.admin, access_level=AccessLevel.OWNER
+        )
+        self._grant_project(self.member, AccessLevel.EDITOR)
+        self._grant_project(self.member, AccessLevel.OWNER, is_active=False)
+        trashed_project = ProjectFactory(organization=self.org, is_active=False)
+        self._grant_document(self.member, AccessLevel.OWNER, project=trashed_project)
+        self._grant_document(self.member, AccessLevel.VIEWER, project=None)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {"projects": 2, "documents": 1})
+
+    def test_is_zero_for_someone_who_owns_nothing_alone(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {"projects": 0, "documents": 0})
+
+    def test_members_cannot_ask(self):
+        self.client.force_authenticate(UserFactory(organization=self.org))
+
+        with self.assertNumQueries(0):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_someone_in_another_organization_is_a_404(self):
+        outsider = UserFactory()
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("sole_ownership", args=[outsider.pk]))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

@@ -5,6 +5,7 @@ import type {
   ListParams,
   OrgRole,
   Paginated,
+  SoleOwnership,
   UserDetail,
 } from '@/api/types'
 
@@ -30,6 +31,13 @@ export async function changeRole(userId: number, orgRole: OrgRole) {
 /** Signs the user out and stops them logging in, until they're reactivated. */
 export async function deactivateUser(userId: number) {
   await apiClient.delete(`${userPath(userId)}deactivate/`)
+}
+
+/** What deactivating the user would leave with no active Owner. Counts only:
+ * the admin may not be able to see those projects and documents. */
+export async function getSoleOwnership(userId: number) {
+  const { data } = await apiClient.get<SoleOwnership>(`/projects/sole-ownership/${userId}/`)
+  return data
 }
 
 export async function listDeactivatedUsers({ page, search }: ListParams) {

@@ -7,6 +7,7 @@ import type {
   Organization,
   Price,
   Project,
+  SoleOwnership,
   TokenPair,
   UserDetail,
 } from '@/api/types'
@@ -93,6 +94,11 @@ export function buildUserDetail(overrides: Partial<UserDetail> = {}): UserDetail
     created: '2026-08-01T09:00:00Z',
     ...overrides,
   }
+}
+
+/** Owns nothing alone, by default - no warning when deactivating. */
+export function buildSoleOwnership(overrides: Partial<SoleOwnership> = {}): SoleOwnership {
+  return { projects: 0, documents: 0, ...overrides }
 }
 
 export function buildInvitation(overrides: Partial<Invitation> = {}): Invitation {

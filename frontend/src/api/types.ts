@@ -57,6 +57,8 @@ export type InvitationStatus = Schemas['InvitationCreateStatusEnum']
 export type InvitationBulkResult = Schemas['InvitationBulkResult']
 // What admins see of a member: `RosterUser` narrowed to its admin shape.
 export type UserDetail = Schemas['UserDetail']
+// How many live projects/documents a member is the only active Owner of.
+export type SoleOwnership = Schemas['SoleOwnership']
 
 /** DRF's page-number pagination envelope, shared by every list endpoint. */
 export interface Paginated<TItem> {

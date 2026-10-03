@@ -18,11 +18,17 @@ from projects.api.v1.views import (
     ProjectShareAPIView,
     ProjectShareRevokeAPIView,
     ProjectTrashListAPIView,
+    SoleOwnershipAPIView,
 )
 
 urlpatterns = [
     path("", ProjectListCreateAPIView.as_view(), name="project_list_create"),
     path("trash/", ProjectTrashListAPIView.as_view(), name="project_trash"),
+    path(
+        "sole-ownership/<int:user_id>/",
+        SoleOwnershipAPIView.as_view(),
+        name="sole_ownership",
+    ),
     path(
         "<int:pk>/",
         ProjectRetrieveUpdateDestroyAPIView.as_view(),

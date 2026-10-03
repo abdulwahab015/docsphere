@@ -253,6 +253,14 @@
           "email": "forgetful@team.e2e.test",
           "role": "MEMBER"
         }
+      ],
+      "documents": [
+        {
+          "title": "Leaving notes",
+          "content": "Only the leaver owns this.",
+          "visibility": "PRIVATE",
+          "owner": "leaver@team.e2e.test"
+        }
       ]
     },
     {
