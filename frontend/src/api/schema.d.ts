@@ -472,6 +472,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/sole-ownership/{user_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description What deactivating a member would leave unmanaged: the live projects and
+         *     documents in the admin's organization that the member is the only active
+         *     Owner of. Someone outside the organization is indistinguishable from a
+         *     missing user.
+         */
+        get: operations["api_v1_projects_sole_ownership_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/trash/": {
         parameters: {
             query?: never;
@@ -1425,6 +1447,15 @@ export interface components {
             user: number;
             access_level: components["schemas"]["AccessLevelEnum"];
         };
+        /**
+         * @description How many live projects and documents a member is the only active Owner
+         *     of. Counts only, never names: the admin asking may not be able to see
+         *     those resources at all.
+         */
+        SoleOwnership: {
+            readonly projects: number;
+            readonly documents: number;
+        };
         /** @description Response shape for endpoints that log a user straight in. */
         TokenPair: {
             access: string;
@@ -2223,6 +2254,27 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    api_v1_projects_sole_ownership_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoleOwnership"];
+                };
             };
         };
     };

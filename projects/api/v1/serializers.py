@@ -171,6 +171,15 @@ ProjectPermissionSerializer = _permission_serializer(ProjectPermission, "project
 DocumentPermissionSerializer = _permission_serializer(DocumentPermission, "document")
 
 
+class SoleOwnershipSerializer(serializers.Serializer):
+    """How many live projects and documents a member is the only active Owner
+    of. Counts only, never names: the admin asking may not be able to see
+    those resources at all."""
+
+    projects = serializers.IntegerField(read_only=True)
+    documents = serializers.IntegerField(read_only=True)
+
+
 class DocumentAccessRequestSerializer(serializers.ModelSerializer):
     """Read-only - the view supplies ``document`` and ``requested_by`` from the
     URL and the requester, never from client-submitted data."""

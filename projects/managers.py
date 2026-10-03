@@ -47,6 +47,19 @@ class VisibilityScopedQuerySet(models.QuerySet):
             )
         )
 
+    def solely_owned_by(self, user):
+        """Rows where ``user`` holds the Owner level and no other active user
+        does - the ones nobody could manage if ``user`` were deactivated."""
+        permissions = self.model.permissions
+        other_active_owners = permissions.rel.related_model.objects.filter(
+            models.Q(**{permissions.field.name: models.OuterRef("pk")}),
+            access_level=AccessLevel.OWNER,
+            user__is_active=True,
+        ).exclude(user=user)
+        return self.filter(
+            permissions__user=user, permissions__access_level=AccessLevel.OWNER
+        ).exclude(models.Exists(other_active_owners))
+
     def visible_to(self, user):
         """The list/detail chokepoint: active rows in the user's organization
         they have any resolvable access to, annotated by

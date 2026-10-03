@@ -149,7 +149,14 @@ test.describe('members', () => {
     const leaver = await logInElsewhere(browser, TEAM_LEAVER)
     await logIn(page, TEAM_ADMIN)
     await page.goto('/people')
-    await chooseMemberAction(page, TEAM_LEAVER.email, 'Deactivate')
+    await page.getByRole('button', { name: `Actions for ${TEAM_LEAVER.email}` }).click()
+    await page.getByRole('menuitem', { name: 'Deactivate' }).click()
+    const confirm = page.getByRole('alertdialog')
+    // They alone own a private document, which the admin can't see or share.
+    await expect(confirm).toContainText(
+      "They're the only Owner of 1 document. Nobody can change who has access to those until they're reactivated.",
+    )
+    await confirm.getByRole('button', { name: 'Deactivate' }).click()
     await expect(page.getByText(`Deactivated ${TEAM_LEAVER.email}.`)).toBeVisible()
 
     await leaver.reload()

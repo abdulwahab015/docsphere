@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { actionErrorMessage } from '@/api/errors'
-import type { UserDetail } from '@/api/types'
+import type { SoleOwnership, UserDetail } from '@/api/types'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,9 +12,26 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useChangeRole, useDeactivateUser } from '@/features/team/hooks'
+import { useChangeRole, useDeactivateUser, useSoleOwnership } from '@/features/team/hooks'
 
 type PendingAction = 'role' | 'deactivate'
+
+function countOf(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+/** Warns that what only this member owns would be left with nobody able to
+ * manage its sharing; nothing when they share ownership of everything. */
+function soleOwnershipWarning({ projects, documents }: SoleOwnership) {
+  const owned = [
+    projects && countOf(projects, 'project'),
+    documents && countOf(documents, 'document'),
+  ].filter(Boolean)
+  if (!owned.length) {
+    return null
+  }
+  return `They're the only Owner of ${owned.join(' and ')}. Nobody can change who has access to those until they're reactivated.`
+}
 
 /** An admin's menu for one member: switch them between admin and member, or
  * deactivate them - each confirmed first. Admins can't do either to
@@ -23,6 +40,8 @@ export function MemberActions({ member }: { member: UserDetail }) {
   const [confirming, setConfirming] = useState<PendingAction | null>(null)
   const changeRole = useChangeRole()
   const deactivate = useDeactivateUser()
+  const soleOwnership = useSoleOwnership(member.id, { enabled: confirming === 'deactivate' })
+  const ownershipWarning = soleOwnership.data && soleOwnershipWarning(soleOwnership.data)
   const { email } = member
   const isAdmin = member.org_role === 'ADMIN'
 
@@ -89,7 +108,15 @@ export function MemberActions({ member }: { member: UserDetail }) {
         open={confirming === 'deactivate'}
         onOpenChange={close}
         title={`Deactivate ${email}?`}
-        description="They'll be signed out and can't log in until an admin reactivates them. What they've created and shared stays where it is."
+        description={
+          <>
+            They&apos;ll be signed out and can&apos;t log in until an admin reactivates them. What
+            they&apos;ve created and shared stays where it is.
+            {ownershipWarning && (
+              <span className="mt-2 block font-medium text-foreground">{ownershipWarning}</span>
+            )}
+          </>
+        }
         confirmLabel="Deactivate"
         destructive
         onConfirm={deactivateMember}

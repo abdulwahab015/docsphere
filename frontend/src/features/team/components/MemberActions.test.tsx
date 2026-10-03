@@ -2,9 +2,9 @@ import { screen, waitFor, within } from '@testing-library/react'
 import type { UserEvent } from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 
-import type { UserDetail } from '@/api/types'
+import type { SoleOwnership, UserDetail } from '@/api/types'
 import { formatDate } from '@/lib/format'
-import { buildCurrentUser, buildUserDetail } from '@/test/factories'
+import { buildCurrentUser, buildSoleOwnership, buildUserDetail } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
@@ -16,6 +16,10 @@ function serveRoster(members: UserDetail[]) {
   const list = spyResolver(() => HttpResponse.json({ count: members.length, results: members }))
   server.use(http.get(apiUrl('/users/'), list))
   return list
+}
+
+function serveSoleOwnership(ownership: SoleOwnership = buildSoleOwnership()) {
+  server.use(http.get(apiUrl('/projects/sole-ownership/2/'), () => HttpResponse.json(ownership)))
 }
 
 function rowFor(email: string) {
@@ -75,12 +79,14 @@ describe('MemberActions', () => {
 
   it('deactivates a member after confirming', async () => {
     const list = serveRoster([ADA, GRACE])
+    serveSoleOwnership()
     const deactivate = spyResolver(() => new HttpResponse(null, { status: 204 }))
     server.use(http.delete(apiUrl('/users/2/deactivate/'), deactivate))
     const { user } = renderRoute('/people', { signedInAs: admin })
 
     const confirm = await chooseAction(user, 'grace@example.com', 'Deactivate')
     expect(within(confirm).getByText(/They'll be signed out/)).toBeInTheDocument()
+    expect(within(confirm).queryByText(/only Owner/)).not.toBeInTheDocument()
     await user.click(within(confirm).getByRole('button', { name: 'Deactivate' }))
 
     expect(await screen.findByText('Deactivated grace@example.com.')).toBeInTheDocument()
@@ -88,8 +94,48 @@ describe('MemberActions', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
   })
 
+  it('warns when the member is the only Owner of projects or documents', async () => {
+    serveRoster([ADA, GRACE])
+    serveSoleOwnership(buildSoleOwnership({ projects: 2, documents: 1 }))
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    const confirm = await chooseAction(user, 'grace@example.com', 'Deactivate')
+
+    expect(
+      await within(confirm).findByText(
+        "They're the only Owner of 2 projects and 1 document. Nobody can change who has access to those until they're reactivated.",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('names only what they own alone', async () => {
+    serveRoster([ADA, GRACE])
+    serveSoleOwnership(buildSoleOwnership({ documents: 3 }))
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    const confirm = await chooseAction(user, 'grace@example.com', 'Deactivate')
+
+    expect(await within(confirm).findByText(/only Owner of 3 documents\./)).toBeInTheDocument()
+  })
+
+  it('still lets the admin deactivate when the ownership check fails', async () => {
+    serveRoster([ADA, GRACE])
+    const ownership = spyResolver(() => HttpResponse.json({}, { status: 500 }))
+    server.use(http.get(apiUrl('/projects/sole-ownership/2/'), ownership))
+    const deactivate = spyResolver(() => new HttpResponse(null, { status: 204 }))
+    server.use(http.delete(apiUrl('/users/2/deactivate/'), deactivate))
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    const confirm = await chooseAction(user, 'grace@example.com', 'Deactivate')
+    await waitFor(() => expect(ownership).toHaveBeenCalled())
+    await user.click(within(confirm).getByRole('button', { name: 'Deactivate' }))
+
+    expect(await screen.findByText('Deactivated grace@example.com.')).toBeInTheDocument()
+  })
+
   it('changes nothing when the admin cancels', async () => {
     serveRoster([ADA, GRACE])
+    serveSoleOwnership()
     const deactivate = spyResolver(() => new HttpResponse(null, { status: 204 }))
     server.use(http.delete(apiUrl('/users/2/deactivate/'), deactivate))
     const { user } = renderRoute('/people', { signedInAs: admin })
@@ -119,6 +165,7 @@ describe('MemberActions', () => {
 
   it('reports a failed deactivation', async () => {
     serveRoster([ADA, GRACE])
+    serveSoleOwnership()
     server.use(
       http.delete(apiUrl('/users/2/deactivate/'), () => HttpResponse.json({}, { status: 500 })),
     )

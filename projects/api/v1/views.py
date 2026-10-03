@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -23,6 +24,7 @@ from projects.api.v1.serializers import (
     ProjectPermissionSerializer,
     ProjectSerializer,
     ShareSerializer,
+    SoleOwnershipSerializer,
 )
 from projects.choices import AccessLevel, AccessRequestStatus, Action
 from projects.managers import outside_trashed_projects
@@ -50,6 +52,8 @@ from projects.tasks import (
 )
 from projects.validators import ensure_not_last_owner
 from users.permissions import IsOrganizationAdmin
+
+User = get_user_model()
 
 DOCUMENT_IN_TRASHED_PROJECT_MESSAGE = (
     "This document's project is in the trash. Ask an organization admin to "
@@ -638,3 +642,28 @@ class IncomingDocumentAccessRequestListAPIView(generics.ListAPIView):
             .select_related("document", "requested_by", "reviewed_by")
             .order_by("created")
         )
+
+
+class SoleOwnershipAPIView(APIView):
+    """What deactivating a member would leave unmanaged: the live projects and
+    documents in the admin's organization that the member is the only active
+    Owner of. Someone outside the organization is indistinguishable from a
+    missing user."""
+
+    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+
+    @extend_schema(responses=SoleOwnershipSerializer)
+    def get(self, request, user_id):
+        organization = request.user.organization
+        member = get_object_or_404(
+            User.objects.filter(organization=organization), pk=user_id
+        )
+        counts = {
+            "projects": Project.objects.for_organization(organization)
+            .solely_owned_by(member)
+            .count(),
+            "documents": Document.objects.for_organization(organization)
+            .solely_owned_by(member)
+            .count(),
+        }
+        return Response(SoleOwnershipSerializer(counts).data)

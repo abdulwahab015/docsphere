@@ -7,6 +7,7 @@ import {
   changeRole,
   createInvitation,
   deactivateUser,
+  getSoleOwnership,
   listDeactivatedUsers,
   listInvitations,
   reactivateUser,
@@ -20,6 +21,15 @@ export function useInvitations(page: number) {
     queryKey: teamKeys.invitationsPage(page),
     queryFn: () => listInvitations(page),
     placeholderData: keepPreviousData,
+  })
+}
+
+/** Read only while `enabled` - when an admin is about to deactivate them. */
+export function useSoleOwnership(userId: number, { enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: teamKeys.soleOwnership(userId),
+    queryFn: () => getSoleOwnership(userId),
+    enabled,
   })
 }
 
