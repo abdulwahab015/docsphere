@@ -23,6 +23,8 @@ import {
 import { useInvitations, useResendInvitation, useRevokeInvitation } from '@/features/team/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 3
 const COLUMN_COUNT = 5
@@ -89,8 +91,8 @@ export function InvitationList() {
             <TableRow>
               <TableHead>Email</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Invited by</TableHead>
-              <TableHead>Sent</TableHead>
+              <TableHead className={SECONDARY_COLUMN}>Invited by</TableHead>
+              <TableHead className={SECONDARY_COLUMN}>Sent</TableHead>
               <TableHead>
                 <span className="sr-only">Actions</span>
               </TableHead>
@@ -106,10 +108,10 @@ export function InvitationList() {
                         {STATUS_LABELS[invitation.status]}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {invitation.invited_by_email ?? '—'}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {formatDate(invitation.sent_at)}
                     </TableCell>
                     <TableCell>

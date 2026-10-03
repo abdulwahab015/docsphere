@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createMemoryRouter, RouterProvider } from 'react-router'
+import { createMemoryRouter, type RouteObject, RouterProvider } from 'react-router'
 
 import { setAccessToken } from '@/api/access-token'
 import type { CurrentUser } from '@/api/types'
@@ -21,19 +21,42 @@ export function createTestQueryClient() {
   return queryClient
 }
 
+/** The route table with every lazily loaded page already loaded, so a test
+ * sees its page on the first render, as a visitor whose browser already has
+ * the page's code would. */
+async function withPagesLoaded(routeTable: RouteObject[]): Promise<RouteObject[]> {
+  return Promise.all(
+    routeTable.map(async ({ lazy, children, ...route }) => {
+      const page = typeof lazy === 'function' ? await lazy() : {}
+      const loadedChildren = children && { children: await withPagesLoaded(children) }
+      return { ...route, ...page, ...loadedChildren } as RouteObject
+    }),
+  )
+}
+
+const routesWithPagesLoaded = await withPagesLoaded(routes)
+
 interface RenderRouteOptions {
   /** Starts the test signed in as this user; signed out when omitted. */
   signedInAs?: CurrentUser
+  /** Loads each page's code when its route is first visited, as the app does,
+   * instead of up front. */
+  loadPagesOnDemand?: boolean
 }
 
 /** Renders the app's real route table at `path`, guards included. */
-export function renderRoute(path: string, { signedInAs }: RenderRouteOptions = {}) {
+export function renderRoute(
+  path: string,
+  { signedInAs, loadPagesOnDemand = false }: RenderRouteOptions = {},
+) {
   const queryClient = createTestQueryClient()
   if (signedInAs) {
     setAccessToken(SIGNED_IN_ACCESS_TOKEN)
     queryClient.setQueryData(authKeys.currentUser, signedInAs)
   }
-  const router = createMemoryRouter(routes, { initialEntries: [path] })
+  const router = createMemoryRouter(loadPagesOnDemand ? routes : routesWithPagesLoaded, {
+    initialEntries: [path],
+  })
 
   render(
     <QueryClientProvider client={queryClient}>

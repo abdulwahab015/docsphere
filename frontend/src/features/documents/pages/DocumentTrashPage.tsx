@@ -23,6 +23,7 @@ import {
 import { useDocumentTrash, useRestoreDocument } from '@/features/documents/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
 
 export function DocumentTrashPage() {
   const { page, setPage } = useListParams()
@@ -62,7 +63,7 @@ export function DocumentTrashPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Title</TableHead>
-                  <TableHead>Visibility</TableHead>
+                  <TableHead className={SECONDARY_COLUMN}>Visibility</TableHead>
                   <TableHead>Deleted</TableHead>
                   <TableHead>
                     <span className="sr-only">Actions</span>
@@ -73,7 +74,7 @@ export function DocumentTrashPage() {
                 {trash.data.results.map((document) => (
                   <TableRow key={document.id}>
                     <TableCell className="font-medium">{document.title}</TableCell>
-                    <TableCell>
+                    <TableCell className={SECONDARY_COLUMN}>
                       <VisibilityBadge visibility={document.visibility} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">

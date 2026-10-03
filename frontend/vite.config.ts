@@ -17,6 +17,23 @@ export default defineConfig({
     port: 3000,
     strictPort: true,
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          // The React runtime and router are needed by every page and change
+          // only on upgrades, so a chunk of their own stays cached across
+          // releases. The rest is split with the pages that use it.
+          groups: [
+            {
+              name: 'react',
+              test: /[\\/]node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/,
+            },
+          ],
+        },
+      },
+    },
+  },
   preview: {
     port: 3000,
     strictPort: true,

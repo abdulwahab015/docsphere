@@ -1,56 +1,92 @@
+import type { ComponentType } from 'react'
 import { Navigate, type RouteObject } from 'react-router'
 
 import { AppLayout } from '@/app/layout/AppLayout'
 import { RootLayout } from '@/app/layout/RootLayout'
 import { PATHS } from '@/app/paths'
-import { AccountPage } from '@/features/account/pages/AccountPage'
+import { FullPageSpinner } from '@/components/FullPageSpinner'
 import { RequireActiveSubscription } from '@/features/auth/components/RequireActiveSubscription'
 import { RequireAuth } from '@/features/auth/components/RequireAuth'
 import { RequireGuest } from '@/features/auth/components/RequireGuest'
 import { RequireOrgAdmin } from '@/features/auth/components/RequireOrgAdmin'
-import { AcceptInvitePage } from '@/features/auth/pages/AcceptInvitePage'
-import { ForgotPasswordPage } from '@/features/auth/pages/ForgotPasswordPage'
-import { LoginPage } from '@/features/auth/pages/LoginPage'
-import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage'
-import { SignupPage } from '@/features/auth/pages/SignupPage'
-import { BillingPage } from '@/features/billing/pages/BillingPage'
-import { CheckoutCancelPage } from '@/features/billing/pages/CheckoutCancelPage'
-import { CheckoutSuccessPage } from '@/features/billing/pages/CheckoutSuccessPage'
-import { OrganizationSettingsPage } from '@/features/organization/pages/OrganizationSettingsPage'
-import { PeoplePage } from '@/features/people/pages/PeoplePage'
-import { DocumentPage } from '@/features/documents/pages/DocumentPage'
-import { DocumentsPage } from '@/features/documents/pages/DocumentsPage'
-import { DocumentTrashPage } from '@/features/documents/pages/DocumentTrashPage'
-import { ProjectDetailPage } from '@/features/projects/pages/ProjectDetailPage'
-import { ProjectsPage } from '@/features/projects/pages/ProjectsPage'
-import { ProjectTrashPage } from '@/features/projects/pages/ProjectTrashPage'
-import { RequestsPage } from '@/features/sharing/pages/RequestsPage'
 import { RouteErrorPage } from '@/pages/RouteErrorPage'
-import { NotFoundPage } from '@/pages/NotFoundPage'
+
+/** Loads a page's code the first time its route is visited, so each page is a
+ * chunk of its own rather than part of the bundle everyone downloads first. */
+function lazyPage<TModule>(
+  load: () => Promise<TModule>,
+  pickPage: (module: TModule) => ComponentType,
+) {
+  return async () => ({ Component: pickPage(await load()) })
+}
 
 export const routes: RouteObject[] = [
   {
     element: <RootLayout />,
     errorElement: <RouteErrorPage />,
+    // Shown while the first page's code loads.
+    hydrateFallbackElement: <FullPageSpinner />,
     children: [
       {
         element: <RequireGuest />,
         children: [
-          { path: PATHS.login, element: <LoginPage /> },
-          { path: PATHS.signup, element: <SignupPage /> },
-          { path: PATHS.forgotPassword, element: <ForgotPasswordPage /> },
+          {
+            path: PATHS.login,
+            lazy: lazyPage(
+              () => import('@/features/auth/pages/LoginPage'),
+              (module) => module.LoginPage,
+            ),
+          },
+          {
+            path: PATHS.signup,
+            lazy: lazyPage(
+              () => import('@/features/auth/pages/SignupPage'),
+              (module) => module.SignupPage,
+            ),
+          },
+          {
+            path: PATHS.forgotPassword,
+            lazy: lazyPage(
+              () => import('@/features/auth/pages/ForgotPasswordPage'),
+              (module) => module.ForgotPasswordPage,
+            ),
+          },
         ],
       },
       // Opened from emailed links, so reachable whether or not someone is signed in.
-      { path: PATHS.resetPassword, element: <ResetPasswordPage /> },
-      { path: PATHS.acceptInvite, element: <AcceptInvitePage /> },
+      {
+        path: PATHS.resetPassword,
+        lazy: lazyPage(
+          () => import('@/features/auth/pages/ResetPasswordPage'),
+          (module) => module.ResetPasswordPage,
+        ),
+      },
+      {
+        path: PATHS.acceptInvite,
+        lazy: lazyPage(
+          () => import('@/features/auth/pages/AcceptInvitePage'),
+          (module) => module.AcceptInvitePage,
+        ),
+      },
       {
         element: <RequireAuth />,
         children: [
           // Stripe Checkout's return addresses: reached before the subscription is
           // active (the webhook confirming it may still be on its way).
-          { path: PATHS.billingSuccess, element: <CheckoutSuccessPage /> },
-          { path: PATHS.billingCancel, element: <CheckoutCancelPage /> },
+          {
+            path: PATHS.billingSuccess,
+            lazy: lazyPage(
+              () => import('@/features/billing/pages/CheckoutSuccessPage'),
+              (module) => module.CheckoutSuccessPage,
+            ),
+          },
+          {
+            path: PATHS.billingCancel,
+            lazy: lazyPage(
+              () => import('@/features/billing/pages/CheckoutCancelPage'),
+              (module) => module.CheckoutCancelPage,
+            ),
+          },
           {
             element: <RequireActiveSubscription />,
             children: [
@@ -58,23 +94,86 @@ export const routes: RouteObject[] = [
                 element: <AppLayout />,
                 children: [
                   { path: PATHS.home, element: <Navigate to={PATHS.projects} replace /> },
-                  { path: PATHS.projects, element: <ProjectsPage /> },
-                  { path: PATHS.projectDetail, element: <ProjectDetailPage /> },
-                  { path: PATHS.documents, element: <DocumentsPage /> },
-                  { path: PATHS.documentTrash, element: <DocumentTrashPage /> },
-                  { path: PATHS.documentDetail, element: <DocumentPage /> },
-                  { path: PATHS.accessRequests, element: <RequestsPage /> },
-                  { path: PATHS.people, element: <PeoplePage /> },
-                  { path: PATHS.account, element: <AccountPage /> },
+                  {
+                    path: PATHS.projects,
+                    lazy: lazyPage(
+                      () => import('@/features/projects/pages/ProjectsPage'),
+                      (module) => module.ProjectsPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.projectDetail,
+                    lazy: lazyPage(
+                      () => import('@/features/projects/pages/ProjectDetailPage'),
+                      (module) => module.ProjectDetailPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.documents,
+                    lazy: lazyPage(
+                      () => import('@/features/documents/pages/DocumentsPage'),
+                      (module) => module.DocumentsPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.documentTrash,
+                    lazy: lazyPage(
+                      () => import('@/features/documents/pages/DocumentTrashPage'),
+                      (module) => module.DocumentTrashPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.documentDetail,
+                    lazy: lazyPage(
+                      () => import('@/features/documents/pages/DocumentPage'),
+                      (module) => module.DocumentPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.accessRequests,
+                    lazy: lazyPage(
+                      () => import('@/features/sharing/pages/RequestsPage'),
+                      (module) => module.RequestsPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.people,
+                    lazy: lazyPage(
+                      () => import('@/features/people/pages/PeoplePage'),
+                      (module) => module.PeoplePage,
+                    ),
+                  },
+                  {
+                    path: PATHS.account,
+                    lazy: lazyPage(
+                      () => import('@/features/account/pages/AccountPage'),
+                      (module) => module.AccountPage,
+                    ),
+                  },
                   {
                     element: <RequireOrgAdmin />,
                     children: [
-                      { path: PATHS.projectTrash, element: <ProjectTrashPage /> },
+                      {
+                        path: PATHS.projectTrash,
+                        lazy: lazyPage(
+                          () => import('@/features/projects/pages/ProjectTrashPage'),
+                          (module) => module.ProjectTrashPage,
+                        ),
+                      },
                       {
                         path: PATHS.organizationSettings,
-                        element: <OrganizationSettingsPage />,
+                        lazy: lazyPage(
+                          () => import('@/features/organization/pages/OrganizationSettingsPage'),
+                          (module) => module.OrganizationSettingsPage,
+                        ),
                       },
-                      { path: PATHS.billing, element: <BillingPage /> },
+                      {
+                        path: PATHS.billing,
+                        lazy: lazyPage(
+                          () => import('@/features/billing/pages/BillingPage'),
+                          (module) => module.BillingPage,
+                        ),
+                      },
                     ],
                   },
                 ],
@@ -83,7 +182,13 @@ export const routes: RouteObject[] = [
           },
         ],
       },
-      { path: '*', element: <NotFoundPage /> },
+      {
+        path: '*',
+        lazy: lazyPage(
+          () => import('@/pages/NotFoundPage'),
+          (module) => module.NotFoundPage,
+        ),
+      },
     ],
   },
 ]

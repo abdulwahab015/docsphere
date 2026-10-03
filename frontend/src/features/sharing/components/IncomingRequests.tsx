@@ -22,6 +22,8 @@ import {
 import type { AccessRequestDecision } from '@/features/sharing/api'
 import { useIncomingAccessRequests, useReviewAccessRequest } from '@/features/sharing/hooks'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 3
 const COLUMN_COUNT = 4
@@ -78,7 +80,7 @@ export function IncomingRequests({ page, onPageChange }: IncomingRequestsProps) 
             <TableRow>
               <TableHead>Document</TableHead>
               <TableHead>Requested by</TableHead>
-              <TableHead>Requested</TableHead>
+              <TableHead className={SECONDARY_COLUMN}>Requested</TableHead>
               <TableHead>
                 <span className="sr-only">Actions</span>
               </TableHead>
@@ -94,11 +96,12 @@ export function IncomingRequests({ page, onPageChange }: IncomingRequestsProps) 
                       </Link>
                     </TableCell>
                     <TableCell>{accessRequest.requested_by_email}</TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {formatDate(accessRequest.created)}
                     </TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
+                      {/* Stacked while the table is narrow, side by side once it has room. */}
+                      <div className="flex flex-col items-end gap-2 @md/table:flex-row @md/table:justify-end">
                         <Button
                           size="sm"
                           disabled={review.isPending}

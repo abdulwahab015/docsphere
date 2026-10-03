@@ -21,6 +21,8 @@ import { MemberActions } from '@/features/team/components/MemberActions'
 import { useListParams } from '@/hooks/use-list-params'
 import { ORG_ROLE_LABELS } from '@/lib/access'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 5
 const ADMIN_COLUMN_COUNT = 4
@@ -59,7 +61,7 @@ export function MemberList() {
                   {isAdmin && (
                     <>
                       <TableHead>Role</TableHead>
-                      <TableHead>Joined</TableHead>
+                      <TableHead className={SECONDARY_COLUMN}>Joined</TableHead>
                       <TableHead>
                         <span className="sr-only">Actions</span>
                       </TableHead>
@@ -104,7 +106,9 @@ function MemberRow({ person, isYou }: { person: RosterUser; isYou: boolean }) {
       {'org_role' in person && (
         <>
           <TableCell>{ORG_ROLE_LABELS[person.org_role]}</TableCell>
-          <TableCell className="text-muted-foreground">{formatDate(person.created)}</TableCell>
+          <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
+            {formatDate(person.created)}
+          </TableCell>
           <TableCell className="text-right">
             {!isYou && <MemberActions member={person} />}
           </TableCell>

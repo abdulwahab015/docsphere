@@ -77,4 +77,18 @@ test.describe('on a phone-sized screen', () => {
 
     await expect(page.getByRole('heading', { level: 1, name: 'People' })).toBeVisible()
   })
+
+  test("keeps a table to its essential columns, and shows the rest when there's room", async ({
+    page,
+  }) => {
+    await logIn(page, ACME_ADMIN)
+    await page.goto('/people')
+    const table = page.getByRole('table')
+    await expect(table.getByRole('columnheader', { name: 'Email' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: 'Role' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: 'Joined' })).toBeHidden()
+
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await expect(table.getByRole('columnheader', { name: 'Joined' })).toBeVisible()
+  })
 })

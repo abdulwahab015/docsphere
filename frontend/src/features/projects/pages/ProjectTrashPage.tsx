@@ -22,6 +22,8 @@ import {
 import { useProjectTrash, useRestoreProject } from '@/features/projects/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 export function ProjectTrashPage() {
   const { page, setPage } = useListParams()
@@ -59,9 +61,9 @@ export function ProjectTrashPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Visibility</TableHead>
+                  <TableHead className={SECONDARY_COLUMN}>Visibility</TableHead>
                   <TableHead>Your access</TableHead>
-                  <TableHead>Deleted</TableHead>
+                  <TableHead className={SECONDARY_COLUMN}>Deleted</TableHead>
                   <TableHead>
                     <span className="sr-only">Actions</span>
                   </TableHead>
@@ -71,13 +73,13 @@ export function ProjectTrashPage() {
                 {trash.data.results.map((project) => (
                   <TableRow key={project.id}>
                     <TableCell className="font-medium">{project.name}</TableCell>
-                    <TableCell>
+                    <TableCell className={SECONDARY_COLUMN}>
                       <VisibilityBadge visibility={project.visibility} />
                     </TableCell>
                     <TableCell>
                       <AccessLevelBadge level={project.access_level} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {formatDate(project.modified)}
                     </TableCell>
                     <TableCell className="text-right">

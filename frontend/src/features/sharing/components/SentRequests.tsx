@@ -17,6 +17,8 @@ import {
 import { AccessRequestStatusBadge } from '@/features/sharing/components/AccessRequestStatusBadge'
 import { useMyAccessRequests } from '@/features/sharing/hooks'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 3
 const COLUMN_COUNT = 4
@@ -50,8 +52,8 @@ export function SentRequests({ page, onPageChange }: SentRequestsProps) {
             <TableRow>
               <TableHead>Document</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Requested</TableHead>
-              <TableHead>Answered by</TableHead>
+              <TableHead className={SECONDARY_COLUMN}>Requested</TableHead>
+              <TableHead className={SECONDARY_COLUMN}>Answered by</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -66,10 +68,10 @@ export function SentRequests({ page, onPageChange }: SentRequestsProps) {
                     <TableCell>
                       <AccessRequestStatusBadge status={accessRequest.status} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {formatDate(accessRequest.created)}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {accessRequest.reviewed_by_email ?? '—'}
                     </TableCell>
                   </TableRow>
