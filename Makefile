@@ -12,7 +12,7 @@ E2E_DATABASE := frontend/node_modules/.tmp/e2e.sqlite3
 E2E_MAILBOX := frontend/node_modules/.tmp/e2e-mail
 
 .PHONY: help install compile migrate makemigrations run shell flower stripe-listen test test-cov lint format check \
-        up down build logs docker-migrate docker-shell clean \
+        up down build logs docker-migrate docker-shell docker-smoke clean \
         fe-install fe-dev fe-build fe-test fe-test-cov fe-lint fe-format fe-check fe-api-types \
         fe-api-types-check fe-e2e e2e-api
 
@@ -140,6 +140,9 @@ docker-migrate: ## Apply database migrations (inside the web container)
 
 docker-shell: ## Open a shell inside the web container
 	$(DC_DEV) run --rm web bash
+
+docker-smoke: ## Build the production stack and check it through nginx on :8080 (needs .env)
+	./scripts/docker-smoke-test.sh
 
 clean: ## Remove Python cache files
 	find . -type d -name __pycache__ -not -path './venv/*' -exec rm -rf {} +

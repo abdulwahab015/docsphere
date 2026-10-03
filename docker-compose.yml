@@ -26,11 +26,25 @@ services:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_TASK_ALWAYS_EAGER: "False"
-    ports:
-      - "8000:8000"
+    # Not published: the `frontend` service is the way in.
+    expose:
+      - "8000"
     depends_on:
       - db
       - redis
+    restart: unless-stopped
+
+  # The public entry point: serves the app and forwards Django's paths to
+  # `web`, so the browser sees one origin. Put the TLS-terminating load
+  # balancer in front of APP_PORT.
+  frontend:
+    build: ./frontend
+    environment:
+      DJANGO_ADMIN_PATH: ${DJANGO_ADMIN_PATH:-admin/}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      - web
     restart: unless-stopped
 
   worker:

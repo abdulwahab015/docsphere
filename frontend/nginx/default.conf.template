@@ -1,0 +1,67 @@
+# One origin for the browser: the app's files are served from here, and
+# Django's paths are forwarded to the `web` service. TLS ends at the load
+# balancer in front of this server.
+
+upstream django {
+    server web:8000;
+}
+
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+
+    # The bulk-invitation spreadsheet is the largest upload; 500 rows of
+    # addresses is a few tens of kB.
+    client_max_body_size 5m;
+
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # The load balancer's X-Forwarded-For and X-Forwarded-Proto pass through
+    # unchanged, so Django still sees the client address as the right-most
+    # entry and knows the request arrived over HTTPS.
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+
+    # Django: the API (and its schema and docs), the admin and the static files
+    # it uses, Stripe's webhook, and the health check.
+    location /api/ {
+        proxy_pass http://django;
+    }
+
+    location /${DJANGO_ADMIN_PATH} {
+        proxy_pass http://django;
+    }
+
+    location /static/ {
+        proxy_pass http://django;
+    }
+
+    location /stripe/ {
+        proxy_pass http://django;
+    }
+
+    location = /healthz/ {
+        proxy_pass http://django;
+    }
+
+    # The app's built files have a content hash in their names, so a cached
+    # copy never goes stale.
+    location /assets/ {
+        include /etc/nginx/snippets/app-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # Every other path is the app's to route (/projects/7, /billing/success,
+    # ...). index.html is always revalidated, so a release is picked up at once.
+    location / {
+        include /etc/nginx/snippets/app-headers.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+    }
+}

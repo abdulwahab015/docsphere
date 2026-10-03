@@ -145,3 +145,18 @@ jobs:
             frontend/playwright-report
             frontend/test-results
           retention-days: 7
+
+  # The production images and stack (docker-compose.yml), checked from outside
+  # through nginx: catches a Dockerfile that no longer builds or a proxy route
+  # that no longer reaches Django.
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the example settings
+        run: cp .env.example .env
+
+      - name: Build the stack and smoke-test it
+        run: make docker-smoke
