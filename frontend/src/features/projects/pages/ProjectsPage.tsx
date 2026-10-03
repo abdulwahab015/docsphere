@@ -23,6 +23,8 @@ import { CreateProjectDialog } from '@/features/projects/components/CreateProjec
 import { useProjects } from '@/features/projects/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 5
 
@@ -81,8 +83,8 @@ export function ProjectsPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Visibility</TableHead>
                   <TableHead>Your access</TableHead>
-                  <TableHead>Created by</TableHead>
-                  <TableHead>Updated</TableHead>
+                  <TableHead className={SECONDARY_COLUMN}>Created by</TableHead>
+                  <TableHead className={SECONDARY_COLUMN}>Updated</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -100,10 +102,10 @@ export function ProjectsPage() {
                         <TableCell>
                           <AccessLevelBadge level={project.access_level} />
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
+                        <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                           {project.created_by_email}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">
+                        <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                           {formatDate(project.modified)}
                         </TableCell>
                       </TableRow>

@@ -3,7 +3,9 @@ import { cn } from 'cn'
 
 function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto">
+    // A named container, so columns can respond to the table's width (see
+    // lib/table-columns.ts) rather than the screen's.
+    <div data-slot="table-container" className="@container/table relative w-full overflow-x-auto">
       <table
         data-slot="table"
         className={cn('w-full caption-bottom text-sm', className)}

@@ -14,6 +14,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatDate } from '@/lib/format'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 5
 const COLUMN_COUNT = 5
@@ -38,8 +40,8 @@ export function DocumentsTable({
             <TableHead>Title</TableHead>
             <TableHead>Visibility</TableHead>
             <TableHead>Your access</TableHead>
-            <TableHead>Created by</TableHead>
-            <TableHead>Updated</TableHead>
+            <TableHead className={SECONDARY_COLUMN}>Created by</TableHead>
+            <TableHead className={SECONDARY_COLUMN}>Updated</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -62,10 +64,10 @@ export function DocumentsTable({
                   <TableCell>
                     <AccessLevelBadge level={document.access_level} />
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
+                  <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                     {document.created_by_email}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
+                  <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                     {formatDate(document.modified)}
                   </TableCell>
                 </TableRow>

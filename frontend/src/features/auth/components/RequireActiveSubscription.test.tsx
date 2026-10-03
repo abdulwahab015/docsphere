@@ -32,7 +32,10 @@ describe('RequireActiveSubscription', () => {
       signedInAs: buildCurrentUser({ org_role: 'ADMIN', organization: lapsedOrganization }),
     })
 
-    expect(screen.getByRole('heading', { name: 'Subscribe to continue' })).toBeInTheDocument()
+    // The screen's code loads on demand.
+    expect(
+      await screen.findByRole('heading', { name: 'Subscribe to continue' }),
+    ).toBeInTheDocument()
     expect(screen.getByText(/Acme doesn't have an active subscription/)).toBeInTheDocument()
     expect(await screen.findByRole('list', { name: 'Plans' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument()

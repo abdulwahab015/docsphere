@@ -30,6 +30,18 @@ describe('routes', () => {
     expect(screen.getByRole('heading', { name: 'Page not found' })).toBeInTheDocument()
   })
 
+  it("shows a spinner while the first page's code loads, then the page", async () => {
+    const { user } = renderRoute('/does-not-exist', {
+      signedInAs: buildCurrentUser(),
+      loadPagesOnDemand: true,
+    })
+
+    expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument()
+    await user.click(await screen.findByRole('link', { name: 'Go home' }))
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument()
+  })
+
   it('navigates home from the not-found page', async () => {
     const { router, user } = renderRoute('/does-not-exist', { signedInAs: buildCurrentUser() })
 

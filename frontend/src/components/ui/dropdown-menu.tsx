@@ -3,8 +3,14 @@ import { cn } from 'cn'
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui'
 import { CheckIcon, ChevronRightIcon } from 'lucide-react'
 
-function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
+// Not modal by default: a modal menu hides the rest of the page from assistive
+// technology (aria-hidden) while it still holds focusable controls, and a menu
+// closes on outside focus or Escape anyway.
+function DropdownMenu({
+  modal = false,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" modal={modal} {...props} />
 }
 
 function DropdownMenuPortal({
