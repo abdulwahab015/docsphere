@@ -52,6 +52,13 @@ export async function startSession(queryClient: QueryClient, tokens: TokenPair) 
   queryClient.setQueryData(authKeys.currentUser, await fetchCurrentUser())
 }
 
+/** The same user was issued a new token pair (changing a password revokes the
+ * old ones), so only the access token changes and their data stays. The new
+ * refresh token arrives as the cookie. */
+export function renewSession(tokens: TokenPair) {
+  setAccessToken(tokens.access)
+}
+
 export function clearSession(queryClient: QueryClient) {
   clearAccessToken()
   removeUserData(queryClient)

@@ -58,6 +58,7 @@ export const TEAM_ADMIN = seededAccount('admin@team.e2e.test')
 export const TEAM_PROMOTE = seededAccount('promote@team.e2e.test')
 export const TEAM_LEAVER = seededAccount('leaver@team.e2e.test')
 export const TEAM_FORGETFUL = seededAccount('forgetful@team.e2e.test')
+export const ACCOUNT_MEMBER = seededAccount('member@account.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)

@@ -17,6 +17,7 @@ export const PATHS = {
   accessRequests: '/requests',
   people: '/people',
   organizationSettings: '/settings/organization',
+  account: '/settings/account',
   billing: '/billing',
   billingSuccess: '/billing/success',
   billingCancel: '/billing/cancel',
