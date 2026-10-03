@@ -1,5 +1,7 @@
-import { ChevronsUpDownIcon, LogOutIcon } from 'lucide-react'
+import { ChevronsUpDownIcon, LogOutIcon, UserRoundIcon } from 'lucide-react'
+import { Link } from 'react-router'
 
+import { PATHS } from '@/app/paths'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,13 +10,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { SidebarMenuButton } from '@/components/ui/sidebar'
+import { SidebarMenuButton, useSidebar } from '@/components/ui/sidebar'
 import { useLogout, useSignedInMember } from '@/features/auth/hooks'
 import { ORG_ROLE_LABELS } from '@/lib/access'
 
 export function UserMenu() {
   const user = useSignedInMember()
   const logout = useLogout()
+  const { setOpenMobile } = useSidebar()
 
   return (
     <DropdownMenu>
@@ -38,6 +41,13 @@ export function UserMenu() {
           {user.email}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {/* Closes the phone navigation drawer too, as the sidebar's links do. */}
+        <DropdownMenuItem asChild onSelect={() => setOpenMobile(false)}>
+          <Link to={PATHS.account}>
+            <UserRoundIcon aria-hidden />
+            Account settings
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem disabled={logout.isPending} onSelect={() => logout.mutate()}>
           <LogOutIcon aria-hidden />
           Log out

@@ -275,6 +275,16 @@
           "role": "ADMIN"
         }
       ]
+    },
+    {
+      "name": "Account E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "member@account.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
     }
   ]
 }

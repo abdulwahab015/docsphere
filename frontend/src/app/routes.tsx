@@ -3,6 +3,7 @@ import { Navigate, type RouteObject } from 'react-router'
 import { AppLayout } from '@/app/layout/AppLayout'
 import { RootLayout } from '@/app/layout/RootLayout'
 import { PATHS } from '@/app/paths'
+import { AccountPage } from '@/features/account/pages/AccountPage'
 import { RequireActiveSubscription } from '@/features/auth/components/RequireActiveSubscription'
 import { RequireAuth } from '@/features/auth/components/RequireAuth'
 import { RequireGuest } from '@/features/auth/components/RequireGuest'
@@ -64,6 +65,7 @@ export const routes: RouteObject[] = [
                   { path: PATHS.documentDetail, element: <DocumentPage /> },
                   { path: PATHS.accessRequests, element: <RequestsPage /> },
                   { path: PATHS.people, element: <PeoplePage /> },
+                  { path: PATHS.account, element: <AccountPage /> },
                   {
                     element: <RequireOrgAdmin />,
                     children: [

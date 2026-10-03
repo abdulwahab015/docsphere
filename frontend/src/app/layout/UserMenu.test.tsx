@@ -16,6 +16,16 @@ describe('UserMenu', () => {
     expect(menuButton).toHaveTextContent('Admin · Acme')
   })
 
+  it('opens account settings', async () => {
+    server.use(http.get(apiUrl('/users/'), () => HttpResponse.json({ count: 0, results: [] })))
+    const { user } = renderRoute('/people', { signedInAs: buildCurrentUser() })
+
+    await user.click(screen.getByRole('button', { name: 'Account menu' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Account settings' }))
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Account' })).toBeInTheDocument()
+  })
+
   it("doesn't send the next person to sign in back to the previous user's page", async () => {
     server.use(
       http.post(apiUrl('/users/auth/logout/'), () => new HttpResponse(null, { status: 205 })),
