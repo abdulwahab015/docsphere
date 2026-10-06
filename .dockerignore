@@ -18,3 +18,5 @@ htmlcov/
 *.md
 frontend/
 scripts/
+# Celery beat's local schedule file (make beat).
+celerybeat-schedule*

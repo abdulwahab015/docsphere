@@ -23,6 +23,12 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: core.settings.local
 
+  beat:
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
   flower:
     ports:
       - "5555:5555"

@@ -72,8 +72,9 @@ test('the signed-out pages', async ({ page }) => {
   }
 })
 
-test("the app's pages", async ({ page }) => {
-  await logIn(page, DOCS_ADMIN)
+// A test per page: each check takes a few seconds, so together they'd outrun
+// one test's time limit, and a failure names the page.
+test.describe("the app's pages", () => {
   for (const path of [
     '/projects',
     '/projects/trash',
@@ -89,8 +90,11 @@ test("the app's pages", async ({ page }) => {
     '/billing',
     '/no-such-page',
   ]) {
-    await visit(page, path)
-    await expectAccessible(page)
+    test(path, async ({ page }) => {
+      await logIn(page, DOCS_ADMIN)
+      await visit(page, path)
+      await expectAccessible(page)
+    })
   }
 })
 

@@ -30,7 +30,8 @@ class StripeCustomerFactory(factory.django.DjangoModelFactory):
 class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
     """A dj-stripe Subscription. ``status`` (default ``"active"``) is written
     into ``stripe_data`` where dj-stripe's managers read it from - pass
-    ``status="canceled"`` (or any non-active value) for an expired one. The
+    ``status="canceled"`` (or any non-active value) for an expired one, and
+    ``cancel_at_period_end=True`` for one that ends rather than renews. The
     billing period end lives on the subscription item, as in current Stripe
     API versions."""
 
@@ -40,6 +41,7 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
     class Params:
         status = "active"
         days_until_renewal = 30
+        cancel_at_period_end = False
 
     id = factory.Sequence(lambda n: f"sub_test{n}")
     customer = factory.SubFactory(StripeCustomerFactory)
@@ -47,7 +49,7 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
         lambda subscription: {
             "id": subscription.id,
             "status": subscription.status,
-            "cancel_at_period_end": False,
+            "cancel_at_period_end": subscription.cancel_at_period_end,
             "plan": {"interval": "month"},
             "items": {
                 "data": [

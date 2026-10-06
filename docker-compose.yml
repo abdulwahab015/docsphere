@@ -63,6 +63,30 @@ services:
       - redis
     restart: unless-stopped
 
+  # Sends the periodic tasks in CELERY_BEAT_SCHEDULE (the daily renewal
+  # reminders) to the worker. Exactly one may run: a second copy would send
+  # every scheduled task twice. It records when each task last ran in a file
+  # on a volume, so a run missed while it was down happens once it restarts.
+  beat:
+    build: .
+    command: celery -A core beat -l info --schedule /home/app/beat/celerybeat-schedule
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.production
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_TASK_ALWAYS_EAGER: "False"
+    volumes:
+      - beat_schedule:/home/app/beat
+    deploy:
+      replicas: 1
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
   flower:
     build: .
     command: celery -A core flower --conf=core/settings/flowerconfig.py
@@ -81,3 +105,4 @@ services:
 
 volumes:
   postgres_data:
+  beat_schedule:

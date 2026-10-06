@@ -1,14 +1,19 @@
 import json
 import logging
+import smtplib
 from unittest.mock import PropertyMock, patch
 
 import stripe
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from django.utils.module_loading import autodiscover_modules
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase
 
+from core.celery import app as celery_app
+from core.email import EMAIL_MAX_RETRIES
 from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
 from core.permissions import HasActiveSubscription, SubscriptionRequired
@@ -18,7 +23,16 @@ from organizations.factories import (
     WebhookEndpointFactory,
 )
 from organizations.models import Organization
+from projects.tasks import (
+    send_access_request_approved_email_task,
+    send_access_request_created_email_task,
+    send_access_request_denied_email_task,
+    send_document_shared_email_task,
+    send_project_shared_email_task,
+)
+from subscriptions.tasks import send_expiry_reminder_email_task
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
+from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 
 class RedactTests(SimpleTestCase):
@@ -417,3 +431,81 @@ class StripeWebhookEndpointTests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+EAGER_PROPAGATES_SETTING = "CELERY_TASK_EAGER_PROPAGATES"
+
+
+class CeleryBeatScheduleTests(SimpleTestCase):
+    def test_every_scheduled_task_is_registered_with_the_celery_app(self):
+        # What the Celery app's autodiscovery does when a worker or beat starts.
+        autodiscover_modules("tasks")
+
+        for entry_name, entry in settings.CELERY_BEAT_SCHEDULE.items():
+            with self.subTest(entry_name):
+                self.assertIn(entry["task"], celery_app.tasks)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+class EmailTaskRetryTests(TestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        # Eager, but without the test settings' CELERY_TASK_EAGER_PROPAGATES:
+        # with it, Celery raises its internal Retry exception instead of
+        # running the retry. The Celery app has already read its settings, so
+        # it's changed on the app itself; the outcome is read from the result.
+        propagates = celery_app.conf[EAGER_PROPAGATES_SETTING]
+        celery_app.conf[EAGER_PROPAGATES_SETTING] = False
+        self.addCleanup(
+            celery_app.conf.__setitem__, EAGER_PROPAGATES_SETTING, propagates
+        )
+
+    @patch("core.email.send_mail")
+    def test_a_failed_send_is_retried_until_it_goes_through(self, mock_send_mail):
+        mock_send_mail.side_effect = [
+            smtplib.SMTPServerDisconnected("Connection unexpectedly closed"),
+            None,
+        ]
+
+        with self.assertNumQueries(2):
+            result = send_password_reset_email_task.delay(self.user.pk)
+
+        self.assertTrue(result.successful())
+        self.assertEqual(mock_send_mail.call_count, 2)
+
+    @patch("core.email.send_mail")
+    def test_gives_up_after_the_retry_limit(self, mock_send_mail):
+        mock_send_mail.side_effect = ConnectionRefusedError()
+
+        with self.assertNumQueries(EMAIL_MAX_RETRIES + 1):
+            result = send_password_reset_email_task.delay(self.user.pk)
+
+        self.assertIsInstance(result.result, ConnectionRefusedError)
+        self.assertEqual(mock_send_mail.call_count, EMAIL_MAX_RETRIES + 1)
+
+    @patch("core.email.send_mail")
+    def test_an_error_that_retrying_cannot_fix_fails_at_once(self, mock_send_mail):
+        mock_send_mail.side_effect = ValueError("Invalid address")
+
+        with self.assertNumQueries(1):
+            result = send_password_reset_email_task.delay(self.user.pk)
+
+        self.assertIsInstance(result.result, ValueError)
+        mock_send_mail.assert_called_once()
+
+    def test_every_email_task_retries_failed_sends(self):
+        email_tasks = [
+            send_invitation_email_task,
+            send_password_reset_email_task,
+            send_project_shared_email_task,
+            send_document_shared_email_task,
+            send_access_request_created_email_task,
+            send_access_request_approved_email_task,
+            send_access_request_denied_email_task,
+            send_expiry_reminder_email_task,
+        ]
+
+        for task in email_tasks:
+            with self.subTest(task.name):
+                self.assertEqual(task.autoretry_for, (OSError,))
+                self.assertEqual(task.max_retries, EMAIL_MAX_RETRIES)

@@ -13,3 +13,5 @@ staticfiles/*
 .ruff_cache/
 .coverage
 htmlcov/
+# Celery beat's local schedule file (make beat).
+celerybeat-schedule*
