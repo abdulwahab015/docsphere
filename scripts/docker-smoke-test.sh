@@ -46,6 +46,20 @@ status() {
   curl -sS -o /dev/null -w '%{http_code}' "$@"
 }
 
+# The first line of a service's logs containing the given text, waiting for it
+# to appear; empty if it doesn't in time.
+log_line() {
+  local service=$1 text=$2 line
+  for _ in $(seq "$WAIT_SECONDS"); do
+    line=$("${COMPOSE[@]}" logs --no-log-prefix "$service" 2>/dev/null | grep -F -- "$text" | head -1 || true)
+    if [ -n "$line" ]; then
+      echo "$line"
+      return
+    fi
+    sleep 1
+  done
+}
+
 echo "Building and starting the stack..."
 "${COMPOSE[@]}" up --detach --build
 "${COMPOSE[@]}" run --rm web python manage.py migrate --noinput >/dev/null
@@ -99,9 +113,21 @@ check "refreshes the session from the cookie" "200" \
     -H "Content-Type: application/json" -H "Cookie: $refresh_token" -d '{}')"
 
 echo
+echo "Background tasks"
+running=$("${COMPOSE[@]}" ps --status running --services)
+check "runs one scheduler (beat)" "1" "$(grep -cx beat <<<"$running" || true)"
+check "...which has started" "beat: Starting" "$(log_line beat "beat: Starting")"
+# Sent through the broker the way beat sends it at midnight, so this proves
+# the wiring without waiting for the schedule.
+reminder_task=subscriptions.tasks.send_expiry_reminders_task
+task_id=$("${COMPOSE[@]}" exec -T beat celery -A core call "$reminder_task" | tr -d '\r')
+check "the worker runs the renewal reminders" "succeeded" \
+  "$(log_line worker "$reminder_task[$task_id] succeeded")"
+
+echo
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed. Logs:"
-  "${COMPOSE[@]}" logs --tail 50 web frontend
+  "${COMPOSE[@]}" logs --tail 50 web frontend worker beat
   exit 1
 fi
 echo "All checks passed."

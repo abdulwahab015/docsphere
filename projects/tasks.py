@@ -1,6 +1,4 @@
-from celery import shared_task
-
-from core.email import send_templated_mail
+from core.email import email_task, send_templated_mail
 from projects.choices import AccessLevel
 from projects.models import DocumentAccessRequest, DocumentPermission, ProjectPermission
 
@@ -28,7 +26,7 @@ def _send_share_notification(
     )
 
 
-@shared_task
+@email_task
 def send_project_shared_email_task(permission_id):
     _send_share_notification(
         ProjectPermission,
@@ -40,7 +38,7 @@ def send_project_shared_email_task(permission_id):
     )
 
 
-@shared_task
+@email_task
 def send_document_shared_email_task(permission_id):
     _send_share_notification(
         DocumentPermission,
@@ -52,7 +50,7 @@ def send_document_shared_email_task(permission_id):
     )
 
 
-@shared_task
+@email_task
 def send_access_request_created_email_task(access_request_id):
     access_request = DocumentAccessRequest.objects.select_related(
         "document", "requested_by"
@@ -75,7 +73,7 @@ def send_access_request_created_email_task(access_request_id):
     )
 
 
-@shared_task
+@email_task
 def send_access_request_approved_email_task(access_request_id):
     access_request = DocumentAccessRequest.objects.select_related(
         "document", "requested_by"
@@ -87,7 +85,7 @@ def send_access_request_approved_email_task(access_request_id):
     )
 
 
-@shared_task
+@email_task
 def send_access_request_denied_email_task(access_request_id):
     access_request = DocumentAccessRequest.objects.select_related(
         "document", "requested_by"

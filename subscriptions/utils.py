@@ -17,6 +17,12 @@ def get_period_end(subscription):
     return datetime.fromtimestamp(timestamp, tz=UTC)
 
 
+def cancels_at_period_end(subscription):
+    """Whether a dj-stripe Subscription has been cancelled and ends when its
+    current billing period does, rather than renewing."""
+    return bool(subscription.stripe_data.get("cancel_at_period_end"))
+
+
 def active_recurring_prices():
     """The Prices an organization may subscribe to: active and recurring.
     Both the price list and checkout validation read through this, so

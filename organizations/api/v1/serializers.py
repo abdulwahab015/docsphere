@@ -5,7 +5,7 @@ from rest_framework import serializers
 
 from organizations.models import Organization
 from organizations.validators import validate_unique_billing_email
-from subscriptions.utils import get_period_end
+from subscriptions.utils import cancels_at_period_end, get_period_end
 from users.validators import validate_password_for_field
 
 User = get_user_model()
@@ -21,7 +21,7 @@ class ActiveSubscriptionSerializer(serializers.Serializer):
     cancel_at_period_end = serializers.SerializerMethodField()
 
     def get_cancel_at_period_end(self, subscription) -> bool:
-        return bool(subscription.stripe_data.get("cancel_at_period_end"))
+        return cancels_at_period_end(subscription)
 
     def get_interval(self, subscription) -> str | None:
         return (subscription.stripe_data.get("plan") or {}).get("interval")
