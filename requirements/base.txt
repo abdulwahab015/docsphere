@@ -18,7 +18,7 @@ billiard==4.2.4
     # via celery
 celery==5.6.3
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   flower
 certifi==2026.7.22
     # via
@@ -39,12 +39,12 @@ click-plugins==1.1.1.2
 click-repl==0.3.0
     # via celery
 dj-database-url==3.1.2
-    # via -r requirements/base.in
+    # via -r base.in
 dj-stripe==2.11.0
-    # via -r requirements/base.in
+    # via -r base.in
 django==6.1.2
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   dj-database-url
     #   dj-stripe
     #   django-cors-headers
@@ -53,24 +53,24 @@ django==6.1.2
     #   djangorestframework-simplejwt
     #   drf-spectacular
 django-cors-headers==4.9.0
-    # via -r requirements/base.in
+    # via -r base.in
 django-extensions==4.1
-    # via -r requirements/base.in
-djangorestframework==3.18.0
+    # via -r base.in
+djangorestframework==3.18.1
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   djangorestframework-simplejwt
     #   drf-spectacular
 djangorestframework-simplejwt==5.5.1
-    # via -r requirements/base.in
+    # via -r base.in
 drf-spectacular==0.30.0
-    # via -r requirements/base.in
+    # via -r base.in
 et-xmlfile==2.0.0
     # via openpyxl
-flower==2.0.1
-    # via -r requirements/base.in
+flower==2.2.0
+    # via -r base.in
 gunicorn==23.0.0
-    # via -r requirements/base.in
+    # via -r base.in
 humanize==4.16.0
     # via flower
 idna==3.19
@@ -84,7 +84,7 @@ jsonschema-specifications==2025.9.1
 kombu==5.6.2
     # via celery
 openpyxl==3.1.5
-    # via -r requirements/base.in
+    # via -r base.in
 packaging==26.3
     # via
     #   gunicorn
@@ -93,22 +93,22 @@ prometheus-client==0.26.0
     # via flower
 prompt-toolkit==3.0.53
     # via click-repl
-psycopg==3.3.5
-    # via -r requirements/base.in
-psycopg-binary==3.3.5
+psycopg==3.3.6
+    # via -r base.in
+psycopg-binary==3.3.6
     # via psycopg
 pyjwt==2.15.1
     # via djangorestframework-simplejwt
 python-dateutil==2.9.0.post0
     # via celery
 python-decouple==3.8
-    # via -r requirements/base.in
+    # via -r base.in
 pytz==2026.3.post1
     # via flower
 pyyaml==6.0.3
     # via drf-spectacular
 redis==8.1.0
-    # via -r requirements/base.in
+    # via -r base.in
 referencing==0.37.0
     # via
     #   jsonschema
@@ -120,7 +120,7 @@ rpds-py==2026.6.3
     #   jsonschema
     #   referencing
 sentry-sdk==2.71.0
-    # via -r requirements/base.in
+    # via -r base.in
 six==1.17.0
     # via python-dateutil
 sqlparse==0.6.0
@@ -151,5 +151,5 @@ vine==5.1.0
     #   kombu
 wcwidth==0.8.3
     # via prompt-toolkit
-whitenoise==6.8.2
-    # via -r requirements/base.in
+whitenoise==6.12.0
+    # via -r base.in
