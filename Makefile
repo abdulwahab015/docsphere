@@ -12,7 +12,7 @@ E2E_DATABASE := frontend/node_modules/.tmp/e2e.sqlite3
 E2E_MAILBOX := frontend/node_modules/.tmp/e2e-mail
 
 .PHONY: help install compile migrate makemigrations run shell worker beat flower stripe-listen test test-cov test-pg lint format check \
-        up down build logs docker-migrate docker-shell docker-smoke clean \
+        up down build logs docker-migrate docker-shell docker-smoke db-backup db-backups db-restore clean \
         fe-install fe-dev fe-build fe-test fe-test-cov fe-lint fe-format fe-check fe-api-types \
         fe-api-types-check fe-e2e e2e-api
 
@@ -152,6 +152,18 @@ docker-shell: ## Open a shell inside the web container
 
 docker-smoke: ## Build the production stack and check it through nginx on :8080 (needs .env)
 	./scripts/docker-smoke-test.sh
+
+db-backup: ## Back up the running stack's database now (into the db_backups volume)
+	docker compose exec backup sh /usr/local/bin/db-backup
+
+db-backups: ## List the running stack's database backups
+	docker compose exec backup ls -lh /backups
+
+db-restore: ## Replace the database with a backup: make db-restore BACKUP=docsphere-<time>.dump
+	@test -n "$(BACKUP)" || (echo "Usage: make db-restore BACKUP=<a file from make db-backups>"; exit 1)
+	docker compose stop web worker beat flower
+	docker compose exec backup sh /usr/local/bin/db-restore "$(BACKUP)"; \
+		status=$$?; docker compose start web worker beat flower; exit $$status
 
 clean: ## Remove Python cache files
 	find . -type d -name __pycache__ -not -path './venv/*' -exec rm -rf {} +

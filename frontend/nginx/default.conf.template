@@ -2,13 +2,15 @@
 # Django's paths are forwarded to the `web` service. TLS ends at the load
 # balancer in front of this server.
 
-upstream django {
-    server web:8000;
-}
-
 server {
     listen 8080;
     server_name _;
+
+    # Django is looked up through Docker's DNS on each request (cached briefly)
+    # rather than once at startup: a restarted or redeployed `web` container
+    # gets a new address, and nginx would otherwise keep sending to the old one.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $django http://web:8000;
 
     root /usr/share/nginx/html;
 
@@ -30,23 +32,23 @@ server {
     # Django: the API (and its schema and docs), the admin and the static files
     # it uses, Stripe's webhook, and the health check.
     location /api/ {
-        proxy_pass http://django;
+        proxy_pass $django;
     }
 
     location /${DJANGO_ADMIN_PATH} {
-        proxy_pass http://django;
+        proxy_pass $django;
     }
 
     location /static/ {
-        proxy_pass http://django;
+        proxy_pass $django;
     }
 
     location /stripe/ {
-        proxy_pass http://django;
+        proxy_pass $django;
     }
 
     location = /healthz/ {
-        proxy_pass http://django;
+        proxy_pass $django;
     }
 
     # The app's built files have a content hash in their names, so a cached
