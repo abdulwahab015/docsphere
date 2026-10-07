@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Navigate, Outlet, useLocation } from 'react-router'
 
 import { PATHS } from '@/app/paths'
+import { ErrorTrackingIdentity } from '@/features/auth/components/ErrorTrackingIdentity'
 import { SessionLoader } from '@/features/auth/components/SessionLoader'
 import { returnState } from '@/features/auth/return-path'
 import { wasSignedOutDeliberately } from '@/features/auth/session'
@@ -19,6 +20,7 @@ export function RequireAuth() {
       {(user) =>
         user ? (
           <SignedInUserContext value={user}>
+            <ErrorTrackingIdentity user={user} />
             <Outlet />
           </SignedInUserContext>
         ) : (

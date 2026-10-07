@@ -3,6 +3,7 @@ import logging
 import smtplib
 from unittest.mock import PropertyMock, patch
 
+import sentry_sdk
 import stripe
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
@@ -11,9 +12,12 @@ from django.urls import reverse
 from django.utils.module_loading import autodiscover_modules
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
+from sentry_sdk.transport import Transport
 
 from core.celery import app as celery_app
 from core.email import EMAIL_MAX_RETRIES
+from core.error_tracking import init_error_tracking, scrub_event
 from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
 from core.permissions import HasActiveSubscription, SubscriptionRequired
@@ -529,3 +533,133 @@ class EmailTaskRetryTests(TestCase):
             with self.subTest(task.name):
                 self.assertEqual(task.autoretry_for, (OSError,))
                 self.assertEqual(task.max_retries, EMAIL_MAX_RETRIES)
+
+
+DSN = "https://public@errors.example.com/1"
+
+
+class ErrorTrackingSetupTests(SimpleTestCase):
+    @override_settings(SENTRY_DSN="")
+    @patch("core.error_tracking.sentry_sdk.init")
+    def test_stays_off_without_a_dsn(self, mock_init):
+        self.assertIs(init_error_tracking(), False)
+
+        mock_init.assert_not_called()
+
+    @override_settings(
+        SENTRY_DSN=DSN, SENTRY_ENVIRONMENT="staging", SENTRY_RELEASE="abc123"
+    )
+    @patch("core.error_tracking.sentry_sdk.init")
+    def test_starts_with_a_dsn_without_sending_personal_data(self, mock_init):
+        self.assertIs(init_error_tracking(), True)
+
+        options = mock_init.call_args.kwargs
+        self.assertEqual(options["dsn"], DSN)
+        self.assertEqual(options["environment"], "staging")
+        self.assertEqual(options["release"], "abc123")
+        self.assertIs(options["send_default_pii"], False)
+        self.assertIs(options["include_local_variables"], False)
+        self.assertEqual(options["max_request_body_size"], "never")
+        self.assertIs(options["before_send"], scrub_event)
+
+    def test_scrubbing_keeps_only_the_request_method_path_and_user_id(self):
+        event = {
+            "request": {
+                "method": "POST",
+                "url": "https://docsphere.example.com/api/v1/documents/",
+                "query_string": "search=secret",
+                "headers": {"Authorization": "Bearer abc"},
+                "cookies": {"refresh_token": "xyz"},
+                "data": {"content": "Private notes"},
+                "env": {"REMOTE_ADDR": "203.0.113.7"},
+            },
+            "user": {
+                "id": "7",
+                "email": "ada@example.com",
+                "ip_address": "203.0.113.7",
+            },
+        }
+
+        self.assertEqual(
+            scrub_event(event, hint={}),
+            {
+                "request": {
+                    "method": "POST",
+                    "url": "https://docsphere.example.com/api/v1/documents/",
+                },
+                "user": {"id": "7"},
+            },
+        )
+
+
+class ErrorTrackingScrubbingTests(SimpleTestCase):
+    def test_an_error_outside_any_request_passes_through_unchanged(self):
+        # e.g. a Celery task's: no request, and nobody signed in.
+        event = {"exception": {"values": [{"type": "OSError"}]}}
+
+        self.assertEqual(scrub_event(dict(event), hint={}), event)
+
+
+class _CapturingTransport(Transport):
+    """Keeps the events the SDK would have sent."""
+
+    def __init__(self, options=None):
+        super().__init__(options)
+        self.events = []
+
+    def capture_envelope(self, envelope):
+        event = envelope.get_event()
+        if event:
+            self.events.append(event)
+
+
+@override_settings(SENTRY_DSN=DSN)
+class ErrorReportTests(AssumeActiveSubscription, APITestCase):
+    """A real failing request, reported through the real SDK."""
+
+    def setUp(self):
+        super().setUp()
+        self.transport = _CapturingTransport()
+        start = sentry_sdk.init
+        with patch(
+            "core.error_tracking.sentry_sdk.init",
+            side_effect=lambda **options: start(transport=self.transport, **options),
+        ):
+            init_error_tracking()
+        self.addCleanup(lambda: sentry_sdk.get_client().close())
+        self.client.raise_request_exception = False
+
+    @patch(
+        "projects.api.v1.views.ProjectListCreateAPIView.perform_create",
+        side_effect=RuntimeError("Something broke"),
+    )
+    def test_says_whose_request_failed_by_id_and_nothing_more(self, _mock_create):
+        admin = AdminUserFactory()
+        token = str(RefreshToken.for_user(admin).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                f"{reverse('project_list_create')}?from=secret-search-term",
+                {"name": "Secret plans", "description": "Private notes"},
+                format="json",
+            )
+        sentry_sdk.flush()
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        (event,) = self.transport.events
+        self.assertEqual(event["exception"]["values"][-1]["type"], "RuntimeError")
+        self.assertEqual(event["user"], {"id": str(admin.pk)})
+        self.assertEqual(event["tags"]["organization_id"], str(admin.organization_id))
+        # Under gunicorn the method and URL are there too: the SDK adds them as
+        # the request passes Django's WSGI handler, which the test client skips.
+        self.assertLessEqual(set(event["request"]), {"method", "url"})
+        reported = json.dumps(event)
+        for private in (
+            token,
+            admin.email,
+            "Secret plans",
+            "Private notes",
+            "secret-search-term",
+        ):
+            self.assertNotIn(private, reported)

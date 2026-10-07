@@ -110,6 +110,14 @@ echo "The app"
 app=$(headers "$BASE_URL/")
 check "serves index.html" "200" "$(head -1 <<<"$app")"
 check "sends a content security policy" "content-security-policy: default-src 'self'" "$app"
+# Bracketed, so the check is for exactly this - no other origin allowed.
+check "...whose requests go only to this origin" "[connect-src 'self']" \
+  "[$(grep -o "connect-src [^;]*" <<<"$app" | sed 's/ *$//')]"
+# The error-reporting origin, once configured, is added to it at start-up.
+ingest=https://o1.ingest.example.com
+check "...and to the error-reporting origin when one is set" "[connect-src 'self' $ingest]" \
+  "[$("${COMPOSE[@]}" run --rm --no-deps -e SENTRY_INGEST_ORIGIN="$ingest" frontend nginx -T 2>/dev/null |
+    grep -o "connect-src [^;]*" | head -1 | sed 's/ *$//')]"
 check "always revalidates index.html" "cache-control: no-cache" "$app"
 check "lets the app route deep links" "200" "$(status "$BASE_URL/projects/7")"
 entry=$(curl -sS "$BASE_URL/" | grep -o '/assets/index-[^"]*\.js' | head -1)

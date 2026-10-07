@@ -54,7 +54,7 @@ server {
     # The app's built files have a content hash in their names, so a cached
     # copy never goes stale.
     location /assets/ {
-        include /etc/nginx/snippets/app-headers.conf;
+        include /etc/nginx/conf.d/app-headers.inc;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         try_files $uri =404;
     }
@@ -62,7 +62,7 @@ server {
     # Every other path is the app's to route (/projects/7, /billing/success,
     # ...). index.html is always revalidated, so a release is picked up at once.
     location / {
-        include /etc/nginx/snippets/app-headers.conf;
+        include /etc/nginx/conf.d/app-headers.inc;
         add_header Cache-Control "no-cache" always;
         try_files $uri /index.html;
     }

@@ -99,9 +99,14 @@ services:
   # `web`, so the browser sees one origin. Put the TLS-terminating load
   # balancer in front of APP_PORT.
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_SENTRY_DSN: ${SENTRY_FRONTEND_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
     environment:
       DJANGO_ADMIN_PATH: ${DJANGO_ADMIN_PATH:-admin/}
+      SENTRY_INGEST_ORIGIN: ${SENTRY_INGEST_ORIGIN:-}
     ports:
       - "${APP_PORT:-8080}:8080"
     healthcheck:
