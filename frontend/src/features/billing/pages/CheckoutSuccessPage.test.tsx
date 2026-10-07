@@ -3,13 +3,13 @@ import { http, HttpResponse } from 'msw'
 
 import type { CurrentUser } from '@/api/types'
 import { CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS } from '@/features/billing/hooks'
-import { buildCurrentUser } from '@/test/factories'
+import { buildCurrentUser, buildOrganizationSummary } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
 const lapsedAdmin = buildCurrentUser({
   org_role: 'ADMIN',
-  organization: { id: 1, name: 'Acme', has_active_subscription: false },
+  organization: buildOrganizationSummary({ has_active_subscription: false }),
 })
 const subscribedAdmin = buildCurrentUser({ org_role: 'ADMIN' })
 

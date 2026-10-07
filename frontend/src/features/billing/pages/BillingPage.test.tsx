@@ -55,6 +55,16 @@ describe('BillingPage', () => {
       expect(await screen.findByText(/^Ends on /)).toBeInTheDocument()
     })
 
+    it('says when a renewal payment failed and Stripe is retrying it', async () => {
+      serveOrganization(withSubscription({ status: 'past_due' }))
+      renderRoute('/billing', { signedInAs: admin })
+
+      expect(await screen.findByText('Payment failed')).toBeInTheDocument()
+      expect(screen.getByText(/Stripe is retrying the payment/)).toBeInTheDocument()
+      expect(screen.queryByText('Active')).not.toBeInTheDocument()
+      expect(screen.queryByText(/^(Renews|Ends) on /)).not.toBeInTheDocument()
+    })
+
     it('leaves out the date when Stripe has not reported one, and names an unknown interval as is', async () => {
       serveOrganization(withSubscription({ current_period_end: null, interval: 'fortnight' }))
       renderRoute('/billing', { signedInAs: admin })

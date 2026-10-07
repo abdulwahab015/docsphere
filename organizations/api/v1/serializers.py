@@ -5,7 +5,7 @@ from rest_framework import serializers
 
 from organizations.models import Organization
 from organizations.validators import validate_unique_billing_email
-from subscriptions.utils import cancels_at_period_end, get_period_end
+from subscriptions.utils import cancels_at_period_end, get_period_end, is_past_due
 from users.validators import validate_password_for_field
 
 User = get_user_model()
@@ -36,14 +36,22 @@ class OrganizationSummarySerializer(serializers.ModelSerializer):
     before hitting a 402."""
 
     has_active_subscription = serializers.SerializerMethodField()
+    payment_failed = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
-        fields = ["id", "name", "has_active_subscription"]
+        fields = ["id", "name", "has_active_subscription", "payment_failed"]
         read_only_fields = fields
 
     def get_has_active_subscription(self, organization) -> bool:
         return bool(organization.active_subscription)
+
+    def get_payment_failed(self, organization) -> bool:
+        """A renewal payment failed and Stripe is retrying it: the
+        organization still has access, but its admins should update the
+        payment details before Stripe gives up."""
+        subscription = organization.active_subscription
+        return bool(subscription) and is_past_due(subscription)
 
 
 class OrganizationSerializer(serializers.ModelSerializer):

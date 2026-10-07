@@ -10,6 +10,7 @@ import {
   logIn,
   openDocument,
   openProject,
+  OVERDUE_ADMIN,
 } from './fixtures'
 
 // WCAG 2.1 A and AA, plus axe's best practices (landmarks, one main, ...).
@@ -144,6 +145,13 @@ test('the dialogs an admin opens from People', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Upload a list' }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
+  await expectAccessible(page)
+})
+
+test('the warning an admin sees after a failed payment', async ({ page }) => {
+  await logIn(page, OVERDUE_ADMIN)
+  await visit(page, '/billing')
+  await expect(page.getByText('Your last payment failed')).toBeVisible()
   await expectAccessible(page)
 })
 

@@ -9,6 +9,10 @@ from djstripe.signals import webhook_processing_error
 
 logger = logging.getLogger("subscriptions")
 
+# What every Stripe API call here raises when Stripe can't be reached or
+# refuses the request, so callers can catch it without importing the SDK.
+StripeError = stripe.StripeError
+
 
 def get_or_create_customer_id(subscriber):
     """Returns the Stripe customer id for subscriber, creating one via the
@@ -17,18 +21,25 @@ def get_or_create_customer_id(subscriber):
     return customer.id
 
 
-def create_checkout_session(
-    *, customer_id, price_id, success_url, cancel_url, idempotency_key
-):
-    """Thin wrapper around the Stripe SDK's Checkout Session creation call."""
+def create_checkout_session(*, customer_id, price_id, success_url, cancel_url):
+    """Thin wrapper around the Stripe SDK's Checkout Session creation call.
+    Each call is a new session: the SDK keys its own network retries, so a
+    retried request never creates two."""
     return stripe.checkout.Session.create(
         customer=customer_id,
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=success_url,
         cancel_url=cancel_url,
-        idempotency_key=idempotency_key,
         api_key=djstripe_settings.STRIPE_SECRET_KEY,
+    )
+
+
+def update_customer_email(*, customer_id, email):
+    """Sets the Stripe customer's email, where Stripe sends receipts and
+    invoices; an empty one clears it."""
+    return stripe.Customer.modify(
+        customer_id, email=email or "", api_key=djstripe_settings.STRIPE_SECRET_KEY
     )
 
 

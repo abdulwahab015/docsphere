@@ -285,6 +285,22 @@
       ]
     },
     {
+      "name": "Overdue E2E",
+      "billing_email": "billing@overdue.e2e.test",
+      "subscribed": true,
+      "subscription_status": "past_due",
+      "users": [
+        {
+          "email": "admin@overdue.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@overdue.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
       "name": "Account E2E",
       "subscribed": true,
       "users": [

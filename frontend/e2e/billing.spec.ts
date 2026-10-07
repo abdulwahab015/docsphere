@@ -4,6 +4,8 @@ import {
   fillLoginForm,
   LAPSED_MEMBER,
   logIn,
+  OVERDUE_ADMIN,
+  OVERDUE_MEMBER,
   PAID_ADMIN,
   stubStripeEndpoint,
   UNPAID_ADMIN,
@@ -82,4 +84,34 @@ test("a subscribed organization's admin sees the plan and opens the billing port
   await page.getByRole('button', { name: 'Manage billing' }).click()
   await expect.poll(() => portal.length).toBe(1)
   await expect(page.getByRole('heading', { level: 1, name: 'Billing' })).toBeVisible()
+})
+
+test.describe('an organization whose renewal payment failed', () => {
+  test('keeps working, and its admin is asked to update the card', async ({ page, baseURL }) => {
+    const portal = await stubStripeEndpoint(page, '/subscriptions/portal/', {
+      portal_url: `${baseURL}/billing/`,
+    })
+    await logIn(page, OVERDUE_ADMIN)
+
+    // The app, not the lapsed-subscription screen, with a warning on every page.
+    const banner = page.getByRole('alert').filter({ hasText: 'Your last payment failed' })
+    await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
+    await expect(banner).toBeVisible()
+    await page
+      .getByRole('navigation', { name: 'Main' })
+      .getByRole('link', { name: 'Billing' })
+      .click()
+    await expect(page.getByText('Payment failed', { exact: true })).toBeVisible()
+    await expect(banner).toBeVisible()
+
+    await banner.getByRole('button', { name: 'Update payment details' }).click()
+    await expect.poll(() => portal.length).toBe(1)
+  })
+
+  test('its members work as usual, without the warning', async ({ page }) => {
+    await logIn(page, OVERDUE_MEMBER)
+
+    await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
+    await expect(page.getByText('Your last payment failed')).toHaveCount(0)
+  })
 })

@@ -4,7 +4,12 @@ import { http, HttpResponse } from 'msw'
 import type { Price } from '@/api/types'
 import { externalRedirect } from '@/lib/external-redirect'
 import { formatMoney } from '@/lib/format'
-import { buildCurrentUser, buildOrganization, buildPrice } from '@/test/factories'
+import {
+  buildCurrentUser,
+  buildOrganization,
+  buildOrganizationSummary,
+  buildPrice,
+} from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, heldResponse, server, spyResolver } from '@/test/server'
 
@@ -16,7 +21,7 @@ const YEARLY = buildPrice({ id: 'price_yearly', unit_amount: 15000, interval: 'y
 // The plans are what a lapsed organization's admin sees in place of the app.
 const lapsedAdmin = buildCurrentUser({
   org_role: 'ADMIN',
-  organization: { id: 1, name: 'Acme', has_active_subscription: false },
+  organization: buildOrganizationSummary({ has_active_subscription: false }),
 })
 
 function serveBilling({

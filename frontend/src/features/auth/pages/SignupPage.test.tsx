@@ -1,7 +1,12 @@
 import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
-import { buildCurrentUser, buildOrganization, buildTokenPair } from '@/test/factories'
+import {
+  buildCurrentUser,
+  buildOrganization,
+  buildOrganizationSummary,
+  buildTokenPair,
+} from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
@@ -31,7 +36,7 @@ describe('SignupPage', () => {
     const signup = spyResolver(() => HttpResponse.json(buildTokenPair(), { status: 201 }))
     const newAdmin = buildCurrentUser({
       org_role: 'ADMIN',
-      organization: { id: 2, name: 'Acme', has_active_subscription: false },
+      organization: buildOrganizationSummary({ id: 2, has_active_subscription: false }),
     })
     server.use(
       http.post(apiUrl(SIGNUP_PATH), signup),

@@ -1,6 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
@@ -11,12 +11,17 @@ from organizations.api.v1.serializers import (
     OrganizationSignupSerializer,
 )
 from organizations.models import Organization
+from subscriptions.services import sync_billing_email
 from users.api.v1.serializers import TokenPairSerializer
 from users.api.v1.tokens import token_pair_response
 from users.choices import OrganizationRole
 from users.permissions import IsOrganizationAdmin
 
 User = get_user_model()
+
+_PROVIDER_ERROR = OpenApiResponse(
+    description="Stripe couldn't be updated with the new billing email; nothing was saved."
+)
 
 
 class OrganizationSignupAPIView(APIView):
@@ -50,6 +55,10 @@ class OrganizationSignupAPIView(APIView):
         return token_pair_response(user, status.HTTP_201_CREATED)
 
 
+@extend_schema_view(
+    put=extend_schema(responses={200: OrganizationSerializer, 502: _PROVIDER_ERROR}),
+    patch=extend_schema(responses={200: OrganizationSerializer, 502: _PROVIDER_ERROR}),
+)
 class OrganizationProfileAPIView(generics.RetrieveUpdateAPIView):
     """Retrieve or update the requesting admin's own organization profile.
     Reachable without an active subscription, since fixing ``billing_email``
@@ -60,3 +69,13 @@ class OrganizationProfileAPIView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user.organization
+
+    def perform_update(self, serializer):
+        """A new billing email goes to the Stripe customer too, in the same
+        transaction: if Stripe can't be updated, nothing is saved, so the
+        receipts never go somewhere the app no longer shows."""
+        previous_billing_email = serializer.instance.billing_email
+        with transaction.atomic():
+            organization = serializer.save()
+            if organization.billing_email != previous_billing_email:
+                sync_billing_email(organization)

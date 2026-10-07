@@ -263,11 +263,31 @@ class HasActiveSubscriptionUnitTests(TestCase):
         with self.assertNumQueries(2):
             self.assertIs(self._check(user), True)
 
+    def test_user_whose_renewal_payment_is_being_retried_passes(self):
+        user = UserFactory()
+        StripeSubscriptionFactory(
+            customer__subscriber=user.organization, status="past_due"
+        )
+
+        with self.assertNumQueries(2):
+            self.assertIs(self._check(user), True)
+
     def test_user_without_an_active_subscription_raises_402(self):
         user = UserFactory()
 
         with self.assertNumQueries(1), self.assertRaises(SubscriptionRequired):
             self._check(user)
+
+    def test_user_whose_subscription_stripe_gave_up_on_raises_402(self):
+        for status_name in ("unpaid", "canceled", "incomplete_expired"):
+            with self.subTest(status_name):
+                user = UserFactory()
+                StripeSubscriptionFactory(
+                    customer__subscriber=user.organization, status=status_name
+                )
+
+                with self.assertNumQueries(2), self.assertRaises(SubscriptionRequired):
+                    self._check(user)
 
 
 class HasActiveSubscriptionEndpointTests(APITestCase):

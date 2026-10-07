@@ -4,6 +4,7 @@ from django.db import models
 from djstripe.models import Customer
 
 from core.models import TimeStampedModel
+from subscriptions.utils import granting_access
 
 
 class Organization(TimeStampedModel):
@@ -25,9 +26,11 @@ class Organization(TimeStampedModel):
 
     @cached_property
     def active_subscription(self):
-        """Returns the org's current active dj-stripe Subscription, or None."""
+        """The dj-stripe Subscription that gives the organization access, or
+        None: an active one, or a past due one while Stripe retries a failed
+        renewal payment."""
         customer = Customer.objects.filter(subscriber=self).first()
         if not customer:
             return None
 
-        return customer.subscriptions.active().first()
+        return granting_access(customer.subscriptions.all()).first()

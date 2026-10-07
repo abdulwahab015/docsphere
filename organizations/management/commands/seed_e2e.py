@@ -18,6 +18,7 @@ from projects.factories import (
     ProjectFactory,
     ProjectPermissionFactory,
 )
+from subscriptions.choices import SubscriptionStatus
 from users.factories import UserFactory
 
 
@@ -49,7 +50,8 @@ class Command(BaseCommand):
 
     def _seed_prices(self, price_specs):
         """The plans an organization can subscribe to - all recurring prices of
-        one product, as dj-stripe would have synced them from Stripe."""
+        the configured product, as dj-stripe would have synced them from
+        Stripe."""
         if not price_specs:
             return
         product = StripeProductFactory(name="DocSphere")
@@ -67,7 +69,8 @@ class Command(BaseCommand):
         )
         if spec["subscribed"]:
             StripeSubscriptionFactory(
-                customer=StripeCustomerFactory(subscriber=organization)
+                customer=StripeCustomerFactory(subscriber=organization),
+                status=spec.get("subscription_status", SubscriptionStatus.ACTIVE),
             )
 
         users_by_email = {
