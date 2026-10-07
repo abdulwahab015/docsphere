@@ -1,7 +1,7 @@
 # The production frontend: builds the single-page app, then serves it with
 # nginx, which also forwards Django's paths to the `web` service - so the
 # browser sees one origin for the app and the API.
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 
