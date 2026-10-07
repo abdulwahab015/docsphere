@@ -97,6 +97,16 @@ class DocumentSerializer(AccessLevelModelSerializer):
     resolve_access_fn = staticmethod(resolve_access)
 
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+    base_revision = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        write_only=True,
+        help_text=(
+            "The revision the new title/content was based on. If the document "
+            "has changed since, nothing is saved and the response is 409 with "
+            "the current document. Leave it out to save regardless."
+        ),
+    )
 
     class Meta:
         model = Document
@@ -106,6 +116,8 @@ class DocumentSerializer(AccessLevelModelSerializer):
             "content",
             "visibility",
             "access_level",
+            "revision",
+            "base_revision",
             "created_by",
             "created_by_email",
             "organization",
@@ -115,6 +127,7 @@ class DocumentSerializer(AccessLevelModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "revision",
             "created_by",
             "organization",
             "project",
@@ -131,6 +144,15 @@ class DocumentCreateSerializer(DocumentSerializer):
     the input; responses keep using ``DocumentSerializer``."""
 
     project = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    # A new document has no earlier revision to be based on.
+    base_revision = None
+
+    class Meta(DocumentSerializer.Meta):
+        fields = [
+            field
+            for field in DocumentSerializer.Meta.fields
+            if field != "base_revision"
+        ]
 
 
 class ShareSerializer(serializers.Serializer):

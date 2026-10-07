@@ -49,6 +49,8 @@ describe('DocumentPage', () => {
       expect(await save.mock.calls[0][0].request.json()).toEqual({
         title: 'Findings v2',
         content: 'Second draft.',
+        // The revision the edit started from.
+        base_revision: 1,
       })
       expect(
         await screen.findByRole('heading', { level: 1, name: 'Findings v2' }),
@@ -77,12 +79,19 @@ describe('DocumentPage', () => {
 
       await user.type(await contentBox(), ' unsaved words')
       const refetched = serveDocument(
-        buildDocument({ access_level: 'EDITOR', content: 'Changed elsewhere.' }),
+        buildDocument({ access_level: 'EDITOR', content: 'Changed elsewhere.', revision: 2 }),
       )
       await queryClient.invalidateQueries({ queryKey: documentKeys.detail(11) })
 
       expect(refetched).toHaveBeenCalled()
       expect(await contentBox()).toHaveValue('First draft. unsaved words')
+
+      // Still based on the revision the typing started from, so the API can
+      // tell the save would overwrite the newer one.
+      const save = serveSave(buildDocument({ access_level: 'EDITOR', revision: 3 }))
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+      await vi.waitFor(() => expect(save).toHaveBeenCalled())
+      expect(await save.mock.calls[0][0].request.json()).toMatchObject({ base_revision: 1 })
     })
 
     it('shows server errors on the title', async () => {
@@ -103,6 +112,88 @@ describe('DocumentPage', () => {
       expect(await screen.findByLabelText('Title')).toHaveAccessibleDescription(
         'Ensure this field has no more than 100 characters.',
       )
+    })
+  })
+
+  describe('when someone else saved first', () => {
+    const theirs = buildDocument({
+      access_level: 'EDITOR',
+      content: 'Their text.',
+      revision: 2,
+      modified: '2026-09-16T10:30:00Z',
+    })
+
+    function refuseSaves() {
+      const refusal = spyResolver(() =>
+        HttpResponse.json(
+          { detail: 'Someone else saved this document.', code: 'edit_conflict', document: theirs },
+          { status: 409 },
+        ),
+      )
+      server.use(http.patch(apiUrl(DOCUMENT_PATH), refusal))
+      return refusal
+    }
+
+    async function typeAndSave(user: ReturnType<typeof renderRoute>['user']) {
+      await user.clear(await contentBox())
+      await user.type(await contentBox(), 'My text.')
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+      return screen.findByRole('alert')
+    }
+
+    it('keeps what was typed and explains why it was not saved', async () => {
+      serveDocument(buildDocument({ access_level: 'EDITOR' }))
+      refuseSaves()
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+
+      const alert = await typeAndSave(user)
+
+      expect(alert).toHaveTextContent('Someone else saved this document')
+      expect(alert).toHaveTextContent("your changes haven't been saved")
+      expect(await contentBox()).toHaveValue('My text.')
+      expect(screen.queryByText('Document saved.')).not.toBeInTheDocument()
+    })
+
+    it('replaces their version with this one on request', async () => {
+      serveDocument(buildDocument({ access_level: 'EDITOR' }))
+      refuseSaves()
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const alert = await typeAndSave(user)
+
+      const overwrite = serveSave(
+        buildDocument({ access_level: 'EDITOR', content: 'My text.', revision: 3 }),
+      )
+      await user.click(within(alert).getByRole('button', { name: 'Overwrite with mine' }))
+
+      expect(await screen.findByText('Document saved.')).toBeInTheDocument()
+      // Based on their revision now: replacing it was the point.
+      expect(await overwrite.mock.calls[0][0].request.json()).toEqual({
+        title: 'Findings',
+        content: 'My text.',
+        base_revision: 2,
+      })
+      expect(screen.queryByText('Someone else saved this document')).not.toBeInTheDocument()
+      expect(await contentBox()).toHaveValue('My text.')
+    })
+
+    it('shows their version instead, discarding this one, on request', async () => {
+      serveDocument(buildDocument({ access_level: 'EDITOR' }))
+      refuseSaves()
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const alert = await typeAndSave(user)
+
+      await user.click(within(alert).getByRole('button', { name: 'Reload theirs' }))
+
+      expect(await contentBox()).toHaveValue('Their text.')
+      expect(screen.queryByText('Someone else saved this document')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+
+      // The next edit starts from their revision.
+      const save = serveSave(buildDocument({ access_level: 'EDITOR', revision: 3 }))
+      await user.type(await contentBox(), ' Mine too.')
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+      await vi.waitFor(() => expect(save).toHaveBeenCalled())
+      expect(await save.mock.calls[0][0].request.json()).toMatchObject({ base_revision: 2 })
     })
   })
 

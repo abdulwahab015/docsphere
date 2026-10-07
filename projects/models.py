@@ -64,6 +64,10 @@ class Document(TimeStampedModel):
     visibility = models.CharField(
         max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE
     )
+    # Goes up by one each time the title or content changes - not on other
+    # updates such as visibility - so an editor can tell whether the text it
+    # started from is still the latest.
+    revision = models.PositiveIntegerField(default=1)
 
     objects = DocumentQuerySet.as_manager()
 

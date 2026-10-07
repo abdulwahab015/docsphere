@@ -35,7 +35,7 @@ export type DocumentCreatePayload = Pick<
 >
 export type DocumentUpdatePayload = Pick<
   Schemas['PatchedDocument'],
-  'title' | 'content' | 'visibility'
+  'title' | 'content' | 'visibility' | 'base_revision'
 >
 export type ProjectPermission = Schemas['ProjectPermission']
 export type DocumentPermission = Schemas['DocumentPermission']

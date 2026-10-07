@@ -5,6 +5,7 @@ import {
   createDocument,
   deleteDocument,
   type DocumentListParams,
+  editConflictDocument,
   fetchDocument,
   listDocuments,
   listDocumentTrash,
@@ -55,6 +56,14 @@ export function useUpdateDocument(documentId: number) {
   return useMutation({
     mutationFn: (payload: DocumentUpdatePayload) => updateDocument(documentId, payload),
     onSuccess: storeDocument,
+    onError: (error) => {
+      // Someone else saved first: show the document as it is now. An editor
+      // with unsaved text keeps it, and decides what to do.
+      const current = editConflictDocument(error)
+      if (current) {
+        storeDocument(current)
+      }
+    },
   })
 }
 

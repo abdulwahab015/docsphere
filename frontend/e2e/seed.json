@@ -170,6 +170,15 @@
           "owner": "admin@docs.e2e.test"
         },
         {
+          "title": "Meeting notes",
+          "content": "Agenda to follow.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "shared_with": {
+            "writer@docs.e2e.test": "EDITOR"
+          }
+        },
+        {
           "title": "Old memo",
           "content": "Outdated.",
           "visibility": "PRIVATE",
