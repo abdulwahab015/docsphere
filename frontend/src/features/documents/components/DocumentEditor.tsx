@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import type { KeyboardEvent } from 'react'
+import { type BaseSyntheticEvent, type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 
@@ -10,6 +10,8 @@ import { TextareaField } from '@/components/form/TextareaField'
 import { TextField } from '@/components/form/TextField'
 import { Card, CardContent } from '@/components/ui/card'
 import { UnsavedChangesGuard } from '@/components/UnsavedChangesGuard'
+import { editConflictDocument } from '@/features/documents/api'
+import { EditConflictAlert } from '@/features/documents/components/EditConflictAlert'
 import { useUpdateDocument } from '@/features/documents/hooks'
 import { documentContentSchema, type DocumentContentValues } from '@/features/documents/schemas'
 import { applyApiErrors } from '@/lib/form-errors'
@@ -21,31 +23,65 @@ function contentValues(document: Document): DocumentContentValues {
   return { title: document.title, content: document.content ?? '' }
 }
 
-/** Edits a document's title and content (Editor and above). Saving replaces
- * the stored text - the API keeps whichever save arrives last - so leaving
- * with unsaved changes asks first. */
+/** Edits a document's title and content (Editor and above). A save says
+ * which revision the text started from; if someone else saved in between, the
+ * API refuses it and the editor offers to overwrite theirs or reload it.
+ * Leaving with unsaved changes asks first. */
 export function DocumentEditor({ document }: { document: Document }) {
   const update = useUpdateDocument(document.id)
   const form = useForm<DocumentContentValues>({
     resolver: zodResolver(documentContentSchema),
-    values: contentValues(document),
-    // A background refresh of the document must never overwrite what's being typed.
-    resetOptions: { keepDirtyValues: true },
+    defaultValues: contentValues(document),
   })
   const { errors, isDirty } = form.formState
+  const [hasConflict, setHasConflict] = useState(false)
+  // The revision the text in the form started from - what a save says it's
+  // based on. Only read when saving, so it needn't re-render anything.
+  const baseRevision = useRef(document.revision)
 
-  const save = form.handleSubmit(({ title, content }) =>
-    update.mutate(
-      { title, content },
-      {
-        onSuccess: (saved) => {
-          form.reset(contentValues(saved))
-          toast.success('Document saved.')
+  const startFrom = (version: Document) => {
+    form.reset(contentValues(version))
+    baseRevision.current = version.revision
+  }
+
+  // A newer revision fetched in the background replaces the text only while
+  // nothing is unsaved: it must never overwrite what's being typed, and the
+  // next save is then checked against it.
+  useEffect(() => {
+    if (document.revision !== baseRevision.current && !isDirty) {
+      form.reset(contentValues(document))
+      baseRevision.current = document.revision
+    }
+  }, [document, form, isDirty])
+
+  /** Saves the form; `revision` replaces the one the text started from. */
+  const saveFrom = (revision?: number) =>
+    form.handleSubmit(({ title, content }) =>
+      update.mutate(
+        { title, content, base_revision: revision || baseRevision.current },
+        {
+          onSuccess: (saved) => {
+            setHasConflict(false)
+            startFrom(saved)
+            toast.success('Document saved.')
+          },
+          onError: (error) => {
+            // The hook has already put their version in the cache.
+            if (editConflictDocument(error)) {
+              setHasConflict(true)
+            } else {
+              applyApiErrors(error, form)
+            }
+          },
         },
-        onError: (error) => applyApiErrors(error, form),
-      },
-    ),
-  )
+      ),
+    )
+  const save = (event?: BaseSyntheticEvent) => saveFrom()(event)
+
+  const reloadTheirs = () => {
+    setHasConflict(false)
+    startFrom(document)
+  }
 
   // ⌘S / Ctrl+S while typing saves, instead of the browser's "save page".
   const saveOnShortcut = (event: KeyboardEvent) => {
@@ -59,6 +95,15 @@ export function DocumentEditor({ document }: { document: Document }) {
     <Card>
       <CardContent>
         <form onSubmit={save} noValidate className="flex flex-col gap-4">
+          {hasConflict && (
+            <EditConflictAlert
+              savedAt={document.modified}
+              isSaving={update.isPending}
+              // Theirs is in the cache now: saving from it replaces it with this text.
+              onOverwrite={() => void saveFrom(document.revision)()}
+              onReload={reloadTheirs}
+            />
+          )}
           <FormAlert message={errors.root?.server?.message} />
           <TextField
             label="Title"

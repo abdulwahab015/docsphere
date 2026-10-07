@@ -8,6 +8,7 @@ import {
   DOCS_STRANGER,
   DOCS_WRITER,
   logIn,
+  logInElsewhere,
   logOut,
   openDocument,
   openProject,
@@ -206,4 +207,33 @@ test("deleting a project hides its documents until it's restored", async ({ page
   await page.getByRole('button', { name: `Restore ${deletedAlone}` }).click()
   await expect(page.getByText(`Restored "${deletedAlone}".`)).toBeVisible()
   await openDocument(page, deletedAlone)
+})
+
+test('two people editing at once: the later save is refused, then kept on request', async ({
+  page,
+  browser,
+}) => {
+  await logIn(page, DOCS_ADMIN)
+  await openDocument(page, 'Meeting notes')
+  // Typing first: from then on the editor sticks to the revision it opened.
+  await page.getByLabel('Content').fill("Admin's agenda.")
+
+  const writer = await logInElsewhere(browser, DOCS_WRITER)
+  await openDocument(writer, 'Meeting notes')
+  await writer.getByLabel('Content').fill("Writer's agenda.")
+  await writer.getByRole('button', { name: 'Save' }).click()
+  await expect(writer.getByText('Document saved.')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Save' }).click()
+  const conflict = page.getByRole('alert').filter({ hasText: 'Someone else saved this document' })
+  await expect(conflict).toBeVisible()
+  await expect(page.getByLabel('Content')).toHaveValue("Admin's agenda.")
+
+  await conflict.getByRole('button', { name: 'Overwrite with mine' }).click()
+  await expect(page.getByText('Document saved.')).toBeVisible()
+  await expect(conflict).toHaveCount(0)
+
+  await writer.reload()
+  await expect(writer.getByLabel('Content')).toHaveValue("Admin's agenda.")
+  await writer.context().close()
 })

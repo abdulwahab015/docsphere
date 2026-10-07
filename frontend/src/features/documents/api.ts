@@ -1,4 +1,7 @@
+import { isAxiosError } from 'axios'
+
 import { apiClient } from '@/api/client'
+import { HTTP_STATUS } from '@/api/constants'
 import type {
   Document,
   DocumentCreatePayload,
@@ -8,6 +11,12 @@ import type {
 } from '@/api/types'
 
 const DOCUMENTS_PATH = '/documents/'
+const EDIT_CONFLICT_CODE = 'edit_conflict'
+
+interface EditConflictBody {
+  code?: string
+  document?: Document
+}
 
 export interface DocumentListParams extends ListParams {
   /** Only documents filed under this project. */
@@ -38,6 +47,17 @@ export async function createDocument(payload: DocumentCreatePayload) {
 export async function updateDocument(documentId: number, payload: DocumentUpdatePayload) {
   const { data } = await apiClient.patch<Document>(documentPath(documentId), payload)
   return data
+}
+
+/** The document as it is now, when a save was refused because it was based
+ * on an older revision - someone else saved in between. Undefined for any
+ * other error. */
+export function editConflictDocument(error: unknown): Document | undefined {
+  if (!isAxiosError<EditConflictBody>(error) || error.response?.status !== HTTP_STATUS.conflict) {
+    return undefined
+  }
+  const body = error.response.data
+  return body.code === EDIT_CONFLICT_CODE ? body.document : undefined
 }
 
 /** A soft delete: the document moves to its owner's trash. */

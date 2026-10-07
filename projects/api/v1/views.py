@@ -27,6 +27,7 @@ from projects.api.v1.serializers import (
     SoleOwnershipSerializer,
 )
 from projects.choices import AccessLevel, AccessRequestStatus, Action
+from projects.exceptions import EditConflict
 from projects.managers import outside_trashed_projects
 from projects.models import (
     Document,
@@ -54,6 +55,9 @@ from projects.validators import ensure_not_last_owner
 from users.permissions import IsOrganizationAdmin
 
 User = get_user_model()
+
+# The fields whose change makes a new revision of a document.
+DOCUMENT_TEXT_FIELDS = ("title", "content")
 
 DOCUMENT_IN_TRASHED_PROJECT_MESSAGE = (
     "This document's project is in the trash. Ask an organization admin to "
@@ -265,6 +269,17 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
             _grant_creator_ownership(DocumentPermission, "document", document, user)
 
 
+_EDIT_CONFLICT = OpenApiResponse(
+    description="`base_revision` is older than the document's revision: nothing "
+    "was saved. The body has `detail`, `code` (`edit_conflict`) and the current "
+    "`document`."
+)
+
+
+@extend_schema_view(
+    put=extend_schema(responses={200: DocumentSerializer, 409: _EDIT_CONFLICT}),
+    patch=extend_schema(responses={200: DocumentSerializer, 409: _EDIT_CONFLICT}),
+)
 class DocumentRetrieveUpdateDestroyAPIView(
     SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView
 ):
@@ -290,7 +305,37 @@ class DocumentRetrieveUpdateDestroyAPIView(
                 raise PermissionDenied(
                     "You must have Owner access to this document to change its visibility."
                 )
-        serializer.save()
+
+        base_revision = serializer.validated_data.pop("base_revision", None)
+        changes_text = any(
+            field in serializer.validated_data
+            and serializer.validated_data[field] != getattr(serializer.instance, field)
+            for field in DOCUMENT_TEXT_FIELDS
+        )
+        if not base_revision and not changes_text:
+            serializer.save()
+            return
+
+        # Locked, so two saves based on the same revision can't both pass the
+        # check, and each text change gets a revision number of its own.
+        with transaction.atomic():
+            current = (
+                Document.objects.select_for_update(of=("self",))
+                .select_related("created_by")
+                .get(pk=serializer.instance.pk)
+            )
+            current.user_access_level = serializer.instance.user_access_level
+            if base_revision and base_revision != current.revision:
+                raise EditConflict(
+                    DocumentSerializer(
+                        current, context=self.get_serializer_context()
+                    ).data
+                )
+            serializer.instance = current
+            if changes_text:
+                serializer.save(revision=current.revision + 1)
+            else:
+                serializer.save()
 
 
 class DocumentRestoreAPIView(APIView):

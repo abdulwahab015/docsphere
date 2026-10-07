@@ -62,6 +62,7 @@ export function buildDocument(overrides: Partial<Document> = {}): Document {
     content: 'First draft.',
     visibility: 'PRIVATE',
     access_level: 'OWNER',
+    revision: 1,
     created_by: 1,
     created_by_email: 'ada@example.com',
     organization: 1,

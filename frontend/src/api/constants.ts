@@ -13,5 +13,6 @@ export const HTTP_STATUS = {
   paymentRequired: 402,
   forbidden: 403,
   notFound: 404,
+  conflict: 409,
   serverError: 500,
 } as const

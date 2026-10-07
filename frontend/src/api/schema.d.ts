@@ -1011,6 +1011,9 @@ export interface components {
             content?: string | null;
             visibility?: components["schemas"]["VisibilityEnum"];
             readonly access_level: (components["schemas"]["AccessLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly revision: number;
+            /** @description The revision the new title/content was based on. If the document has changed since, nothing is saved and the response is 409 with the current document. Leave it out to save regardless. */
+            base_revision?: number;
             readonly created_by: number;
             /** Format: email */
             readonly created_by_email: string;
@@ -1062,6 +1065,7 @@ export interface components {
             content?: string | null;
             visibility?: components["schemas"]["VisibilityEnum"];
             readonly access_level: (components["schemas"]["AccessLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly revision: number;
             readonly created_by: number;
             /** Format: email */
             readonly created_by_email: string;
@@ -1352,6 +1356,9 @@ export interface components {
             content?: string | null;
             visibility?: components["schemas"]["VisibilityEnum"];
             readonly access_level?: (components["schemas"]["AccessLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly revision?: number;
+            /** @description The revision the new title/content was based on. If the document has changed since, nothing is saved and the response is 409 with the current document. Leave it out to save regardless. */
+            base_revision?: number;
             readonly created_by?: number;
             /** Format: email */
             readonly created_by_email?: string;
@@ -1608,6 +1615,13 @@ export interface operations {
                     "application/json": components["schemas"]["Document"];
                 };
             };
+            /** @description `base_revision` is older than the document's revision: nothing was saved. The body has `detail`, `code` (`edit_conflict`) and the current `document`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     api_v1_documents_destroy: {
@@ -1654,6 +1668,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Document"];
                 };
+            };
+            /** @description `base_revision` is older than the document's revision: nothing was saved. The body has `detail`, `code` (`edit_conflict`) and the current `document`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

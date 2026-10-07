@@ -17,7 +17,7 @@ from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory
 from projects.api.v1 import views as project_views
-from projects.api.v1.serializers import ProjectSerializer
+from projects.api.v1.serializers import DocumentSerializer, ProjectSerializer
 from projects.api.v1.views import ProjectListCreateAPIView
 from projects.choices import AccessLevel, AccessRequestStatus, Action, Visibility
 from projects.factories import (
@@ -994,6 +994,7 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["revision"], 1)
         document = Document.objects.get(title="Spec")
         self.assertEqual(document.created_by, self.editor)
         self.assertEqual(document.project, self.project)
@@ -1361,7 +1362,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_can_update(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(6):
             response = self.client.patch(
                 self.url, {"title": "Doc1 Prime"}, format="json"
             )
@@ -1369,6 +1370,71 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.document.refresh_from_db()
         self.assertEqual(self.document.title, "Doc1 Prime")
+        # Saved without saying what it was based on: saved regardless.
+        self.assertEqual(self.document.revision, 2)
+        self.assertEqual(response.data["revision"], 2)
+
+    def test_a_save_based_on_the_latest_revision_makes_the_next_one(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(6):
+            response = self.client.patch(
+                self.url,
+                {"title": "Doc1", "content": "New text", "base_revision": 1},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revision"], 2)
+        self.assertNotIn("base_revision", response.data)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.content, "New text")
+
+    def test_a_save_based_on_an_older_revision_is_refused(self):
+        Document.objects.filter(pk=self.document.pk).update(
+            content="Someone else's text", revision=2
+        )
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(6):
+            response = self.client.patch(
+                self.url,
+                {"content": "My text", "base_revision": 1},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["code"], "edit_conflict")
+        self.assertEqual(response.data["document"]["content"], "Someone else's text")
+        self.assertEqual(response.data["document"]["revision"], 2)
+        self.assertEqual(response.data["document"]["access_level"], AccessLevel.EDITOR)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.content, "Someone else's text")
+
+    def test_changing_visibility_leaves_the_revision_alone(self):
+        # Otherwise an editor would be told someone else changed the text.
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.patch(
+                self.url, {"visibility": Visibility.PUBLIC}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revision"], 1)
+
+    def test_saving_the_same_text_again_leaves_the_revision_alone(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(6):
+            response = self.client.patch(
+                self.url,
+                {"title": "Doc1", "content": self.document.content, "base_revision": 1},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revision"], 1)
 
     def test_viewer_cannot_update(self):
         self.client.force_authenticate(self.viewer)
@@ -2871,3 +2937,59 @@ class ConcurrentLastOwnerTests(AssumeActiveSubscription, TransactionTestCase):
         self.assertEqual(
             document.permissions.filter(access_level=AccessLevel.OWNER).count(), 1
         )
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentDocumentSaveTests(AssumeActiveSubscription, TransactionTestCase):
+    """Two editors saving the same revision at the same moment. Real
+    concurrent requests, so only on a database with row locks (Postgres: CI
+    and `make test-pg`)."""
+
+    def test_only_the_first_of_two_saves_from_the_same_revision_is_kept(self):
+        document = DocumentFactory()
+        first, second = UserFactory.create_batch(2, organization=document.organization)
+        for user in (first, second):
+            DocumentPermissionFactory(
+                document=document, user=user, access_level=AccessLevel.EDITOR
+            )
+        url = reverse("document_detail", args=[document.pk])
+        both_checked = threading.Barrier(2)
+        save_document = DocumentSerializer.save
+        statuses = []
+
+        def save_once_the_other_has_checked(serializer, **kwargs):
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return save_document(serializer, **kwargs)
+
+        def save(editor, text):
+            client = APIClient()
+            client.force_authenticate(editor)
+            try:
+                response = client.patch(
+                    url, {"content": text, "base_revision": 1}, format="json"
+                )
+                statuses.append(response.status_code)
+            finally:
+                connection.close()
+
+        with patch.object(
+            DocumentSerializer,
+            "save",
+            autospec=True,
+            side_effect=save_once_the_other_has_checked,
+        ):
+            threads = [
+                threading.Thread(target=save, args=(first, "First's text")),
+                threading.Thread(target=save, args=(second, "Second's text")),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(
+            sorted(statuses), [status.HTTP_200_OK, status.HTTP_409_CONFLICT]
+        )
+        document.refresh_from_db()
+        self.assertEqual(document.revision, 2)
