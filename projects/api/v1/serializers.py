@@ -138,7 +138,7 @@ class ShareSerializer(serializers.Serializer):
     ``AccessLevel`` to give them. The target user must belong to the same
     organization as the resource being shared - checked against
     ``context["organization"]``, which the view supplies from the resource
-    it already resolved (and therefore already org-scoped)."""
+    it already resolved (and therefore already org-scoped) - and be active."""
 
     user = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
     access_level = serializers.ChoiceField(choices=AccessLevel.choices)
@@ -149,6 +149,10 @@ class ShareSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "This user does not belong to your organization."
             )
+        # Only reported for a member of the organization, so this never says
+        # anything about someone else's users.
+        if not value.is_active:
+            raise serializers.ValidationError("This user has been deactivated.")
         return value
 
 

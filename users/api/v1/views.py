@@ -48,6 +48,7 @@ from users.services import (
     blacklist_outstanding_tokens,
     bulk_create_invitations,
     find_invitation_conflict,
+    lock_organization_for_admin_change,
     parse_invitation_emails,
     refresh_invitation,
 )
@@ -296,7 +297,8 @@ class LogoutAPIView(APIView):
 
 
 class PasswordResetRequestAPIView(APIView):
-    """Sends a password-reset email if the address matches an existing user.
+    """Sends a password-reset email if the address matches an active user -
+    a deactivated one couldn't log in with a new password anyway.
 
     Always returns 200 regardless of whether the email matched, so the
     endpoint can't be used to enumerate registered accounts.
@@ -314,7 +316,9 @@ class PasswordResetRequestAPIView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        matching_users = User.objects.filter(email=serializer.validated_data["email"])
+        matching_users = User.objects.filter(
+            email=serializer.validated_data["email"], is_active=True
+        )
         if matching_users.exists():
             send_password_reset_email_task.delay(matching_users.get().pk)
 
@@ -375,8 +379,10 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
         if instance.pk == self.request.user.pk:
             raise ValidationError({"detail": "You cannot deactivate your own account."})
 
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        with transaction.atomic():
+            lock_organization_for_admin_change(self.request.user)
+            instance.is_active = False
+            instance.save(update_fields=["is_active"])
 
 
 class PasswordChangeAPIView(APIView):
@@ -415,7 +421,8 @@ class PasswordChangeAPIView(APIView):
 class OrganizationRoleUpdateAPIView(APIView):
     """Promotes a member to admin or demotes an admin to member, within the
     requesting admin's own organization. An admin may not change their own
-    role, which also guarantees the organization always keeps an admin."""
+    role, and changes are made one at a time by admins who still are one, so
+    the organization always keeps an admin."""
 
     permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
 
@@ -438,7 +445,9 @@ class OrganizationRoleUpdateAPIView(APIView):
         )
         serializer = OrganizationRoleSerializer(user, data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        with transaction.atomic():
+            lock_organization_for_admin_change(request.user)
+            serializer.save()
 
         return Response(UserDetailSerializer(user).data)
 

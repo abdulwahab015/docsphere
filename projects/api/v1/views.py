@@ -6,7 +6,7 @@ from drf_spectacular.utils import (
     extend_schema,
     extend_schema_view,
 )
-from rest_framework import generics, mixins
+from rest_framework import generics, mixins, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.generics import get_object_or_404
@@ -72,13 +72,25 @@ def _grant_creator_ownership(permission_model, resource_field, resource, user):
     resource.user_access_level = AccessLevel.OWNER
 
 
+def _lock_access(resource):
+    """Locks the resource's row until the transaction ends, so changes to who
+    may access it happen one at a time. Otherwise two Owners lowering or
+    removing each other at once would each still see the other as an Owner,
+    both pass the last-Owner check, and leave the resource with none."""
+    type(resource).objects.select_for_update().get(pk=resource.pk)
+
+
 def _grant_access(permission_model, resource_field, resource, user, access_level):
     """Gives ``user`` ``access_level`` on ``resource``, updating an existing
-    grant in place. Lowering the resource's last Owner is refused, the same
-    as revoking them."""
+    grant in place, and returns ``(permission, changed)`` - unchanged when
+    they already had that level. Lowering the resource's last Owner is
+    refused, the same as revoking them. Call inside a transaction, after
+    ``_lock_access``."""
     existing = permission_model.objects.filter(
         user=user, **{resource_field: resource}
     ).first()
+    if existing and existing.access_level == access_level:
+        return existing, False
     if existing and access_level != AccessLevel.OWNER:
         ensure_not_last_owner(
             existing, permission_model, resource_field, resource, verb="downgrade"
@@ -87,7 +99,19 @@ def _grant_access(permission_model, resource_field, resource, user, access_level
     permission, _ = permission_model.objects.update_or_create(
         user=user, defaults={"access_level": access_level}, **{resource_field: resource}
     )
-    return permission
+    return permission, True
+
+
+def _revoke_access(permission_model, resource_field, resource, user_id):
+    """Deletes ``user_id``'s grant on ``resource`` (a 404 if they have none),
+    unless it's the resource's last active Owner."""
+    with transaction.atomic():
+        _lock_access(resource)
+        permission = get_object_or_404(
+            permission_model, user_id=user_id, **{resource_field: resource}
+        )
+        ensure_not_last_owner(permission, permission_model, resource_field, resource)
+        permission.delete()
 
 
 def _filter_by_id_param(queryset, request, param, field):
@@ -342,36 +366,28 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
 
-        permission = _grant_access(
-            ProjectPermission, "project", project, **serializer.validated_data
-        )
-        send_project_shared_email_task.delay(permission.pk)
+        with transaction.atomic():
+            _lock_access(project)
+            permission, changed = _grant_access(
+                ProjectPermission, "project", project, **serializer.validated_data
+            )
+        if changed:
+            send_project_shared_email_task.delay(permission.pk)
 
         return Response(ProjectPermissionSerializer(permission).data)
 
 
-class ProjectShareRevokeAPIView(generics.DestroyAPIView):
+class ProjectShareRevokeAPIView(APIView):
     """Revokes a ``ProjectPermission`` outright (row deletion, not a
     soft-delete). Owner-level access required; refuses to remove the
     project's last remaining Owner."""
 
     @extend_schema(request=None, responses={204: None})
-    def delete(self, request, *args, **kwargs):
-        return self.destroy(request, *args, **kwargs)
-
-    def get_object(self):
-        project = get_object_or_404(
-            Project.objects.visible_to(self.request.user),
-            pk=self.kwargs["pk"],
-        )
-        check_can_share(self.request.user, project, "project", resolve_project_access)
-
-        permission = get_object_or_404(
-            ProjectPermission, project=project, user_id=self.kwargs["user_id"]
-        )
-        ensure_not_last_owner(permission, ProjectPermission, "project", project)
-
-        return permission
+    def delete(self, request, pk, user_id):
+        project = get_object_or_404(Project.objects.visible_to(request.user), pk=pk)
+        check_can_share(request.user, project, "project", resolve_project_access)
+        _revoke_access(ProjectPermission, "project", project, user_id)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
@@ -415,37 +431,29 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
 
-        permission = _grant_access(
-            DocumentPermission, "document", document, **serializer.validated_data
-        )
-        send_document_shared_email_task.delay(permission.pk)
+        with transaction.atomic():
+            _lock_access(document)
+            permission, changed = _grant_access(
+                DocumentPermission, "document", document, **serializer.validated_data
+            )
+        if changed:
+            send_document_shared_email_task.delay(permission.pk)
 
         return Response(DocumentPermissionSerializer(permission).data)
 
 
-class DocumentShareRevokeAPIView(generics.DestroyAPIView):
+class DocumentShareRevokeAPIView(APIView):
     """Revokes a ``DocumentPermission`` outright (row deletion, not a
     soft-delete); access then falls back to implicit Viewer if the document is
     public, or to nothing. Owner-level access required; refuses to remove the
     document's last Owner."""
 
     @extend_schema(request=None, responses={204: None})
-    def delete(self, request, *args, **kwargs):
-        return self.destroy(request, *args, **kwargs)
-
-    def get_object(self):
-        document = get_object_or_404(
-            Document.objects.visible_to(self.request.user),
-            pk=self.kwargs["pk"],
-        )
-        check_can_share(self.request.user, document, "document", resolve_access)
-
-        permission = get_object_or_404(
-            DocumentPermission, document=document, user_id=self.kwargs["user_id"]
-        )
-        ensure_not_last_owner(permission, DocumentPermission, "document", document)
-
-        return permission
+    def delete(self, request, pk, user_id):
+        document = get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
+        check_can_share(request.user, document, "document", resolve_access)
+        _revoke_access(DocumentPermission, "document", document, user_id)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):

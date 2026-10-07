@@ -1,13 +1,22 @@
+import contextlib
+import threading
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.db import connection
+from django.test import (
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+    skipUnlessDBFeature,
+)
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
-from rest_framework.test import APIRequestFactory, APITestCase
+from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 
 from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory
+from projects.api.v1 import views as project_views
 from projects.api.v1.serializers import ProjectSerializer
 from projects.api.v1.views import ProjectListCreateAPIView
 from projects.choices import AccessLevel, AccessRequestStatus, Action, Visibility
@@ -1577,7 +1586,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(12):
+        with self.assertNumQueries(15):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
@@ -1598,7 +1607,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(11):
+        with self.assertNumQueries(14):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.OWNER},
@@ -1622,7 +1631,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(12):
+        with self.assertNumQueries(15):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.EDITOR},
@@ -1637,7 +1646,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_cannot_downgrade_the_projects_last_owner(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 self.url,
                 {"user": self.owner.pk, "access_level": AccessLevel.EDITOR},
@@ -1661,7 +1670,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 self.url,
                 {"user": self.owner.pk, "access_level": AccessLevel.EDITOR},
@@ -1686,6 +1695,43 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(
             emails, {self.owner.email, self.editor.email, self.viewer.email}
         )
+
+    @patch("core.email.send_mail")
+    def test_sharing_again_at_the_same_level_sends_no_email(self, mock_send_mail):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(9):
+            response = self.client.post(
+                self.url,
+                {"user": self.viewer.pk, "access_level": AccessLevel.VIEWER},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["access_level"], AccessLevel.VIEWER)
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_cannot_share_with_a_deactivated_member(self, mock_send_mail):
+        self.target.is_active = False
+        self.target.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.post(
+                self.url,
+                {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["user"], ["This user has been deactivated."])
+        self.assertFalse(
+            ProjectPermission.objects.filter(
+                project=self.project, user=self.target
+            ).exists()
+        )
+        mock_send_mail.assert_not_called()
 
     def test_editor_cannot_share(self):
         self.client.force_authenticate(self.editor)
@@ -1780,7 +1826,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_revoke(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -1789,7 +1835,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_cannot_revoke_the_projects_last_owner(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, self.owner.pk])
             )
@@ -1806,7 +1852,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, co_owner.pk])
             )
@@ -1821,7 +1867,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, self.owner.pk])
             )
@@ -1838,7 +1884,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, co_owner.pk])
             )
@@ -1859,7 +1905,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         stranger = UserFactory(organization=self.org)
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(7):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, stranger.pk])
             )
@@ -1902,7 +1948,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(12):
+        with self.assertNumQueries(15):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -1926,7 +1972,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(11):
+        with self.assertNumQueries(14):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.OWNER},
@@ -1950,7 +1996,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(12):
+        with self.assertNumQueries(15):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -1963,7 +2009,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_cannot_downgrade_the_documents_last_owner(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 self.url,
                 {"user": self.owner.pk, "access_level": AccessLevel.VIEWER},
@@ -1994,6 +2040,20 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(
             emails, {self.owner.email, self.editor.email, self.target.email}
         )
+
+    @patch("core.email.send_mail")
+    def test_sharing_again_at_the_same_level_sends_no_email(self, mock_send_mail):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(9):
+            response = self.client.post(
+                self.url,
+                {"user": self.editor.pk, "access_level": AccessLevel.EDITOR},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_send_mail.assert_not_called()
 
     def test_editor_cannot_share(self):
         self.client.force_authenticate(self.editor)
@@ -2087,7 +2147,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_revoke_and_access_is_removed_entirely(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -2098,7 +2158,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         self.document.save(update_fields=["visibility"])
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -2107,7 +2167,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_cannot_revoke_the_documents_last_owner(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("document_share_revoke", args=[self.document.pk, self.owner.pk])
             )
@@ -2122,7 +2182,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("document_share_revoke", args=[self.document.pk, self.owner.pk])
             )
@@ -2137,7 +2197,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.delete(
                 reverse("document_share_revoke", args=[self.document.pk, co_owner.pk])
             )
@@ -2158,7 +2218,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         stranger = UserFactory(organization=self.org)
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(7):
             response = self.client.delete(
                 reverse("document_share_revoke", args=[self.document.pk, stranger.pk])
             )
@@ -2604,6 +2664,26 @@ class DocumentTasksTests(TestCase):
         )
 
     @patch("core.email.send_mail")
+    def test_created_task_leaves_out_deactivated_owners(self, mock_send_mail):
+        document = DocumentFactory(title="Doc1")
+        owner = UserFactory(organization=document.organization)
+        deactivated_owner = UserFactory(
+            organization=document.organization, is_active=False
+        )
+        for user in (owner, deactivated_owner):
+            DocumentPermissionFactory(
+                document=document, user=user, access_level=AccessLevel.OWNER
+            )
+        access_request = DocumentAccessRequestFactory(document=document)
+
+        with self.assertNumQueries(2):
+            send_access_request_created_email_task(access_request.pk)
+
+        self.assertEqual(
+            mock_send_mail.call_args.kwargs["recipient_list"], [owner.email]
+        )
+
+    @patch("core.email.send_mail")
     def test_created_task_is_a_noop_when_the_document_has_no_owner(
         self, mock_send_mail
     ):
@@ -2685,3 +2765,109 @@ class SoleOwnershipAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.get(reverse("sole_ownership", args=[outsider.pk]))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# How long a request waits for the other one at the point where, without the
+# lock, both would have passed their last-Owner check. With the lock the other
+# request is still waiting for it, so this times out and the first carries on.
+RACE_WAIT_SECONDS = 2
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentLastOwnerTests(AssumeActiveSubscription, TransactionTestCase):
+    """Two Owners giving up each other's Owner access at the same moment.
+    Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    def _at_the_same_time(self, *requests):
+        """Runs each ``(user, method, url, data)`` request in its own thread
+        and connection, all past the last-Owner check before any writes, as
+        far as the locking allows. Returns the status codes, sorted."""
+        both_checked = threading.Barrier(len(requests))
+        check = project_views.ensure_not_last_owner
+        statuses = []
+
+        def check_then_wait_for_the_others(*args, **kwargs):
+            check(*args, **kwargs)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+
+        def send(user, method, url, data):
+            client = APIClient()
+            client.force_authenticate(user)
+            try:
+                response = getattr(client, method)(url, data, format="json")
+                statuses.append(response.status_code)
+            finally:
+                connection.close()
+
+        with patch.object(
+            project_views,
+            "ensure_not_last_owner",
+            side_effect=check_then_wait_for_the_others,
+        ):
+            threads = [threading.Thread(target=send, args=args) for args in requests]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        return sorted(statuses)
+
+    def test_two_owners_removing_each_other_leave_one_owner(self):
+        project = ProjectFactory()
+        first, second = UserFactory.create_batch(2, organization=project.organization)
+        for user in (first, second):
+            ProjectPermissionFactory(
+                project=project, user=user, access_level=AccessLevel.OWNER
+            )
+
+        statuses = self._at_the_same_time(
+            (
+                first,
+                "delete",
+                reverse("project_share_revoke", args=[project.pk, second.pk]),
+                None,
+            ),
+            (
+                second,
+                "delete",
+                reverse("project_share_revoke", args=[project.pk, first.pk]),
+                None,
+            ),
+        )
+
+        self.assertEqual(
+            statuses, [status.HTTP_204_NO_CONTENT, status.HTTP_400_BAD_REQUEST]
+        )
+        self.assertEqual(
+            project.permissions.filter(access_level=AccessLevel.OWNER).count(), 1
+        )
+
+    def test_two_owners_lowering_each_other_leave_one_owner(self):
+        document = DocumentFactory()
+        first, second = UserFactory.create_batch(2, organization=document.organization)
+        for user in (first, second):
+            DocumentPermissionFactory(
+                document=document, user=user, access_level=AccessLevel.OWNER
+            )
+        url = reverse("document_share", args=[document.pk])
+
+        statuses = self._at_the_same_time(
+            (
+                first,
+                "post",
+                url,
+                {"user": second.pk, "access_level": AccessLevel.EDITOR},
+            ),
+            (
+                second,
+                "post",
+                url,
+                {"user": first.pk, "access_level": AccessLevel.EDITOR},
+            ),
+        )
+
+        self.assertEqual(statuses, [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST])
+        self.assertEqual(
+            document.permissions.filter(access_level=AccessLevel.OWNER).count(), 1
+        )

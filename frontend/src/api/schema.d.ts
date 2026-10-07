@@ -662,7 +662,8 @@ export interface paths {
         /**
          * @description Promotes a member to admin or demotes an admin to member, within the
          *     requesting admin's own organization. An admin may not change their own
-         *     role, which also guarantees the organization always keeps an admin.
+         *     role, and changes are made one at a time by admins who still are one, so
+         *     the organization always keeps an admin.
          */
         patch: operations["api_v1_users_role_partial_update"];
         trace?: never;
@@ -718,7 +719,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * @description Sends a password-reset email if the address matches an existing user.
+         * @description Sends a password-reset email if the address matches an active user -
+         *     a deactivated one couldn't log in with a new password anyway.
          *
          *     Always returns 200 regardless of whether the email matched, so the
          *     endpoint can't be used to enumerate registered accounts.
@@ -1447,7 +1449,7 @@ export interface components {
          *     ``AccessLevel`` to give them. The target user must belong to the same
          *     organization as the resource being shared - checked against
          *     ``context["organization"]``, which the view supplies from the resource
-         *     it already resolved (and therefore already org-scoped).
+         *     it already resolved (and therefore already org-scoped) - and be active.
          */
         Share: {
             user: number;

@@ -57,7 +57,9 @@ def send_access_request_created_email_task(access_request_id):
     ).get(pk=access_request_id)
     owner_emails = list(
         DocumentPermission.objects.filter(
-            document=access_request.document, access_level=AccessLevel.OWNER
+            document=access_request.document,
+            access_level=AccessLevel.OWNER,
+            user__is_active=True,
         ).values_list("user__email", flat=True)
     )
     if not owner_emails:
