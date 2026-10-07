@@ -11,7 +11,7 @@ E2E_DATABASE := frontend/node_modules/.tmp/e2e.sqlite3
 # Where the end-to-end API writes the emails it sends; e2e/fixtures.ts reads them.
 E2E_MAILBOX := frontend/node_modules/.tmp/e2e-mail
 
-.PHONY: help install compile migrate makemigrations run shell worker beat flower stripe-listen test test-cov lint format check \
+.PHONY: help install compile migrate makemigrations run shell worker beat flower stripe-listen test test-cov test-pg lint format check \
         up down build logs docker-migrate docker-shell docker-smoke clean \
         fe-install fe-dev fe-build fe-test fe-test-cov fe-lint fe-format fe-check fe-api-types \
         fe-api-types-check fe-e2e e2e-api
@@ -56,6 +56,9 @@ test: ## Run the test suite (local)
 test-cov: ## Run the test suite under coverage and print a report
 	DJANGO_SETTINGS_MODULE=core.settings.test coverage run manage.py test
 	coverage report
+
+test-pg: ## Run the test suite on a throwaway Postgres 16, like CI (needs Docker)
+	./scripts/test-postgres.sh
 
 lint: ## Run ruff
 	ruff check .

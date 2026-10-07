@@ -1,13 +1,15 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { render } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, type RouteObject, RouterProvider } from 'react-router'
 
-import { setAccessToken } from '@/api/access-token'
+import { clearAccessToken, setAccessToken } from '@/api/access-token'
 import type { CurrentUser } from '@/api/types'
+import { PATHS } from '@/app/paths'
 import { createQueryClient } from '@/app/query-client'
 import { routes } from '@/app/routes'
 import { authKeys } from '@/features/auth/query-keys'
+import { buildCurrentUser } from '@/test/factories'
 
 export const SIGNED_IN_ACCESS_TOKEN = 'signed-in-access-token'
 
@@ -65,3 +67,21 @@ export function renderRoute(
   )
   return { router, queryClient, user: userEvent.setup() }
 }
+
+/**
+ * Renders the signed-in app once before a file's tests, and throws it away.
+ * Each test file runs in a fresh worker, so its first render is several times
+ * slower than the rest (measured: ~2.2s against ~0.5s under the full suite's
+ * load) while React, the router and the shell are first compiled and run. Paid
+ * inside a test, that comes out of the test's own wait for the page, which
+ * then times out whenever the machine is busy. The account page needs no
+ * requests, so this runs before any test sets up a server response.
+ */
+async function warmUp() {
+  renderRoute(PATHS.account, { signedInAs: buildCurrentUser() })
+  await screen.findByRole('heading', { name: 'Account', level: 1 })
+  cleanup()
+  clearAccessToken()
+}
+
+beforeAll(warmUp)

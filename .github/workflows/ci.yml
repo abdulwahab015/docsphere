@@ -29,6 +29,23 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # Production's database, so behaviour SQLite doesn't share (JSON lookups,
+    # row locks, ordering) is what gets tested.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: docsphere
+          POSTGRES_PASSWORD: docsphere
+          POSTGRES_DB: docsphere
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username docsphere"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -64,11 +81,20 @@ jobs:
       - name: ruff
         run: ruff check .
 
-      - name: Test suite
-        run: coverage run manage.py test
+      # In a random order each run, to catch tests that depend on another
+      # having run first; the log prints the seed, and `manage.py test
+      # --shuffle <seed>` repeats that order.
+      - name: Test suite on Postgres
+        run: coverage run manage.py test --shuffle
+        env:
+          DATABASE_URL: postgres://docsphere:docsphere@localhost:5432/docsphere
 
       - name: Coverage report (fails under threshold)
         run: coverage report
+
+      # What `make test` and the end-to-end API run on.
+      - name: Test suite on SQLite
+        run: python manage.py test
 
   frontend:
     runs-on: ubuntu-latest
