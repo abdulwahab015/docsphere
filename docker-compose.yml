@@ -1,3 +1,27 @@
+# What every Django process (the web server, the Celery services and the
+# migrations) shares.
+x-django: &django
+  build: .
+  env_file:
+    - .env
+  environment: &django-environment
+    DJANGO_SETTINGS_MODULE: core.settings.production
+    DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
+    CELERY_TASK_ALWAYS_EAGER: "False"
+  restart: unless-stopped
+
+# Django processes start once the database and the broker answer and the
+# migrations have run, so none of them ever sees an old schema.
+x-after-migrations: &after-migrations
+  db:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
 services:
   db:
     image: postgres:16-alpine
@@ -9,30 +33,67 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Over TCP: while a new database is initialised, a temporary server
+    # answers on the Unix socket only, then restarts.
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready --host 127.0.0.1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD}
+    environment:
+      # Read by redis-cli, so the password isn't on its command line.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
+  # Applies the migrations, then exits; the Django services wait for it.
+  migrate:
+    <<: *django
+    command: python manage.py migrate --noinput
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   web:
-    build: .
-    env_file:
-      - .env
+    <<: *django
     environment:
-      DJANGO_SETTINGS_MODULE: core.settings.production
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_TASK_ALWAYS_EAGER: "False"
+      <<: *django-environment
+      GUNICORN_CMD_ARGS: --workers ${GUNICORN_WORKERS:-3} --timeout ${GUNICORN_TIMEOUT_SECONDS:-30}
     # Not published: the `frontend` service is the way in.
     expose:
       - "8000"
-    depends_on:
-      - db
-      - redis
-    restart: unless-stopped
+    # As the load balancer would ask: for one of ALLOWED_HOSTS, over HTTPS
+    # (anything else is refused or redirected).
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os, urllib.request
+          host = os.environ["ALLOWED_HOSTS"].split(",")[0].strip().lstrip(".*") or "localhost"
+          urllib.request.urlopen(
+              urllib.request.Request(
+                  "http://127.0.0.1:8000/healthz/",
+                  headers={"Host": host, "X-Forwarded-Proto": "https"},
+              ),
+              timeout=5,
+          )
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    depends_on: *after-migrations
 
   # The public entry point: serves the app and forwards Django's paths to
   # `web`, so the browser sees one origin. Put the TLS-terminating load
@@ -43,66 +104,70 @@ services:
       DJANGO_ADMIN_PATH: ${DJANGO_ADMIN_PATH:-admin/}
     ports:
       - "${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     depends_on:
-      - web
+      web:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
-    build: .
+    <<: *django
     command: celery -A core worker -l info
-    env_file:
-      - .env
-    environment:
-      DJANGO_SETTINGS_MODULE: core.settings.production
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_TASK_ALWAYS_EAGER: "False"
-    depends_on:
-      - db
-      - redis
-    restart: unless-stopped
+    depends_on: *after-migrations
 
   # Sends the periodic tasks in CELERY_BEAT_SCHEDULE (the daily renewal
   # reminders) to the worker. Exactly one may run: a second copy would send
   # every scheduled task twice. It records when each task last ran in a file
   # on a volume, so a run missed while it was down happens once it restarts.
   beat:
-    build: .
+    <<: *django
     command: celery -A core beat -l info --schedule /home/app/beat/celerybeat-schedule
-    env_file:
-      - .env
-    environment:
-      DJANGO_SETTINGS_MODULE: core.settings.production
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_TASK_ALWAYS_EAGER: "False"
     volumes:
       - beat_schedule:/home/app/beat
     deploy:
       replicas: 1
-    depends_on:
-      - db
-      - redis
-    restart: unless-stopped
+    depends_on: *after-migrations
 
   flower:
-    build: .
+    <<: *django
     command: celery -A core flower --conf=core/settings/flowerconfig.py
-    env_file:
-      - .env
-    environment:
-      DJANGO_SETTINGS_MODULE: core.settings.production
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_TASK_ALWAYS_EAGER: "False"
     depends_on:
-      - redis
-      - worker
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
+  # Dumps the database when it starts and then every BACKUP_INTERVAL_SECONDS
+  # (daily by default) into the db_backups volume, deleting dumps older than
+  # BACKUP_RETENTION_DAYS days. `make db-backup` and `make db-restore` run
+  # their scripts in here too. Copy dumps off the server with
+  # `docker compose cp backup:/backups ./backups`.
+  backup:
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - while true; do sh /usr/local/bin/db-backup || echo "Backup failed"; sleep "$$BACKUP_INTERVAL_SECONDS"; done
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - db_backups:/backups
+      - ./scripts/db-backup.sh:/usr/local/bin/db-backup:ro
+      - ./scripts/db-restore.sh:/usr/local/bin/db-restore:ro
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   postgres_data:
   beat_schedule:
+  db_backups:

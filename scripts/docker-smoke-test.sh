@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Builds and starts the production stack (docker-compose.yml), then checks it
-# from outside, the way the load balancer and a browser reach it: the app's
-# files and routes, Django behind the same origin, and the refresh cookie's
-# production flags. Needs a .env (a copy of .env.example will do). Stops the
-# stack and deletes its data afterwards, unless KEEP_STACK=1.
+# from outside, the way the load balancer and a browser reach it: every
+# service healthy with no manual step, the app's files and routes, Django
+# behind the same origin, the refresh cookie's production flags, scheduled
+# tasks reaching the worker, and a backup -> change -> restore round trip.
+# Needs a .env (a copy of .env.example will do). Stops the stack and deletes
+# its data afterwards, unless KEEP_STACK=1.
 set -euo pipefail
 
 BASE_URL="http://localhost:${APP_PORT:-8080}"
@@ -60,15 +62,48 @@ log_line() {
   done
 }
 
-echo "Building and starting the stack..."
+# Waits until Django answers through nginx.
+wait_for_api() {
+  for _ in $(seq "$WAIT_SECONDS"); do
+    [ "$(status "${VIA_HTTPS[@]}" "$BASE_URL/healthz/" || true)" = "200" ] && return
+    sleep 1
+  done
+}
+
+# How many organizations the database holds.
+organization_count() {
+  "${COMPOSE[@]}" exec -T db sh -c \
+    'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT count(*) FROM organizations_organization"'
+}
+
+# Signs up a new organization through nginx; prints the response's status
+# line and headers.
+sign_up() {
+  local who="$1-$(date +%s)"
+  raw_headers "${VIA_HTTPS[@]}" -X POST "$BASE_URL/api/v1/organizations/signup/" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"Smoke $who\", \"admin_email\": \"$who@example.com\", \"admin_password\": \"Smoke-Test-Pass-1!\"}"
+}
+
+echo "Building and starting the stack (it migrates itself)..."
 "${COMPOSE[@]}" up --detach --build
-"${COMPOSE[@]}" run --rm web python manage.py migrate --noinput >/dev/null
 
 echo "Waiting for the API through nginx..."
+wait_for_api
+
+echo
+echo "The stack"
+# A service reads "starting" until its first health check has passed.
 for _ in $(seq "$WAIT_SECONDS"); do
-  [ "$(status "${VIA_HTTPS[@]}" "$BASE_URL/healthz/" || true)" = "200" ] && break
+  health=$("${COMPOSE[@]}" ps --format '{{.Service}}={{.Health}}')
+  [ "$(grep -c '=healthy$' <<<"$health")" -ge 4 ] && break
   sleep 1
 done
+for service in db redis web frontend; do
+  check "$service is healthy" "$service=healthy" "$(grep "^$service=" <<<"$health" || true)"
+done
+check "the migrations ran, then the service exited cleanly" "migrate=exited (0)" \
+  "$("${COMPOSE[@]}" ps --all --format '{{.Service}}={{.State}} ({{.ExitCode}})' | grep '^migrate=' || true)"
 
 echo
 echo "The app"
@@ -95,9 +130,7 @@ check "serves the admin's static files" "200" \
 
 echo
 echo "Signing up through the API"
-signup=$(raw_headers "${VIA_HTTPS[@]}" -X POST "$BASE_URL/api/v1/organizations/signup/" \
-  -H "Content-Type: application/json" \
-  -d "{\"name\": \"Smoke $(date +%s)\", \"admin_email\": \"smoke-$(date +%s)@example.com\", \"admin_password\": \"Smoke-Test-Pass-1!\"}")
+signup=$(sign_up smoke)
 check "creates the organization" "201" "$(head -1 <<<"$signup")"
 cookie=$(grep -i '^set-cookie: refresh_token=' <<<"$signup" || true)
 flags=$(tr '[:upper:]' '[:lower:]' <<<"$cookie")
@@ -125,9 +158,27 @@ check "the worker runs the renewal reminders" "succeeded" \
   "$(log_line worker "$reminder_task[$task_id] succeeded")"
 
 echo
+echo "Backups"
+check "the backup service made one when it started" "docsphere-" \
+  "$(log_line backup "docsphere-")"
+before=$(organization_count)
+backup=$("${COMPOSE[@]}" exec -T backup sh /usr/local/bin/db-backup | tail -1 | tr -d '\r')
+check "takes one on request" ".dump" "$backup"
+sign_up after-backup >/dev/null
+check "...after which a new organization is there" "$((before + 1))" "$(organization_count)"
+"${COMPOSE[@]}" stop web worker beat flower >/dev/null 2>&1
+"${COMPOSE[@]}" exec -T backup sh /usr/local/bin/db-restore "$backup" >/dev/null
+"${COMPOSE[@]}" start web worker beat flower >/dev/null 2>&1
+check "restoring it brings back the database as it was" "$before" "$(organization_count)"
+wait_for_api
+# The restarted web container has a new address, which nginx must follow.
+check "...and the app answers again through nginx" "200" \
+  "$(status "${VIA_HTTPS[@]}" "$BASE_URL/healthz/")"
+
+echo
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed. Logs:"
-  "${COMPOSE[@]}" logs --tail 50 web frontend worker beat
+  "${COMPOSE[@]}" logs --tail 50 migrate web frontend worker beat backup
   exit 1
 fi
 echo "All checks passed."
