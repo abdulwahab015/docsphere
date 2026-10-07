@@ -138,7 +138,7 @@ class RequestLoggingMiddlewareTests(APITestCase):
 
         with (
             self.assertLogs("core.request", level="INFO") as captured,
-            self.assertNumQueries(2),
+            self.assertNumQueries(3),
         ):
             response = self.client.post(
                 reverse("auth_login"),

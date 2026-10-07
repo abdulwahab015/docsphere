@@ -1,3 +1,5 @@
+import contextlib
+import threading
 from datetime import timedelta
 from io import BytesIO
 from unittest.mock import patch
@@ -8,24 +10,33 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.db import connection
+from django.test import (
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+    skipUnlessDBFeature,
+)
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from openpyxl import Workbook
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
-from users.choices import InvitationStatus
+from users.api.v1 import views as user_views
+from users.choices import InvitationStatus, OrganizationRole
 from users.constants import MAX_BULK_INVITE_ROWS
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
+from users.services import NO_LONGER_ADMIN_MESSAGE
 
 User = get_user_model()
 
@@ -54,7 +65,7 @@ class JWTAuthTests(APITestCase):
         )
 
     def test_login_succeeds_with_correct_credentials(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -70,7 +81,7 @@ class JWTAuthTests(APITestCase):
         )
         self.assertEqual(user.email, "mixed.case@example.com")
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("auth_login"),
                 {"email": "MIXED.CASE@EXAMPLE.COM", "password": self.password},
@@ -114,7 +125,7 @@ class JWTAuthTests(APITestCase):
             self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
     def test_refresh_returns_new_access_token(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             login_response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -130,7 +141,7 @@ class JWTAuthTests(APITestCase):
         self.assertIn("access", response.data)
 
     def test_logout_blacklists_refresh_token(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             login_response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -175,7 +186,7 @@ class RefreshCookieTests(APITestCase):
         self.cookie_name = settings.REFRESH_COOKIE_NAME
 
     def test_login_sets_an_httponly_refresh_cookie_scoped_to_auth(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -249,6 +260,20 @@ class PasswordResetTests(APITestCase):
         mock_send_mail.assert_called_once()
 
     @patch("core.email.send_mail")
+    def test_a_deactivated_user_is_sent_no_reset_link(self, mock_send_mail):
+        # They couldn't log in with a new password anyway.
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset"), {"email": self.user.email}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
     def test_password_reset_request_with_unknown_email_still_returns_200(
         self, mock_send_mail
     ):
@@ -294,13 +319,15 @@ class PasswordResetTests(APITestCase):
         self.assertTrue(self.user.check_password(new_password))
 
     def test_password_reset_confirm_revokes_existing_refresh_tokens(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             login = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": "Old-Pass-123!"},
             )
         old_refresh = login.data["refresh"]
 
+        # The login recorded last_login, which reset tokens include.
+        self.user.refresh_from_db()
         uid = urlsafe_base64_encode(force_bytes(self.user.pk))
         token = default_token_generator.make_token(self.user)
         with self.assertNumQueries(9):
@@ -312,6 +339,25 @@ class PasswordResetTests(APITestCase):
         with self.assertNumQueries(1):
             reuse = self.client.post(reverse("auth_refresh"), {"refresh": old_refresh})
         self.assertEqual(reuse.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_a_reset_link_sent_before_a_login_no_longer_works(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        self.client.post(
+            reverse("auth_login"),
+            {"email": self.user.email, "password": "Old-Pass-123!"},
+        )
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset_confirm"),
+                {"uid": uid, "token": token, "new_password": "New-Strong-Pass!456"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.last_login)
+        self.assertTrue(self.user.check_password("Old-Pass-123!"))
 
     def test_password_reset_confirm_fails_with_invalid_token(self):
         uid = urlsafe_base64_encode(force_bytes(self.user.pk))
@@ -1149,12 +1195,23 @@ class DeactivateUserTests(AssumeActiveSubscription, APITestCase):
     def test_admin_deactivates_a_user_in_their_own_organization(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(6):
             response = self.client.delete(self._url(self.member))
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.member.refresh_from_db()
         self.assertFalse(self.member.is_active)
+
+    def test_an_admin_demoted_meanwhile_can_no_longer_deactivate_anyone(self):
+        User.objects.filter(pk=self.admin.pk).update(org_role=OrganizationRole.MEMBER)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(6):
+            response = self.client.delete(self._url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_active)
 
     def test_admin_cannot_deactivate_a_user_in_another_organization(self):
         self.client.force_authenticate(self.admin)
@@ -1214,10 +1271,26 @@ class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
     def _url(self, user):
         return reverse("user_role_update", args=[user.pk])
 
+    def test_an_admin_demoted_meanwhile_can_no_longer_change_roles(self):
+        # The request was authenticated as an admin, but by the time it holds
+        # the organization's lock, another admin has made them a member.
+        User.objects.filter(pk=self.admin.pk).update(org_role=OrganizationRole.MEMBER)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(6):
+            response = self.client.patch(
+                self._url(self.member), {"org_role": OrganizationRole.ADMIN}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["detail"], NO_LONGER_ADMIN_MESSAGE)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.org_role, OrganizationRole.MEMBER)
+
     def test_admin_promotes_a_member_to_admin(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(6):
             response = self.client.patch(
                 self._url(self.member), {"org_role": "ADMIN"}, format="json"
             )
@@ -1231,7 +1304,7 @@ class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
         other_admin = AdminUserFactory(organization=self.org)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(6):
             response = self.client.patch(
                 self._url(other_admin), {"org_role": "MEMBER"}, format="json"
             )
@@ -1691,3 +1764,66 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Invitation.objects.exists())
+
+
+# How long a request waits for the other one at the point where, without the
+# lock, both would have passed their check. With the lock the other request is
+# still waiting for it, so this times out and the first carries on alone.
+RACE_WAIT_SECONDS = 2
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentAdminChangeTests(AssumeActiveSubscription, TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    def test_two_admins_demoting_each_other_at_once_leave_one_admin(self):
+        organization = OrganizationFactory()
+        first, second = AdminUserFactory.create_batch(2, organization=organization)
+        both_checked = threading.Barrier(2)
+        save_role = user_views.OrganizationRoleSerializer.save
+        responses = []
+
+        def save_after_the_other_checked(serializer, **kwargs):
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return save_role(serializer, **kwargs)
+
+        def demote(admin, other_admin):
+            client = APIClient()
+            client.force_authenticate(admin)
+            try:
+                responses.append(
+                    client.patch(
+                        reverse("user_role_update", args=[other_admin.pk]),
+                        {"org_role": OrganizationRole.MEMBER},
+                    )
+                )
+            finally:
+                connection.close()
+
+        with patch.object(
+            user_views.OrganizationRoleSerializer,
+            "save",
+            autospec=True,
+            side_effect=save_after_the_other_checked,
+        ):
+            requests = [
+                threading.Thread(target=demote, args=(first, second)),
+                threading.Thread(target=demote, args=(second, first)),
+            ]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_200_OK, status.HTTP_403_FORBIDDEN],
+        )
+        self.assertEqual(
+            User.objects.filter(
+                organization=organization, org_role=OrganizationRole.ADMIN
+            ).count(),
+            1,
+        )

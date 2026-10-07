@@ -211,6 +211,9 @@ SIMPLE_JWT = {
     ),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
+    # Records each login on the user; a password-reset link issued before it
+    # stops working, as Django's reset tokens include last_login.
+    "UPDATE_LAST_LOGIN": True,
 }
 
 # The refresh token also travels as an HttpOnly cookie, sent back only to the

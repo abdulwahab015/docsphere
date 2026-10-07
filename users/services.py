@@ -7,11 +7,13 @@ from django.core.validators import validate_email
 from django.utils import timezone
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.token_blacklist.models import (
     BlacklistedToken,
     OutstandingToken,
 )
 
+from users.choices import OrganizationRole
 from users.constants import (
     INVITATION_TOKEN_BYTES,
     MAX_BULK_INVITE_ROWS,
@@ -23,6 +25,7 @@ from users.tasks import send_invitation_email_task
 User = get_user_model()
 
 USER_EXISTS_MESSAGE = "A user with this email already exists."
+NO_LONGER_ADMIN_MESSAGE = "You're no longer an admin of this organization."
 INVITATION_PENDING_MESSAGE = "This email already has a pending invitation."
 
 
@@ -176,3 +179,17 @@ def bulk_create_invitations(emails, *, organization, invited_by):
         created_invitations.append(invitation)
 
     return {"created": created_invitations, "skipped": skipped_rows}
+
+
+def lock_organization_for_admin_change(admin):
+    """Locks the admin's organization until the transaction ends, so role
+    changes and deactivations in it happen one at a time, then checks that
+    ``admin`` is still an active admin. Otherwise two admins demoting or
+    deactivating each other at once would both succeed - neither acts on
+    themselves - and leave the organization with no admin at all."""
+    type(admin.organization).objects.select_for_update().get(pk=admin.organization_id)
+    still_admin = User.objects.filter(
+        pk=admin.pk, is_active=True, org_role=OrganizationRole.ADMIN
+    ).exists()
+    if not still_admin:
+        raise PermissionDenied(NO_LONGER_ADMIN_MESSAGE)
