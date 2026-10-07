@@ -1,6 +1,9 @@
 # What every Django process (the web server, the Celery services and the
 # migrations) shares.
 x-django: &django
+  # Built here by `docker compose up --build`; on a server, the release's image
+  # pulled from the registry (BACKEND_IMAGE, IMAGE_TAG - see scripts/deploy.sh).
+  image: ${BACKEND_IMAGE:-docsphere-backend}:${IMAGE_TAG:-local}
   build: .
   env_file:
     - .env
@@ -23,10 +26,10 @@ x-after-migrations: &after-migrations
     condition: service_completed_successfully
 
 services:
+  # Given only what it uses, not the whole .env: a deploy rewrites IMAGE_TAG
+  # there, which would otherwise restart the database every release.
   db:
     image: postgres:16-alpine
-    env_file:
-      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -99,13 +102,13 @@ services:
   # `web`, so the browser sees one origin. Put the TLS-terminating load
   # balancer in front of APP_PORT.
   frontend:
-    build:
-      context: ./frontend
-      args:
-        VITE_SENTRY_DSN: ${SENTRY_FRONTEND_DSN:-}
-        VITE_SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+    image: ${FRONTEND_IMAGE:-docsphere-frontend}:${IMAGE_TAG:-local}
+    build: ./frontend
+    # Read as nginx starts, so the same image serves staging and production.
     environment:
       DJANGO_ADMIN_PATH: ${DJANGO_ADMIN_PATH:-admin/}
+      SENTRY_FRONTEND_DSN: ${SENTRY_FRONTEND_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       SENTRY_INGEST_ORIGIN: ${SENTRY_INGEST_ORIGIN:-}
     ports:
       - "${APP_PORT:-8080}:8080"

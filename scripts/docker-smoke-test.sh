@@ -5,17 +5,18 @@
 # behind the same origin, the refresh cookie's production flags, scheduled
 # tasks reaching the worker, and a backup -> change -> restore round trip.
 # Needs a .env (a copy of .env.example will do). Stops the stack and deletes
-# its data afterwards, unless KEEP_STACK=1.
+# its data afterwards, unless KEEP_STACK=1. The read-only checks it shares with
+# any deployment are in scripts/smoke-test.sh.
 set -euo pipefail
 
 BASE_URL="http://localhost:${APP_PORT:-8080}"
-# Added by the TLS-terminating load balancer; without it Django redirects to HTTPS.
-VIA_HTTPS=(-H "X-Forwarded-Proto: https")
 # A project name of its own, so its containers and volumes (which it deletes
 # afterwards) are never the dev stack's.
 COMPOSE=(docker compose --project-name docsphere-smoke -f docker-compose.yml)
 WAIT_SECONDS=90
-failures=0
+
+# shellcheck source=scripts/lib/smoke.sh
+source "$(dirname "$0")/lib/smoke.sh"
 
 cleanup() {
   if [ "${KEEP_STACK:-0}" != "1" ]; then
@@ -23,30 +24,6 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-
-check() {
-  local description=$1 expected=$2 actual=$3
-  if [[ "$actual" == *"$expected"* ]]; then
-    echo "ok    $description"
-  else
-    echo "FAIL  $description: expected '$expected', got '$actual'"
-    failures=$((failures + 1))
-  fi
-}
-
-# The status line and headers of a response.
-raw_headers() {
-  curl -sS -o /dev/null -D - "$@" | tr -d '\r'
-}
-
-# The same, lower-cased for matching names and flags.
-headers() {
-  raw_headers "$@" | tr '[:upper:]' '[:lower:]'
-}
-
-status() {
-  curl -sS -o /dev/null -w '%{http_code}' "$@"
-}
 
 # The first line of a service's logs containing the given text, waiting for it
 # to appear; empty if it doesn't in time.
@@ -72,6 +49,7 @@ wait_for_api() {
 
 # How many organizations the database holds.
 organization_count() {
+  # shellcheck disable=SC2016 # expanded in the container, from its environment
   "${COMPOSE[@]}" exec -T db sh -c \
     'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT count(*) FROM organizations_organization"'
 }
@@ -79,7 +57,8 @@ organization_count() {
 # Signs up a new organization through nginx; prints the response's status
 # line and headers.
 sign_up() {
-  local who="$1-$(date +%s)"
+  local who
+  who="$1-$(date +%s)"
   raw_headers "${VIA_HTTPS[@]}" -X POST "$BASE_URL/api/v1/organizations/signup/" \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"Smoke $who\", \"admin_email\": \"$who@example.com\", \"admin_password\": \"Smoke-Test-Pass-1!\"}"
@@ -107,34 +86,34 @@ check "the migrations ran, then the service exited cleanly" "migrate=exited (0)"
 
 echo
 echo "The app"
+check_app "$BASE_URL"
 app=$(headers "$BASE_URL/")
-check "serves index.html" "200" "$(head -1 <<<"$app")"
-check "sends a content security policy" "content-security-policy: default-src 'self'" "$app"
 # Bracketed, so the check is for exactly this - no other origin allowed.
 check "...whose requests go only to this origin" "[connect-src 'self']" \
   "[$(grep -o "connect-src [^;]*" <<<"$app" | sed 's/ *$//')]"
-# The error-reporting origin, once configured, is added to it at start-up.
+check "...with error reporting off" '[<meta name="sentry-dsn" content=""]' \
+  "[$(curl -sS "$BASE_URL/" | grep -o '<meta name="sentry-dsn" content="[^"]*"' || true)]"
+# The same image, started with error reporting configured: nginx fills in the
+# settings as it starts, so staging and production can share one build.
+dsn=https://public@o1.ingest.example.com/1
 ingest=https://o1.ingest.example.com
-check "...and to the error-reporting origin when one is set" "[connect-src 'self' $ingest]" \
-  "[$("${COMPOSE[@]}" run --rm --no-deps -e SENTRY_INGEST_ORIGIN="$ingest" frontend nginx -T 2>/dev/null |
-    grep -o "connect-src [^;]*" | head -1 | sed 's/ *$//')]"
-check "always revalidates index.html" "cache-control: no-cache" "$app"
-check "lets the app route deep links" "200" "$(status "$BASE_URL/projects/7")"
-entry=$(curl -sS "$BASE_URL/" | grep -o '/assets/index-[^"]*\.js' | head -1)
-asset=$(headers "$BASE_URL$entry")
-check "serves the built scripts" "content-type: application/javascript" "$asset"
-check "caches them for good" "immutable" "$asset"
-check "404s a missing asset rather than serving index.html" "404" \
-  "$(status "$BASE_URL/assets/missing.js")"
+# shellcheck disable=SC2016 # the loop runs in the container
+configured=$("${COMPOSE[@]}" run --rm --no-deps \
+  -e SENTRY_FRONTEND_DSN="$dsn" -e SENTRY_ENVIRONMENT=staging -e SENTRY_INGEST_ORIGIN="$ingest" \
+  frontend sh -c '/docker-entrypoint.sh nginx >/dev/null 2>&1 &
+    for _ in $(seq 50); do wget -qSO- http://127.0.0.1:8080/ 2>&1 && exit; sleep 0.2; done; exit 1' |
+  tr -d '\r' || true)
+check "...gives the page the DSN it was started with" "<meta name=\"sentry-dsn\" content=\"$dsn\"" \
+  "$configured"
+check "...and the environment" '<meta name="sentry-environment" content="staging"' "$configured"
+check "...and lets it report to that origin only" "[connect-src 'self' $ingest]" \
+  "[$(grep -o "connect-src [^;]*" <<<"$configured" | head -1 | sed 's/ *$//')]"
 
 echo
 echo "Django, behind the same origin"
-check "answers the health check" '"status":"ok"' \
-  "$(curl -sS "${VIA_HTTPS[@]}" "$BASE_URL/healthz/")"
+check_django "$BASE_URL"
 check "redirects plain HTTP to HTTPS" "location: https://" "$(headers "$BASE_URL/healthz/")"
 check "serves the admin" "302" "$(status "${VIA_HTTPS[@]}" "$BASE_URL/${DJANGO_ADMIN_PATH:-admin/}")"
-check "serves the admin's static files" "200" \
-  "$(status "${VIA_HTTPS[@]}" "$BASE_URL/static/admin/css/base.css")"
 
 echo
 echo "Signing up through the API"
@@ -163,7 +142,7 @@ check "...which has started" "beat: Starting" "$(log_line beat "beat: Starting")
 reminder_task=subscriptions.tasks.send_expiry_reminders_task
 task_id=$("${COMPOSE[@]}" exec -T beat celery -A core call "$reminder_task" | tr -d '\r')
 check "the worker runs the renewal reminders" "succeeded" \
-  "$(log_line worker "$reminder_task[$task_id] succeeded")"
+  "$(log_line worker "${reminder_task}[$task_id] succeeded")"
 
 echo
 echo "Backups"

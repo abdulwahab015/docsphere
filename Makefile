@@ -10,9 +10,14 @@ FE_TYPES_CHECK := node_modules/.tmp/schema.d.ts
 E2E_DATABASE := frontend/node_modules/.tmp/e2e.sqlite3
 # Where the end-to-end API writes the emails it sends; e2e/fixtures.ts reads them.
 E2E_MAILBOX := frontend/node_modules/.tmp/e2e-mail
+# The requirements files are fully pinned, so nothing needs installing to audit them.
+PIP_AUDIT := pip-audit --no-deps --disable-pip --progress-spinner off
+ACTIONLINT_IMAGE := rhysd/actionlint:1.7.12
+SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0
 
 .PHONY: help install compile migrate makemigrations run shell worker beat flower stripe-listen test test-cov test-pg lint format check \
-        up down build logs docker-migrate docker-shell docker-smoke db-backup db-backups db-restore clean \
+        audit audit-dev lint-scripts \
+        up down build logs docker-migrate docker-shell docker-smoke smoke db-backup db-backups db-restore clean \
         fe-install fe-dev fe-build fe-test fe-test-cov fe-lint fe-format fe-check fe-api-types \
         fe-api-types-check fe-e2e e2e-api
 
@@ -75,6 +80,18 @@ check: ## Run the full CI check sequence locally (system check, migrations, form
 	ruff check .
 	DJANGO_SETTINGS_MODULE=core.settings.test coverage run manage.py test
 	coverage report
+
+audit: ## Fail on known vulnerabilities in what production runs (Python + frontend runtime dependencies)
+	$(PIP_AUDIT) --requirement requirements/base.txt
+	$(FE_NPM) audit --omit=dev
+
+audit-dev: ## Report known vulnerabilities in the development tooling too
+	$(PIP_AUDIT) --requirement requirements/dev.txt
+	$(FE_NPM) audit
+
+lint-scripts: ## Lint the GitHub workflows and the shell scripts (needs Docker)
+	docker run --rm -v "$(CURDIR)":/repo -w /repo $(ACTIONLINT_IMAGE) -no-color
+	docker run --rm -v "$(CURDIR)":/mnt -w /mnt $(SHELLCHECK_IMAGE) --external-sources scripts/*.sh scripts/lib/*.sh
 
 fe-install: ## Install frontend dependencies from the lockfile
 	$(FE_NPM) ci
@@ -152,6 +169,10 @@ docker-shell: ## Open a shell inside the web container
 
 docker-smoke: ## Build the production stack and check it through nginx on :8080 (needs .env)
 	./scripts/docker-smoke-test.sh
+
+smoke: ## Check a running deployment from outside, read-only: make smoke URL=https://docsphere.example.com
+	@test -n "$(URL)" || (echo "Usage: make smoke URL=<the app's URL>"; exit 1)
+	./scripts/smoke-test.sh "$(URL)"
 
 db-backup: ## Back up the running stack's database now (into the db_backups volume)
 	docker compose exec backup sh /usr/local/bin/db-backup

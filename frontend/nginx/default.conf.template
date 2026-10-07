@@ -65,5 +65,12 @@ server {
         include /etc/nginx/conf.d/app-headers.inc;
         add_header Cache-Control "no-cache" always;
         try_files $uri /index.html;
+
+        # This environment's settings, written into index.html's empty <meta>
+        # tags (src/lib/runtime-config.ts), so staging and production serve
+        # the same image.
+        sub_filter '<meta name="sentry-dsn" content=""' '<meta name="sentry-dsn" content="${SENTRY_FRONTEND_DSN}"';
+        sub_filter '<meta name="sentry-environment" content=""' '<meta name="sentry-environment" content="${SENTRY_ENVIRONMENT}"';
+        sub_filter_once off;
     }
 }
