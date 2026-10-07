@@ -29,7 +29,7 @@ services:
   # Given only what it uses, not the whole .env: a deploy rewrites IMAGE_TAG
   # there, which would otherwise restart the database every release.
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -155,7 +155,7 @@ services:
   # their scripts in here too. Copy dumps off the server with
   # `docker compose cp backup:/backups ./backups`.
   backup:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     entrypoint: ["/bin/sh", "-c"]
     command:
       - while true; do sh /usr/local/bin/db-backup || echo "Backup failed"; sleep "$$BACKUP_INTERVAL_SECONDS"; done
