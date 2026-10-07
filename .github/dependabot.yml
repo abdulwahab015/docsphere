@@ -37,16 +37,31 @@ updates:
       actions:
         update-types: [minor, patch]
 
-  # The images' base images.
+  # The images' base images. A new Python or Node release is an upgrade made
+  # on purpose, together with CI's python-version and frontend/.nvmrc - not a
+  # routine bump. (python:3.12-slim has no patch number, so a "minor" update
+  # is a new Python release; patches arrive by rebuilding the same tag.)
   - package-ecosystem: docker
     directories: [/, /frontend]
     target-branch: develop
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: node
+        update-types: [version-update:semver-major]
 
-  # postgres and redis in docker-compose.yml.
+  # postgres and redis in docker-compose.yml. A new major release is an
+  # upgrade made on purpose: Postgres can't open an older major's data files
+  # (it needs pg_upgrade or a dump and restore, with CI's service moved too).
   - package-ecosystem: docker-compose
     directory: /
     target-branch: develop
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
+      - dependency-name: redis
+        update-types: [version-update:semver-major]
