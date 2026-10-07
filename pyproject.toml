@@ -37,3 +37,4 @@ known-first-party = ["clients", "core", "organizations", "projects", "subscripti
 "**/factories.py" = ["S105", "S106"]
 "core/settings/*" = ["F401", "F403", "F405"]
 "subscriptions/apps.py" = ["F401"]
+"users/apps.py" = ["F401"]

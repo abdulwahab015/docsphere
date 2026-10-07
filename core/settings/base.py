@@ -169,9 +169,7 @@ DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
 DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ),
+    "DEFAULT_AUTHENTICATION_CLASSES": ("users.authentication.JWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
         "core.permissions.HasActiveSubscription",
@@ -247,6 +245,12 @@ CELERY_BEAT_SCHEDULE = {
 SUBSCRIPTION_EXPIRY_REMINDER_DAYS = config(
     "SUBSCRIPTION_EXPIRY_REMINDER_DAYS", cast=int
 )
+
+# Error tracking (core/error_tracking.py): off while SENTRY_DSN is empty.
+SENTRY_DSN = config("SENTRY_DSN", default="")
+SENTRY_ENVIRONMENT = config("SENTRY_ENVIRONMENT", default="production")
+# Which version an error happened in, e.g. the git commit the image was built from.
+SENTRY_RELEASE = config("SENTRY_RELEASE", default="")
 
 MAX_LOG_BODY_CHARS = config("MAX_LOG_BODY_CHARS", default=2048, cast=int)
 
