@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD}
     environment:
       # Read by redis-cli, so the password isn't on its command line.
