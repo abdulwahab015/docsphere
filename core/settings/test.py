@@ -1,7 +1,8 @@
 """Test settings — used by CI for a fast, deterministic run.
 
-Set DJANGO_SETTINGS_MODULE=core.settings.test. Falls back to base.py's own
-sqlite default for DATABASE_URL, so CI needs no database service.
+Set DJANGO_SETTINGS_MODULE=core.settings.test. Without a DATABASE_URL it uses
+base.py's own sqlite default, so `make test` needs no database service; CI and
+`make test-pg` point DATABASE_URL at Postgres, the database production uses.
 """
 
 from core.settings.base import *

@@ -137,7 +137,7 @@ test('a read-only document, and the menus and dialogs of the shell', async ({ pa
 test('the dialogs an admin opens from People', async ({ page }) => {
   await logIn(page, DOCS_ADMIN)
   await visit(page, '/people')
-  await page.getByRole('button', { name: 'Invite' }).click()
+  await page.getByRole('button', { name: 'Invite', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await expectAccessible(page)
   await page.keyboard.press('Escape')

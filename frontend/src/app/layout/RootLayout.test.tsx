@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import { getAccessToken } from '@/api/access-token'
@@ -51,9 +51,9 @@ describe('RootLayout', () => {
 
       otherTab.postMessage(SESSION_CHANGED)
 
-      await expect
-        .poll(async () => (await findAccountMenu()).textContent)
-        .toContain('grace@example.com')
+      await waitFor(async () =>
+        expect(await findAccountMenu()).toHaveTextContent('grace@example.com'),
+      )
     })
 
     it('ignores unrelated messages on the channel', async () => {

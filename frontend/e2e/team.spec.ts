@@ -26,7 +26,9 @@ async function openTab(page: Page, tab: 'Members' | 'Invitations' | 'Deactivated
 
 async function invite(page: Page, email: string) {
   await page.goto('/people')
-  await page.getByRole('button', { name: 'Invite' }).click()
+  // Exact: once an earlier test's invitee has joined, their row's "Actions for
+  // invitee-…" button would match too, as soon as the member list loads.
+  await page.getByRole('button', { name: 'Invite', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Invite someone' })
   await dialog.getByLabel('Email').fill(email)
   await dialog.getByRole('button', { name: 'Send invitation' }).click()
