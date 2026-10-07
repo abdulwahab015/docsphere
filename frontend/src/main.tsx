@@ -5,10 +5,12 @@ import { App } from '@/app/App'
 import '@/index.css'
 import { env } from '@/lib/env'
 import { errorTracking } from '@/lib/error-tracking'
+import { readRuntimeConfig } from '@/lib/runtime-config'
 
+const runtimeConfig = readRuntimeConfig(document)
 errorTracking.start({
-  dsn: env.VITE_SENTRY_DSN,
-  environment: env.VITE_SENTRY_ENVIRONMENT,
+  dsn: runtimeConfig.sentryDsn,
+  environment: runtimeConfig.sentryEnvironment || undefined,
   release: env.VITE_SENTRY_RELEASE || undefined,
 })
 

@@ -186,3 +186,36 @@ jobs:
 
       - name: Build the stack and smoke-test it
         run: make docker-smoke
+
+  # Known vulnerabilities: in anything production runs, they fail the build;
+  # in development tooling, they're reported as a warning.
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements/dev.txt
+
+      # npm audits the lockfile, so the frontend needs no install.
+      - name: Runtime dependencies
+        run: make audit
+
+      - name: Development tooling (reported, doesn't fail)
+        run: make audit-dev || echo "::warning title=Dependency audit::Development tooling has known vulnerabilities - see this step's log."
+
+  # The workflows themselves and the deploy and smoke-test scripts.
+  scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: actionlint + shellcheck
+        run: make lint-scripts

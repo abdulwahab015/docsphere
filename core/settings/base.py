@@ -249,7 +249,8 @@ SUBSCRIPTION_EXPIRY_REMINDER_DAYS = config(
 # Error tracking (core/error_tracking.py): off while SENTRY_DSN is empty.
 SENTRY_DSN = config("SENTRY_DSN", default="")
 SENTRY_ENVIRONMENT = config("SENTRY_ENVIRONMENT", default="production")
-# Which version an error happened in, e.g. the git commit the image was built from.
+# Which version an error happened in: the git commit a release image was built
+# from (the Dockerfile's RELEASE build argument sets it).
 SENTRY_RELEASE = config("SENTRY_RELEASE", default="")
 
 MAX_LOG_BODY_CHARS = config("MAX_LOG_BODY_CHARS", default=2048, cast=int)

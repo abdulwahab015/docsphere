@@ -60,6 +60,11 @@ RUN DJANGO_SETTINGS_MODULE=core.settings.production \
     STRIPE_PRODUCT_ID=prod_collectstatic-build-time-placeholder \
     python manage.py collectstatic --noinput
 
+# The git commit a release is built from, which error reports name. Last, so
+# a new commit doesn't invalidate the layers above.
+ARG RELEASE=""
+ENV SENTRY_RELEASE=$RELEASE
+
 EXPOSE 8000
 
 CMD ["gunicorn", "core.wsgi:application", "--bind", "0.0.0.0:8000"]
