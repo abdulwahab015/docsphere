@@ -1178,6 +1178,12 @@ export interface components {
             readonly id: number;
             readonly name: string;
             readonly has_active_subscription: boolean;
+            /**
+             * @description A renewal payment failed and Stripe is retrying it: the
+             *     organization still has access, but its admins should update the
+             *     payment details before Stripe gives up.
+             */
+            readonly payment_failed: boolean;
         };
         PaginatedDocumentAccessRequestList: {
             /** @example 123 */
@@ -1964,6 +1970,13 @@ export interface operations {
                     "application/json": components["schemas"]["Organization"];
                 };
             };
+            /** @description Stripe couldn't be updated with the new billing email; nothing was saved. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     api_v1_organizations_profile_partial_update: {
@@ -1988,6 +2001,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Organization"];
                 };
+            };
+            /** @description Stripe couldn't be updated with the new billing email; nothing was saved. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

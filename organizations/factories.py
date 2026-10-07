@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import factory
+from django.conf import settings
 from django.utils import timezone
 from djstripe.models import Customer, Price, Product, Subscription, WebhookEndpoint
 
@@ -68,14 +69,17 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
 
 
 class StripeProductFactory(factory.django.DjangoModelFactory):
-    """A dj-stripe Product backing a Price. For local/dev/test only - real
-    products are created in Stripe and synced via the webhook or a sync
-    command."""
+    """A dj-stripe Product backing a Price - by default the configured
+    DocSphere product (``STRIPE_PRODUCT_ID``), reused if it already exists;
+    pass another ``id`` for a product the app doesn't sell. For local/dev/test
+    only - real products are created in Stripe and synced via the webhook or a
+    sync command."""
 
     class Meta:
         model = Product
+        django_get_or_create = ("id",)
 
-    id = factory.Sequence(lambda n: f"prod_test{n}")
+    id = factory.LazyFunction(lambda: settings.STRIPE_PRODUCT_ID)
     name = "DocSphere Subscription"
     active = True
     stripe_data = factory.LazyAttribute(

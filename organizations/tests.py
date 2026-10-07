@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import stripe
 from django.conf import settings
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
@@ -309,7 +310,7 @@ class OrganizationProfileAPITests(APITestCase):
     def test_admin_can_set_billing_email(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 reverse("organization_profile"), {"billing_email": "billing@acme.test"}
             )
@@ -317,6 +318,54 @@ class OrganizationProfileAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.org.refresh_from_db()
         self.assertEqual(self.org.billing_email, "billing@acme.test")
+
+    @patch("stripe.Customer.modify")
+    def test_a_new_billing_email_reaches_the_stripe_customer(
+        self, mock_customer_modify
+    ):
+        customer = StripeCustomerFactory(subscriber=self.org)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(8):
+            response = self.client.patch(
+                reverse("organization_profile"), {"billing_email": "billing@acme.test"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_customer_modify.assert_called_once()
+        self.assertEqual(mock_customer_modify.call_args.args, (customer.id,))
+        self.assertEqual(
+            mock_customer_modify.call_args.kwargs["email"], "billing@acme.test"
+        )
+
+    @patch("stripe.Customer.modify")
+    def test_nothing_is_saved_when_stripe_cannot_be_updated(self, mock_customer_modify):
+        mock_customer_modify.side_effect = stripe.APIConnectionError("Network down")
+        StripeCustomerFactory(subscriber=self.org)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(7):
+            response = self.client.patch(
+                reverse("organization_profile"), {"billing_email": "billing@acme.test"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.assertIn("nothing was changed", response.data["detail"])
+        self.org.refresh_from_db()
+        self.assertIsNone(self.org.billing_email)
+
+    @patch("stripe.Customer.modify")
+    def test_renaming_leaves_stripe_alone(self, mock_customer_modify):
+        StripeCustomerFactory(subscriber=self.org)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(5):
+            response = self.client.patch(
+                reverse("organization_profile"), {"name": "Acme Labs"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_customer_modify.assert_not_called()
 
     def test_update_rejects_a_billing_email_already_used_by_another_organization(self):
         OrganizationFactory(billing_email="taken@acme.test")
@@ -335,7 +384,7 @@ class OrganizationProfileAPITests(APITestCase):
         OrganizationFactory(billing_email=None)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             response = self.client.patch(
                 reverse("organization_profile"),
                 {"billing_email": None},
@@ -399,6 +448,12 @@ class SeedE2ECommandTests(TestCase):
                 "users": [{"email": "member@unpaid.test", "role": "MEMBER"}],
             },
             {
+                "name": "Overdue Org",
+                "subscribed": True,
+                "subscription_status": "past_due",
+                "users": [{"email": "admin@overdue.test", "role": "ADMIN"}],
+            },
+            {
                 "name": "Project Org",
                 "subscribed": True,
                 "users": [
@@ -445,20 +500,22 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(28):
+        with self.assertNumQueries(35):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
         unpaid = Organization.objects.get(name="Unpaid Org")
-        self.assertIsNotNone(paid.active_subscription)
+        overdue = Organization.objects.get(name="Overdue Org")
+        self.assertEqual(paid.active_subscription.stripe_data["status"], "active")
         self.assertIsNone(unpaid.active_subscription)
+        self.assertEqual(overdue.active_subscription.stripe_data["status"], "past_due")
         self.assertEqual(paid.users.count(), 3)
         admin = User.objects.get(email="admin@paid.test")
         self.assertEqual(admin.org_role, "ADMIN")
         self.assertTrue(admin.check_password("Seed-Pass-123!"))
 
     def test_seeds_plans_and_billing_emails(self):
-        with self.assertNumQueries(28):
+        with self.assertNumQueries(35):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         prices = Price.objects.order_by("stripe_data__unit_amount")
@@ -469,6 +526,7 @@ class SeedE2ECommandTests(TestCase):
             ],
             [("Monthly", 1500, "DocSphere"), ("Yearly", 15000, "DocSphere")],
         )
+        self.assertEqual(prices.first().product_id, settings.STRIPE_PRODUCT_ID)
         self.assertEqual(prices.last().stripe_data["recurring"], {"interval": "year"})
         self.assertEqual(
             Organization.objects.get(name="Paid Org").billing_email, "billing@paid.test"
@@ -476,7 +534,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
 
     def test_seeds_projects_with_their_owner_and_shares(self):
-        with self.assertNumQueries(28):
+        with self.assertNumQueries(35):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         roadmap = Project.objects.get(name="Roadmap")
@@ -491,7 +549,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(archived.visibility, "PUBLIC")
 
     def test_seeds_documents_in_projects_or_personal(self):
-        with self.assertNumQueries(28):
+        with self.assertNumQueries(35):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         spec = Document.objects.get(title="Spec")

@@ -5,6 +5,7 @@ import type {
   Grant,
   Invitation,
   Organization,
+  OrganizationSummary,
   Price,
   Project,
   SoleOwnership,
@@ -12,12 +13,24 @@ import type {
   UserDetail,
 } from '@/api/types'
 
+export function buildOrganizationSummary(
+  overrides: Partial<OrganizationSummary> = {},
+): OrganizationSummary {
+  return {
+    id: 1,
+    name: 'Acme',
+    has_active_subscription: true,
+    payment_failed: false,
+    ...overrides,
+  }
+}
+
 export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
   return {
     id: 1,
     email: 'ada@example.com',
     org_role: 'MEMBER',
-    organization: { id: 1, name: 'Acme', has_active_subscription: true },
+    organization: buildOrganizationSummary(),
     ...overrides,
   }
 }

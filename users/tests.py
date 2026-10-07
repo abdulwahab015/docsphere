@@ -830,9 +830,21 @@ class CurrentUserAPITests(APITestCase):
                     "id": self.org.pk,
                     "name": "Acme",
                     "has_active_subscription": True,
+                    "payment_failed": False,
                 },
             },
         )
+
+    def test_says_when_a_renewal_payment_failed_and_access_continues(self):
+        StripeSubscriptionFactory(customer__subscriber=self.org, status="past_due")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["organization"]["has_active_subscription"])
+        self.assertTrue(response.data["organization"]["payment_failed"])
 
     def test_member_of_an_unpaid_organization_is_not_blocked_with_402(self):
         self.client.force_authenticate(self.member)

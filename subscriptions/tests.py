@@ -14,6 +14,7 @@ from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
     StripePriceFactory,
+    StripeProductFactory,
     StripeSubscriptionFactory,
 )
 from subscriptions.tasks import (
@@ -69,6 +70,15 @@ class PriceListAPIViewTests(APITestCase):
         one_time = StripePriceFactory()
         one_time.stripe_data["type"] = "one_time"
         one_time.save(update_fields=["stripe_data"])
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_excludes_prices_of_any_other_product(self):
+        StripePriceFactory(product=StripeProductFactory(id="prod_unrelated"))
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(1):
@@ -183,7 +193,29 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
             mock_session_create.call_args.kwargs["customer"], "cus_test123"
         )
         self.assertEqual(mock_session_create.call_args.kwargs["mode"], "subscription")
-        self.assertIn("idempotency_key", mock_session_create.call_args.kwargs)
+
+    @patch("stripe.checkout.Session.create")
+    @patch("stripe.Customer.create")
+    def test_each_checkout_is_a_new_session(
+        self, mock_customer_create, mock_session_create
+    ):
+        # Reusing a request key would hand back the earlier session - e.g. an
+        # already-completed one when the organization resubscribes that day.
+        mock_customer_create.return_value = {"id": "cus_test123", "livemode": False}
+        mock_session_create.return_value = MagicMock(
+            url="https://checkout.stripe.com/x"
+        )
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory()
+        self.client.force_authenticate(admin)
+
+        self.client.post(self.url, {"price_id": price.id})
+        self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(mock_session_create.call_count, 2)
+        for call in mock_session_create.call_args_list:
+            self.assertNotIn("idempotency_key", call.kwargs)
 
     @patch("stripe.checkout.Session.create")
     @patch("stripe.Customer.create")
@@ -264,6 +296,40 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
             response = self.client.post(self.url, {"price_id": "price_doesnotexist"})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("stripe.checkout.Session.create")
+    def test_price_of_another_product_gets_400_without_calling_stripe(
+        self, mock_session_create
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory(product=StripeProductFactory(id="prod_unrelated"))
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("price_id", response.data)
+        mock_session_create.assert_not_called()
+
+    @patch("stripe.checkout.Session.create")
+    def test_organization_with_a_failed_renewal_gets_400_without_calling_stripe(
+        self, mock_session_create
+    ):
+        # It still has its subscription: the fix is new card details in the
+        # portal, not a second subscription.
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(customer__subscriber=organization, status="past_due")
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory()
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_session_create.assert_not_called()
 
     def test_inactive_price_gets_400(self):
         organization = OrganizationFactory(billing_email="billing@example.com")

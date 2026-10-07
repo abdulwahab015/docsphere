@@ -2,11 +2,16 @@ import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import { findAccountMenu } from '@/test/actions'
-import { buildCurrentUser, buildOrganization, buildPrice } from '@/test/factories'
+import {
+  buildCurrentUser,
+  buildOrganization,
+  buildOrganizationSummary,
+  buildPrice,
+} from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server } from '@/test/server'
 
-const lapsedOrganization = { id: 1, name: 'Acme', has_active_subscription: false }
+const lapsedOrganization = buildOrganizationSummary({ has_active_subscription: false })
 
 function serveLapsedBilling() {
   server.use(

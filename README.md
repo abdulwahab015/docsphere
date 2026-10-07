@@ -24,6 +24,7 @@ unchanged.
 1. Copy `.env.example` to `.env` and fill it in. For the public origin, e.g.
    `https://docsphere.example.com`: set `FRONTEND_URL` and `CORS_ALLOWED_ORIGINS` to it and
    `ALLOWED_HOSTS` to its hostname. Set `DJANGO_ADMIN_PATH` to something hard to guess.
+   Set `STRIPE_PRODUCT_ID` to the Stripe product whose recurring prices are your plans.
 2. `docker compose up -d --build`
 3. `docker compose run --rm web python manage.py migrate`
 4. In the Django admin, add a dj-stripe **Webhook endpoint** for `https://<your host>`.

@@ -162,7 +162,9 @@ STRIPE_TEST_SECRET_KEY = config("STRIPE_TEST_SECRET_KEY", default="")
 STRIPE_TEST_PUBLIC_KEY = config("STRIPE_TEST_PUBLIC_KEY", default="")
 STRIPE_LIVE_SECRET_KEY = config("STRIPE_LIVE_SECRET_KEY", default="")
 STRIPE_LIVE_PUBLIC_KEY = config("STRIPE_LIVE_PUBLIC_KEY", default="")
-DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET")
+# The Stripe product whose recurring prices are DocSphere's plans; any other
+# product in the Stripe account is neither offered nor purchasable.
+STRIPE_PRODUCT_ID = config("STRIPE_PRODUCT_ID")
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
 DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
 

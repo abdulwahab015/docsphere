@@ -57,7 +57,7 @@ RUN DJANGO_SETTINGS_MODULE=core.settings.production \
     BILLING_PORTAL_THROTTLE_RATE=10/min \
     ORG_SIGNUP_THROTTLE_RATE=5/hour \
     PASSWORD_CHANGE_THROTTLE_RATE=5/hour \
-    DJSTRIPE_WEBHOOK_SECRET=whsec_collectstatic-build-time-placeholder \
+    STRIPE_PRODUCT_ID=prod_collectstatic-build-time-placeholder \
     python manage.py collectstatic --noinput
 
 EXPOSE 8000

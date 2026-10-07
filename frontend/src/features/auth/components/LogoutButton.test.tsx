@@ -2,7 +2,7 @@ import { screen } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import { getAccessToken } from '@/api/access-token'
-import { buildCurrentUser } from '@/test/factories'
+import { buildCurrentUser, buildOrganizationSummary } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
@@ -12,7 +12,7 @@ const LOGOUT_PATH = '/users/auth/logout/'
 function renderLapsedOrganization() {
   return renderRoute('/', {
     signedInAs: buildCurrentUser({
-      organization: { id: 1, name: 'Acme', has_active_subscription: false },
+      organization: buildOrganizationSummary({ has_active_subscription: false }),
     }),
   })
 }

@@ -43,7 +43,6 @@ class CreateCheckoutSessionTests(SimpleTestCase):
             price_id="price_test123",
             success_url="https://example.com/success/",
             cancel_url="https://example.com/cancel/",
-            idempotency_key="checkout-1-price_test123-20260101",
         )
 
         self.assertEqual(result.url, "https://checkout.stripe.com/x")
@@ -53,9 +52,28 @@ class CreateCheckoutSessionTests(SimpleTestCase):
             line_items=[{"price": "price_test123", "quantity": 1}],
             success_url="https://example.com/success/",
             cancel_url="https://example.com/cancel/",
-            idempotency_key="checkout-1-price_test123-20260101",
             api_key=djstripe_settings.STRIPE_SECRET_KEY,
         )
+
+
+class UpdateCustomerEmailTests(SimpleTestCase):
+    @patch("stripe.Customer.modify")
+    def test_sets_the_customers_email(self, mock_customer_modify):
+        stripe_client.update_customer_email(
+            customer_id="cus_test123", email="billing@example.com"
+        )
+
+        mock_customer_modify.assert_called_once_with(
+            "cus_test123",
+            email="billing@example.com",
+            api_key=djstripe_settings.STRIPE_SECRET_KEY,
+        )
+
+    @patch("stripe.Customer.modify")
+    def test_clears_it_when_there_is_none(self, mock_customer_modify):
+        stripe_client.update_customer_email(customer_id="cus_test123", email=None)
+
+        self.assertEqual(mock_customer_modify.call_args.kwargs["email"], "")
 
 
 class SubscriptionSignalTests(SimpleTestCase):
