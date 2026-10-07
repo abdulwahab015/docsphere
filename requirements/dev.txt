@@ -17,7 +17,7 @@ attrs==26.1.0
 billiard==4.2.4
     # via celery
 black==26.5.1
-    # via -r requirements/dev.in
+    # via -r dev.in
 boolean-py==5.0
     # via license-expression
 build==1.6.0
@@ -28,7 +28,7 @@ cachecontrol==0.14.4
     #   pip-audit
 celery==5.6.3
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   flower
 certifi==2026.7.22
     # via
@@ -53,7 +53,7 @@ click-plugins==1.1.1.2
 click-repl==0.3.0
     # via celery
 coverage==7.16.0
-    # via -r requirements/dev.in
+    # via -r dev.in
 cyclonedx-python-lib==11.12.0
     # via pip-audit
 defusedxml==0.7.1
@@ -61,12 +61,12 @@ defusedxml==0.7.1
 distlib==0.4.3
     # via virtualenv
 dj-database-url==3.1.2
-    # via -r requirements/base.in
+    # via -r base.in
 dj-stripe==2.11.0
-    # via -r requirements/base.in
+    # via -r base.in
 django==6.1.2
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   dj-database-url
     #   dj-stripe
     #   django-cors-headers
@@ -75,22 +75,22 @@ django==6.1.2
     #   djangorestframework-simplejwt
     #   drf-spectacular
 django-cors-headers==4.9.0
-    # via -r requirements/base.in
+    # via -r base.in
 django-extensions==4.1
-    # via -r requirements/base.in
+    # via -r base.in
 djangorestframework==3.18.0
     # via
-    #   -r requirements/base.in
+    #   -r base.in
     #   djangorestframework-simplejwt
     #   drf-spectacular
 djangorestframework-simplejwt==5.5.1
-    # via -r requirements/base.in
+    # via -r base.in
 drf-spectacular==0.30.0
-    # via -r requirements/base.in
+    # via -r base.in
 et-xmlfile==2.0.0
     # via openpyxl
 factory-boy==3.3.3
-    # via -r requirements/dev.in
+    # via -r dev.in
 faker==40.37.0
     # via factory-boy
 filelock==3.32.5
@@ -99,9 +99,9 @@ filelock==3.32.5
     #   python-discovery
     #   virtualenv
 flower==2.0.1
-    # via -r requirements/base.in
-gunicorn==23.0.0
-    # via -r requirements/base.in
+    # via -r base.in
+gunicorn==26.2.0
+    # via -r base.in
 humanize==4.16.0
     # via flower
 identify==2.6.19
@@ -129,14 +129,13 @@ mypy-extensions==1.1.0
 nodeenv==1.10.0
     # via pre-commit
 openpyxl==3.1.5
-    # via -r requirements/base.in
+    # via -r base.in
 packageurl-python==0.17.6
     # via cyclonedx-python-lib
 packaging==26.3
     # via
     #   black
     #   build
-    #   gunicorn
     #   kombu
     #   pip-audit
     #   pip-requirements-parser
@@ -147,24 +146,24 @@ pathspec==1.1.1
 pip-api==0.0.35
     # via pip-audit
 pip-audit==2.10.1
-    # via -r requirements/dev.in
+    # via -r dev.in
 pip-requirements-parser==32.0.1
     # via pip-audit
 pip-tools==7.6.1
-    # via -r requirements/dev.in
+    # via -r dev.in
 platformdirs==4.11.6
     # via
     #   black
     #   pip-audit
     #   virtualenv
 pre-commit==4.6.2
-    # via -r requirements/dev.in
+    # via -r dev.in
 prometheus-client==0.26.0
     # via flower
 prompt-toolkit==3.0.53
     # via click-repl
 psycopg==3.3.5
-    # via -r requirements/base.in
+    # via -r base.in
 psycopg-binary==3.3.5
     # via psycopg
 py-serializable==2.1.0
@@ -182,7 +181,7 @@ pyproject-hooks==1.2.0
 python-dateutil==2.9.0.post0
     # via celery
 python-decouple==3.8
-    # via -r requirements/base.in
+    # via -r base.in
 python-discovery==1.6.0
     # via virtualenv
 pytokens==0.4.1
@@ -194,7 +193,7 @@ pyyaml==6.0.3
     #   drf-spectacular
     #   pre-commit
 redis==8.1.0
-    # via -r requirements/base.in
+    # via -r base.in
 referencing==0.37.0
     # via
     #   jsonschema
@@ -211,9 +210,9 @@ rpds-py==2026.6.3
     #   jsonschema
     #   referencing
 ruff==0.16.5
-    # via -r requirements/dev.in
+    # via -r dev.in
 sentry-sdk==2.71.0
-    # via -r requirements/base.in
+    # via -r base.in
 six==1.17.0
     # via python-dateutil
 sortedcontainers==2.4.0
@@ -256,7 +255,7 @@ wcwidth==0.8.3
 wheel==0.48.0
     # via pip-tools
 whitenoise==6.8.2
-    # via -r requirements/base.in
+    # via -r base.in
 
 # The following packages are considered to be unsafe in a requirements file:
 # pip

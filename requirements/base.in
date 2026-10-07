@@ -11,7 +11,7 @@ djangorestframework==3.18.*
 djangorestframework-simplejwt==5.5.*
 drf-spectacular==0.30.*
 flower==2.0.*
-gunicorn==23.0.*
+gunicorn==26.2.*
 openpyxl==3.1.*
 psycopg[binary]==3.3.*
 python-decouple==3.8.*
