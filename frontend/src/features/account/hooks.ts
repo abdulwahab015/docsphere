@@ -1,7 +1,8 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-import type { PasswordChangePayload } from '@/api/types'
-import { changePassword } from '@/features/account/api'
+import type { CurrentUserUpdatePayload, PasswordChangePayload } from '@/api/types'
+import { changePassword, updateCurrentUser } from '@/features/account/api'
+import { authKeys } from '@/features/auth/query-keys'
 import { renewSession } from '@/features/auth/session'
 
 /** Changes the signed-in user's password. The API revokes every session they
@@ -10,5 +11,15 @@ export function useChangePassword() {
   return useMutation({
     mutationFn: async (payload: PasswordChangePayload) =>
       renewSession(await changePassword(payload)),
+  })
+}
+
+/** Changes the signed-in user's name. The response is the whole current user,
+ * so the session is updated in place and every screen shows the new name. */
+export function useUpdateName() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CurrentUserUpdatePayload) => updateCurrentUser(payload),
+    onSuccess: (user) => queryClient.setQueryData(authKeys.currentUser, user),
   })
 }

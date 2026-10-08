@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { actionErrorMessage } from '@/api/errors'
 import type { AccessLevel, RosterUser } from '@/api/types'
 import { ErrorState } from '@/components/ErrorState'
+import { PersonLabel } from '@/components/PersonLabel'
 import { SearchInput } from '@/components/SearchInput'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -14,6 +15,7 @@ import type { SharedResource } from '@/features/sharing/api'
 import { AccessLevelSelect } from '@/features/sharing/components/AccessLevelSelect'
 import { useShareResource } from '@/features/sharing/hooks'
 import { ACCESS_LEVEL_DESCRIPTIONS, ACCESS_LEVEL_LABELS } from '@/lib/access'
+import { displayName } from '@/lib/people'
 
 interface AddPersonFormProps {
   resource: SharedResource
@@ -29,18 +31,17 @@ export function AddPersonForm({ resource, grantedUserIds }: AddPersonFormProps) 
   const people = usePeopleSearch(search)
   const share = useShareResource(resource)
 
-  const addPerson = (person: RosterUser) =>
+  const addPerson = (person: RosterUser) => {
+    const who = displayName(person)
     share.mutate(
       { user: person.id, access_level: level },
       {
         onSuccess: (grant) =>
-          toast.success(
-            `${person.email} now has ${ACCESS_LEVEL_LABELS[grant.access_level]} access.`,
-          ),
-        onError: (error) =>
-          toast.error(actionErrorMessage(error, `Couldn't share with ${person.email}.`)),
+          toast.success(`${who} now has ${ACCESS_LEVEL_LABELS[grant.access_level]} access.`),
+        onError: (error) => toast.error(actionErrorMessage(error, `Couldn't share with ${who}.`)),
       },
     )
+  }
 
   return (
     <section className="flex flex-col gap-3">
@@ -49,8 +50,8 @@ export function AddPersonForm({ resource, grantedUserIds }: AddPersonFormProps) 
         <SearchInput
           value={search}
           onSearch={setSearch}
-          label="Search people by email"
-          placeholder="Search people by email"
+          label="Search people by name or email"
+          placeholder="Search people by name or email"
         />
         <div className="flex items-center gap-2">
           <Label htmlFor={levelId}>Add as</Label>
@@ -74,14 +75,16 @@ export function AddPersonForm({ resource, grantedUserIds }: AddPersonFormProps) 
             <ul aria-label="Matching people" className="divide-y">
               {people.data.results.map((person) => (
                 <li key={person.id} className="flex items-center gap-3 py-2">
-                  <span className="min-w-0 flex-1 truncate text-sm">{person.email}</span>
+                  <span className="min-w-0 flex-1 text-sm">
+                    <PersonLabel person={person} />
+                  </span>
                   {grantedUserIds.has(person.id) ? (
                     <span className="text-xs text-muted-foreground">Has access</span>
                   ) : (
                     <Button
                       variant="outline"
                       size="sm"
-                      aria-label={`Add ${person.email}`}
+                      aria-label={`Add ${displayName(person)}`}
                       disabled={share.isPending}
                       onClick={() => addPerson(person)}
                     >

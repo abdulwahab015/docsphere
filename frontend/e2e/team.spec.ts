@@ -35,10 +35,12 @@ async function invite(page: Page, email: string) {
   await expect(page.getByText(`Invitation sent to ${email}.`)).toBeVisible()
 }
 
-/** Opens an emailed invitation link in a browser nobody is signed in to. */
-async function openInvitation(browser: Browser, link: string) {
+/** Opens an emailed invitation link in a browser nobody is signed in to, and
+ * creates the account - with a name, when given. */
+async function openInvitation(browser: Browser, link: string, { name = '' } = {}) {
   const page = await (await browser.newContext()).newPage()
   await page.goto(link)
+  await page.getByLabel('Your name (optional)').fill(name)
   await page.getByLabel('Password', { exact: true }).fill(NEW_PASSWORD)
   await page.getByLabel('Confirm password').fill(NEW_PASSWORD)
   await page.getByRole('button', { name: 'Create account' }).click()
@@ -61,8 +63,11 @@ test.describe('invitations', () => {
       page.getByRole('row', { name: new RegExp(email) }).getByText('Pending'),
     ).toBeVisible()
 
-    const invitee = await openInvitation(browser, await emailedLink(email, '/accept-invite'))
+    const invitee = await openInvitation(browser, await emailedLink(email, '/accept-invite'), {
+      name: 'Ivy Invitee',
+    })
     await expect(invitee.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
+    await expect(invitee.getByRole('button', { name: 'Account menu' })).toContainText('Ivy Invitee')
     await invitee.context().close()
 
     await page.reload()
@@ -70,9 +75,9 @@ test.describe('invitations', () => {
       page.getByRole('row', { name: new RegExp(email) }).getByText('Accepted'),
     ).toBeVisible()
     await page.getByRole('tab', { name: 'Members' }).click()
-    await expect(
-      page.getByRole('row', { name: new RegExp(email) }).getByText('Member'),
-    ).toBeVisible()
+    const member = page.getByRole('row', { name: new RegExp(email) })
+    await expect(member.getByText('Member')).toBeVisible()
+    await expect(member.getByText('Ivy Invitee')).toBeVisible()
   })
 
   test('resending replaces the link, and revoking stops the new one', async ({ page, browser }) => {

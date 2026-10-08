@@ -8,7 +8,11 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from organizations.api.v1.serializers import OrganizationSummarySerializer
 from users.choices import InvitationStatus
-from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
+from users.constants import (
+    MAX_NAME_LENGTH,
+    MAX_PASSWORD_LENGTH,
+    MAX_PENDING_INVITATIONS_PER_ORG,
+)
 from users.models import Invitation
 from users.services import create_invitation, find_invitation_conflict
 from users.validators import validate_password_for_field
@@ -24,7 +28,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email"]
+        fields = ["id", "email", "name"]
         read_only_fields = fields
 
 
@@ -39,15 +43,18 @@ class UserDetailSerializer(UserSerializer):
 
 class CurrentUserSerializer(serializers.ModelSerializer):
     """The requesting user's own identity, role and organization - what a
-    client needs after login to decide which screens to offer."""
+    client needs after login to decide which screens to offer. The name is
+    the only part they may change themselves."""
 
     # Null for a superuser, who belongs to no organization.
     organization = OrganizationSummarySerializer(read_only=True, allow_null=True)
+    # Always in the response (empty until given); only ever updated partially.
+    name = serializers.CharField(max_length=MAX_NAME_LENGTH, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ["id", "email", "org_role", "organization"]
-        read_only_fields = fields
+        fields = ["id", "email", "name", "org_role", "organization"]
+        read_only_fields = ["id", "email", "org_role", "organization"]
 
 
 class OrganizationRoleSerializer(serializers.ModelSerializer):
@@ -101,6 +108,9 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
     invited_by_email = serializers.EmailField(
         source="invited_by.email", read_only=True, allow_null=True
     )
+    invited_by_name = serializers.CharField(
+        source="invited_by.name", read_only=True, allow_null=True
+    )
     status = serializers.ChoiceField(
         source="current_status", choices=InvitationStatus.choices, read_only=True
     )
@@ -113,6 +123,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "organization",
             "invited_by",
             "invited_by_email",
+            "invited_by_name",
             "status",
             "created",
             "sent_at",
@@ -156,6 +167,10 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 class InvitationAcceptSerializer(serializers.Serializer):
     token = serializers.CharField()
     password = serializers.CharField(write_only=True)
+    # Optional: it can be added later from the account settings.
+    name = serializers.CharField(
+        max_length=MAX_NAME_LENGTH, allow_blank=True, default=""
+    )
 
     def validate(self, attrs):
         try:

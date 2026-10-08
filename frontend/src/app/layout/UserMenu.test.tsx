@@ -16,6 +16,14 @@ describe('UserMenu', () => {
     expect(menuButton).toHaveTextContent('Admin · Acme')
   })
 
+  it('names the signed-in user once they have a name', () => {
+    renderRoute('/', { signedInAs: buildCurrentUser({ name: 'Ada Lovelace' }) })
+
+    const menuButton = screen.getByRole('button', { name: 'Account menu' })
+    expect(menuButton).toHaveTextContent('Ada Lovelace')
+    expect(menuButton).not.toHaveTextContent('ada@example.com')
+  })
+
   it('opens account settings', async () => {
     server.use(http.get(apiUrl('/users/'), () => HttpResponse.json({ count: 0, results: [] })))
     const { user } = renderRoute('/people', { signedInAs: buildCurrentUser() })

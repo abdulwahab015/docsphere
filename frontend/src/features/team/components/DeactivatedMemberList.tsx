@@ -6,6 +6,7 @@ import type { UserDetail } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { Pagination } from '@/components/Pagination'
+import { PersonLabel } from '@/components/PersonLabel'
 import { SearchInput } from '@/components/SearchInput'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,6 +22,7 @@ import {
 import { useDeactivatedUsers, useReactivateUser } from '@/features/team/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { ORG_ROLE_LABELS } from '@/lib/access'
+import { displayName } from '@/lib/people'
 
 const LOADING_ROWS = 3
 const COLUMN_COUNT = 3
@@ -31,10 +33,11 @@ export function DeactivatedMemberList() {
   const deactivated = useDeactivatedUsers({ page, search })
   const reactivate = useReactivateUser()
 
-  const reactivateMember = ({ id, email }: UserDetail) =>
-    reactivate.mutate(id, {
-      onSuccess: () => toast.success(`Reactivated ${email}. They can log in again.`),
-      onError: (error) => toast.error(actionErrorMessage(error, `Couldn't reactivate ${email}.`)),
+  const reactivateMember = (member: UserDetail) =>
+    reactivate.mutate(member.id, {
+      onSuccess: () => toast.success(`Reactivated ${displayName(member)}. They can log in again.`),
+      onError: (error) =>
+        toast.error(actionErrorMessage(error, `Couldn't reactivate ${displayName(member)}.`)),
     })
 
   return (
@@ -43,7 +46,7 @@ export function DeactivatedMemberList() {
         value={search}
         onSearch={setSearch}
         label="Search deactivated people"
-        placeholder="Search by email"
+        placeholder="Search by name or email"
       />
       {deactivated.isError ? (
         <ErrorState error={deactivated.error} onRetry={() => void deactivated.refetch()} />
@@ -53,7 +56,7 @@ export function DeactivatedMemberList() {
           title={search ? 'No matches' : 'No one is deactivated'}
           description={
             search
-              ? `No deactivated person's email matches "${search}".`
+              ? `No deactivated person matches "${search}".`
               : 'People you deactivate show up here, ready to be reactivated.'
           }
         />
@@ -63,7 +66,7 @@ export function DeactivatedMemberList() {
             <Table aria-busy={deactivated.isFetching}>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Email</TableHead>
+                  <TableHead>Person</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>
                     <span className="sr-only">Actions</span>
@@ -74,7 +77,9 @@ export function DeactivatedMemberList() {
                 {deactivated.data
                   ? deactivated.data.results.map((member) => (
                       <TableRow key={member.id}>
-                        <TableCell className="font-medium">{member.email}</TableCell>
+                        <TableCell>
+                          <PersonLabel person={member} />
+                        </TableCell>
                         <TableCell>{ORG_ROLE_LABELS[member.org_role]}</TableCell>
                         <TableCell className="text-right">
                           <Button

@@ -3,11 +3,14 @@ import type { UserEvent } from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 
 import { getAccessToken } from '@/api/access-token'
+import { MAX_NAME_LENGTH } from '@/lib/schemas'
+import { findAccountMenu } from '@/test/actions'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
 const PASSWORD_PATH = '/users/me/password/'
+const ME_PATH = '/users/me/'
 const CURRENT_PASSWORD = 'Old-Pass-123!'
 const NEW_PASSWORD = 'New-Pass-456!'
 
@@ -46,6 +49,74 @@ describe('AccountPage', () => {
     const values = screen.getAllByRole('definition').map((definition) => definition.textContent)
     expect(labels).toEqual(['Email', 'Role', 'Organization'])
     expect(values).toEqual(['ada@example.com', 'Member', 'Acme'])
+  })
+
+  describe('naming yourself', () => {
+    const ada = buildCurrentUser({ name: 'Ada' })
+
+    function serveNameChange(response: () => Response) {
+      const change = spyResolver(response)
+      server.use(http.patch(apiUrl(ME_PATH), change))
+      return change
+    }
+
+    it('saves a new name, which every screen shows at once', async () => {
+      const change = serveNameChange(() =>
+        HttpResponse.json(buildCurrentUser({ name: 'Ada Lovelace' })),
+      )
+      const { user } = renderRoute('/settings/account', { signedInAs: ada })
+      const field = screen.getByLabelText('Your name')
+      const save = screen.getByRole('button', { name: 'Save name' })
+      expect(field).toHaveValue('Ada')
+      expect(save).toBeDisabled()
+
+      await user.clear(field)
+      await user.type(field, '  Ada Lovelace ')
+      await user.click(save)
+
+      expect(await screen.findByText('Name saved.')).toBeInTheDocument()
+      expect(await change.mock.calls[0][0].request.json()).toEqual({ name: 'Ada Lovelace' })
+      expect(await findAccountMenu()).toHaveTextContent('Ada Lovelace')
+      expect(field).toHaveValue('Ada Lovelace')
+      expect(save).toBeDisabled()
+    })
+
+    it('removes the name, after which the email address stands in for it', async () => {
+      serveNameChange(() => HttpResponse.json(buildCurrentUser({ name: '' })))
+      const { user } = renderRoute('/settings/account', { signedInAs: ada })
+
+      await user.clear(screen.getByLabelText('Your name'))
+      await user.click(screen.getByRole('button', { name: 'Save name' }))
+
+      expect(await screen.findByText('Name removed.')).toBeInTheDocument()
+      expect(await findAccountMenu()).toHaveTextContent('ada@example.com')
+    })
+
+    it("shows the server's reason under the field", async () => {
+      serveNameChange(() =>
+        HttpResponse.json({ name: ['This name is not allowed.'] }, { status: 400 }),
+      )
+      const { user } = renderRoute('/settings/account', { signedInAs: ada })
+
+      await user.type(screen.getByLabelText('Your name'), ' Lovelace')
+      await user.click(screen.getByRole('button', { name: 'Save name' }))
+
+      expect(await screen.findByText('This name is not allowed.')).toBeInTheDocument()
+    })
+
+    it('refuses a name over the length limit without sending it', async () => {
+      const change = serveNameChange(() => HttpResponse.json(ada))
+      const { user } = renderRoute('/settings/account', { signedInAs: ada })
+
+      await user.click(screen.getByLabelText('Your name'))
+      await user.paste('x'.repeat(MAX_NAME_LENGTH))
+      await user.click(screen.getByRole('button', { name: 'Save name' }))
+
+      expect(
+        await screen.findByText(`Use at most ${MAX_NAME_LENGTH} characters.`),
+      ).toBeInTheDocument()
+      expect(change).not.toHaveBeenCalled()
+    })
   })
 
   describe('changing the password', () => {

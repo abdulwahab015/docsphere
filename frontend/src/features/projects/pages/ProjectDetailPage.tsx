@@ -18,6 +18,7 @@ import { ShareDialog } from '@/features/sharing/components/ShareDialog'
 import { useIdParam } from '@/hooks/use-id-param'
 import { can } from '@/lib/access'
 import { formatDate } from '@/lib/format'
+import { creatorName } from '@/lib/people'
 
 function BackToProjects() {
   return (
@@ -95,7 +96,7 @@ function ProjectOverview({ project }: { project: Project }) {
                 <AccessLevelBadge level={project.access_level} />
               </dd>
               <dt className="text-muted-foreground">Created by</dt>
-              <dd>{project.created_by_email}</dd>
+              <dd>{creatorName(project)}</dd>
               <dt className="text-muted-foreground">Created</dt>
               <dd>{formatDate(project.created)}</dd>
               <dt className="text-muted-foreground">Updated</dt>

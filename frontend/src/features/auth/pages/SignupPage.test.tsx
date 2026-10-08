@@ -56,9 +56,11 @@ describe('SignupPage', () => {
     expect(
       await screen.findByRole('heading', { name: 'Subscribe to continue' }),
     ).toBeInTheDocument()
+    // The name is optional; left blank, it's sent empty.
     expect(await signup.mock.calls[0][0].request.json()).toEqual({
       name: 'Acme',
       billing_email: null,
+      admin_name: '',
       admin_email: 'ada@example.com',
       admin_password: VALID_PASSWORD,
     })

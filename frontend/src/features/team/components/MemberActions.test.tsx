@@ -63,6 +63,23 @@ describe('MemberActions', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
   })
 
+  it('names the member in its menu, question and message', async () => {
+    const grace = buildUserDetail({ name: 'Grace Hopper' })
+    serveRoster([ADA, grace])
+    server.use(
+      http.patch(apiUrl('/users/2/role/'), () =>
+        HttpResponse.json({ ...grace, org_role: 'ADMIN' }),
+      ),
+    )
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    const confirm = await chooseAction(user, 'Grace Hopper', 'Make admin')
+    expect(confirm).toHaveAccessibleName('Make Grace Hopper an admin?')
+    await user.click(within(confirm).getByRole('button', { name: 'Make admin' }))
+
+    expect(await screen.findByText('Grace Hopper is now an admin.')).toBeInTheDocument()
+  })
+
   it('makes an admin a member after confirming', async () => {
     const lin = buildUserDetail({ id: 3, email: 'lin@example.com', org_role: 'ADMIN' })
     serveRoster([ADA, lin])

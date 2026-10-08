@@ -20,6 +20,7 @@ import { ShareDialog } from '@/features/sharing/components/ShareDialog'
 import { useIdParam } from '@/hooks/use-id-param'
 import { can, canRequestEditAccess } from '@/lib/access'
 import { formatDate } from '@/lib/format'
+import { creatorName } from '@/lib/people'
 
 export function DocumentPage() {
   const documentId = useIdParam('documentId')
@@ -100,7 +101,7 @@ function DocumentView({ document }: { document: Document }) {
                   )}
                 </dd>
                 <dt className="text-muted-foreground">Created by</dt>
-                <dd className="break-all">{document.created_by_email}</dd>
+                <dd className="break-all">{creatorName(document)}</dd>
                 <dt className="text-muted-foreground">Created</dt>
                 <dd>{formatDate(document.created)}</dd>
               </dl>

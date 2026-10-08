@@ -13,6 +13,7 @@ import {
 import { SidebarMenuButton, useSidebar } from '@/components/ui/sidebar'
 import { useLogout, useSignedInMember } from '@/features/auth/hooks'
 import { ORG_ROLE_LABELS } from '@/lib/access'
+import { displayName } from '@/lib/people'
 
 export function UserMenu() {
   const user = useSignedInMember()
@@ -24,7 +25,7 @@ export function UserMenu() {
       <DropdownMenuTrigger asChild>
         <SidebarMenuButton size="lg" aria-label="Account menu">
           <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-medium">{user.email}</span>
+            <span className="truncate font-medium">{displayName(user)}</span>
             <span className="truncate text-xs text-muted-foreground">
               {ORG_ROLE_LABELS[user.org_role]} · {user.organization.name}
             </span>

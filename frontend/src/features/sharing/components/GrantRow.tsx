@@ -7,12 +7,14 @@ import { PATHS } from '@/app/paths'
 import { actionErrorMessage } from '@/api/errors'
 import type { AccessLevel, Grant } from '@/api/types'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { PersonLabel } from '@/components/PersonLabel'
 import { Button } from '@/components/ui/button'
 import { useSignedInMember } from '@/features/auth/hooks'
 import type { SharedResource, SharedResourceKind } from '@/features/sharing/api'
 import { AccessLevelSelect } from '@/features/sharing/components/AccessLevelSelect'
 import { useRevokeAccess, useShareResource } from '@/features/sharing/hooks'
 import { ACCESS_LEVEL_LABELS, can } from '@/lib/access'
+import { displayName } from '@/lib/people'
 
 const LIST_PATHS: Record<SharedResourceKind, string> = {
   project: PATHS.projects,
@@ -47,7 +49,8 @@ export function GrantRow({
   const [confirmingRemoval, setConfirmingRemoval] = useState(false)
 
   const isSignedInUser = grant.user === signedInUser.id
-  const email = grant.user_email
+  const person = { name: grant.user_name, email: grant.user_email }
+  const who = displayName(person)
   const shownLevel = share.isPending ? share.variables.access_level : grant.access_level
 
   const changeLevel = (level: AccessLevel) =>
@@ -57,7 +60,7 @@ export function GrantRow({
         onSuccess: (updated) => {
           const label = ACCESS_LEVEL_LABELS[updated.access_level]
           toast.success(
-            isSignedInUser ? `You now have ${label} access.` : `${email} now has ${label} access.`,
+            isSignedInUser ? `You now have ${label} access.` : `${who} now has ${label} access.`,
           )
           setLevelToConfirm(null)
           if (isSignedInUser && !can(updated.access_level, 'RESHARE')) {
@@ -65,7 +68,7 @@ export function GrantRow({
           }
         },
         onError: (error) => {
-          toast.error(actionErrorMessage(error, `Couldn't change ${email}'s access.`))
+          toast.error(actionErrorMessage(error, `Couldn't change ${who}'s access.`))
           setLevelToConfirm(null)
         },
       },
@@ -84,7 +87,7 @@ export function GrantRow({
       onSuccess: () => {
         setConfirmingRemoval(false)
         if (!isSignedInUser) {
-          toast.success(`Removed ${email}.`)
+          toast.success(`Removed ${who}.`)
           onRevoked()
           return
         }
@@ -96,7 +99,7 @@ export function GrantRow({
         }
       },
       onError: (error) => {
-        toast.error(actionErrorMessage(error, `Couldn't remove ${email}.`))
+        toast.error(actionErrorMessage(error, `Couldn't remove ${who}.`))
         setConfirmingRemoval(false)
       },
     })
@@ -108,12 +111,11 @@ export function GrantRow({
 
   return (
     <li className="flex items-center gap-3 py-2">
-      <span className="min-w-0 flex-1 truncate text-sm">
-        {email}
-        {isSignedInUser && <span className="text-muted-foreground"> (you)</span>}
+      <span className="min-w-0 flex-1 text-sm">
+        <PersonLabel person={person} note={isSignedInUser ? '(you)' : undefined} />
       </span>
       <AccessLevelSelect
-        aria-label={`Access level for ${email}`}
+        aria-label={`Access level for ${who}`}
         value={shownLevel}
         onChange={onLevelChange}
         disabled={share.isPending || revoke.isPending}
@@ -125,13 +127,13 @@ export function GrantRow({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={`Remove ${email}`}
+            aria-label={`Remove ${who}`}
             disabled={share.isPending}
           >
             <XIcon aria-hidden />
           </Button>
         }
-        title={isSignedInUser ? 'Remove your own access?' : `Remove ${email}?`}
+        title={isSignedInUser ? 'Remove your own access?' : `Remove ${who}?`}
         description={removalConsequence}
         confirmLabel="Remove"
         destructive

@@ -25,12 +25,14 @@ describe('AcceptInvitePage', () => {
     )
     const { router, user } = renderRoute(INVITE_LINK)
 
+    await user.type(await screen.findByLabelText('Your name (optional)'), '  Ada Lovelace ')
     await choosePassword(user)
 
     expect(await findAccountMenu()).toHaveTextContent('ada@example.com')
     expect(router.state.location.pathname).toBe('/projects')
     expect(await accept.mock.calls[0][0].request.json()).toEqual({
       token: 'invite-token',
+      name: 'Ada Lovelace',
       password: PASSWORD,
     })
   })

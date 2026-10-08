@@ -61,6 +61,8 @@ export const TEAM_PROMOTE = seededAccount('promote@team.e2e.test')
 export const TEAM_LEAVER = seededAccount('leaver@team.e2e.test')
 export const TEAM_FORGETFUL = seededAccount('forgetful@team.e2e.test')
 export const ACCOUNT_MEMBER = seededAccount('member@account.e2e.test')
+export const NAMES_ADMIN = seededAccount('admin@names.e2e.test')
+export const NAMES_MEMBER = seededAccount('member@names.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -86,6 +88,12 @@ export async function logInElsewhere(browser: Browser, account: Account) {
   const page = await (await browser.newContext()).newPage()
   await logIn(page, account)
   return page
+}
+
+export async function openAccountSettings(page: Page) {
+  await page.getByRole('button', { name: 'Account menu' }).click()
+  await page.getByRole('menuitem', { name: 'Account settings' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible()
 }
 
 export async function logOut(page: Page) {

@@ -11,4 +11,7 @@ INVITATION_TOKEN_BYTES = 32
 
 MAX_PASSWORD_LENGTH = 128
 
+# The same cap Django gives its own first and last name fields.
+MAX_NAME_LENGTH = 150
+
 MAX_BULK_INVITE_ROWS = 500

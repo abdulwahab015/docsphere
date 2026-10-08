@@ -14,6 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatDate } from '@/lib/format'
+import { creatorName } from '@/lib/people'
 import { SECONDARY_COLUMN } from '@/lib/table-columns'
 import { cn } from '@/lib/utils'
 
@@ -65,7 +66,7 @@ export function DocumentsTable({
                     <AccessLevelBadge level={document.access_level} />
                   </TableCell>
                   <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
-                    {document.created_by_email}
+                    {creatorName(document)}
                   </TableCell>
                   <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                     {formatDate(document.modified)}

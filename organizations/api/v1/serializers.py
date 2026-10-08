@@ -6,6 +6,7 @@ from rest_framework import serializers
 from organizations.models import Organization
 from organizations.validators import validate_unique_billing_email
 from subscriptions.utils import cancels_at_period_end, get_period_end, is_past_due
+from users.constants import MAX_NAME_LENGTH
 from users.validators import validate_password_for_field
 
 User = get_user_model()
@@ -84,6 +85,10 @@ class OrganizationSignupSerializer(serializers.Serializer):
     billing_email = serializers.EmailField(required=False, allow_null=True)
     admin_email = serializers.EmailField()
     admin_password = serializers.CharField(write_only=True)
+    # Optional: it can be added later from the account settings.
+    admin_name = serializers.CharField(
+        max_length=MAX_NAME_LENGTH, allow_blank=True, default=""
+    )
 
     def validate_billing_email(self, value):
         return validate_unique_billing_email(value)

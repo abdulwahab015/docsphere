@@ -37,6 +37,21 @@ describe('DeactivatedMemberList', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
   })
 
+  it('names the person, and names them when reactivating', async () => {
+    const named = { ...LEAVER, name: 'Lee Leaver' }
+    serveDeactivated([named])
+    server.use(http.post(apiUrl('/users/5/reactivate/'), () => HttpResponse.json(named)))
+    const { user } = renderRoute(DEACTIVATED_URL, { signedInAs: admin })
+
+    expect(await screen.findByText('Lee Leaver')).toBeInTheDocument()
+    expect(screen.getByText('leaver@example.com')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Reactivate' }))
+
+    expect(
+      await screen.findByText('Reactivated Lee Leaver. They can log in again.'),
+    ).toBeInTheDocument()
+  })
+
   it('searches by email', async () => {
     const list = serveDeactivated([LEAVER])
     const { user } = renderRoute(DEACTIVATED_URL, { signedInAs: admin })

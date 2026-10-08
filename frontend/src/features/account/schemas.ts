@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
 import { PASSWORDS_DIFFER, passwordSchema } from '@/features/auth/schemas'
+import { nameSchema } from '@/lib/schemas'
+
+export const nameFormSchema = z.object({ name: nameSchema })
 
 export const changePasswordSchema = z
   .object({

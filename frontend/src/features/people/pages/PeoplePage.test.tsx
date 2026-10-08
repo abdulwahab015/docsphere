@@ -2,17 +2,16 @@ import { screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import type { RosterUser } from '@/api/types'
-import { buildCurrentUser } from '@/test/factories'
+import { buildCurrentUser, buildRosterUser } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
 const PEOPLE_PATH = '/users/'
 
 function buildPeople(count: number, firstId = 1): RosterUser[] {
-  return Array.from({ length: count }, (_unused, index) => ({
-    id: firstId + index,
-    email: `person${firstId + index}@example.com`,
-  }))
+  return Array.from({ length: count }, (_unused, index) =>
+    buildRosterUser({ id: firstId + index, email: `person${firstId + index}@example.com` }),
+  )
 }
 
 /** Serves `/users/` from `people`, honouring `page` and `search` like DRF. */
@@ -21,7 +20,9 @@ function servePeople(people: RosterUser[]) {
     const params = new URL(request.url).searchParams
     const search = params.get('search') ?? ''
     const page = Number(params.get('page') ?? 1)
-    const matches = people.filter((person) => person.email.includes(search))
+    const matches = people.filter(
+      (person) => person.email.includes(search) || person.name.toLowerCase().includes(search),
+    )
     const results = matches.slice((page - 1) * 20, page * 20)
     if (page > 1 && !results.length) {
       return HttpResponse.json({ detail: 'Invalid page.' }, { status: 404 })
@@ -39,7 +40,7 @@ function lastRequestParams(list: ReturnType<typeof servePeople>) {
 
 describe('PeoplePage', () => {
   it("lists the organization's members and marks the signed-in user", async () => {
-    servePeople([{ id: 1, email: 'ada@example.com' }, ...buildPeople(2, 2)])
+    servePeople([buildRosterUser({ id: 1, email: 'ada@example.com' }), ...buildPeople(2, 2)])
     renderRoute('/people', { signedInAs: buildCurrentUser() })
 
     expect(await screen.findByText('Showing 1–3 of 3')).toBeInTheDocument()
@@ -49,8 +50,41 @@ describe('PeoplePage', () => {
     expect(document.title).toBe('People · DocSphere')
   })
 
+  it("shows each person's name, with their email address beneath it", async () => {
+    servePeople([
+      buildRosterUser({ id: 1, email: 'ada@example.com' }),
+      buildRosterUser({ id: 2, email: 'grace@example.com', name: 'Grace Hopper' }),
+    ])
+    renderRoute('/people', { signedInAs: buildCurrentUser() })
+
+    expect(await screen.findByText('Showing 1–2 of 2')).toBeInTheDocument()
+    const table = screen.getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Person' })).toBeInTheDocument()
+    const rows = within(table).getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('ada@example.comYou')
+    expect(rows[1]).toHaveTextContent('Grace Hoppergrace@example.com')
+  })
+
+  it('finds people by name too', async () => {
+    const list = servePeople([
+      buildRosterUser({ id: 1, email: 'ada@example.com' }),
+      buildRosterUser({ id: 2, email: 'grace@example.com', name: 'Grace Hopper' }),
+    ])
+    const { user } = renderRoute('/people', { signedInAs: buildCurrentUser() })
+    await screen.findByRole('table')
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search people' }), 'hopper')
+
+    expect(await screen.findByText('Showing 1–1 of 1')).toBeInTheDocument()
+    expect(lastRequestParams(list)?.get('search')).toBe('hopper')
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument()
+  })
+
   it('searches by email once typing pauses, and keeps the search in the URL', async () => {
-    const list = servePeople([{ id: 1, email: 'ada@example.com' }, ...buildPeople(3, 2)])
+    const list = servePeople([
+      buildRosterUser({ id: 1, email: 'ada@example.com' }),
+      ...buildPeople(3, 2),
+    ])
     const { router, user } = renderRoute('/people', { signedInAs: buildCurrentUser() })
     await screen.findByRole('table')
 
@@ -113,7 +147,7 @@ describe('PeoplePage', () => {
     renderRoute('/people?search=nobody', { signedInAs: buildCurrentUser() })
 
     expect(await screen.findByRole('heading', { name: 'No matches' })).toBeInTheDocument()
-    expect(screen.getByText(`No one's email matches "nobody".`)).toBeInTheDocument()
+    expect(screen.getByText(`No one matches "nobody".`)).toBeInTheDocument()
   })
 
   it('says so when the organization has no members to list', async () => {

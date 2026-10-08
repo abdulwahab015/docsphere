@@ -23,7 +23,7 @@ async function openShareDialog(page: Page) {
 async function shareWith(page: Page, email: string, level: Level) {
   const dialog = await openShareDialog(page)
   await dialog.getByLabel('Add as').selectOption(LEVEL_VALUES[level])
-  await dialog.getByLabel('Search people by email').fill(email)
+  await dialog.getByLabel('Search people by name or email').fill(email)
   await dialog.getByRole('button', { name: `Add ${email}` }).click()
   await expect(page.getByText(`${email} now has ${level} access.`)).toBeVisible()
   await expect(

@@ -3,6 +3,7 @@ import type { components } from '@/api/schema'
 type Schemas = components['schemas']
 
 export type CurrentUser = Schemas['CurrentUser']
+export type CurrentUserUpdatePayload = Pick<Schemas['PatchedCurrentUser'], 'name'>
 export type OrgRole = Schemas['OrgRoleEnum']
 export type OrganizationSummary = Schemas['OrganizationSummary']
 export type Organization = Schemas['Organization']

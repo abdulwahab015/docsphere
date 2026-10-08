@@ -7,13 +7,14 @@ from .models import Invitation, User
 class UserAdmin(admin.ModelAdmin):
     list_display = (
         "email",
+        "name",
         "organization",
         "org_role",
         "is_active",
         "is_staff",
     )
     list_filter = ("organization", "org_role", "is_active")
-    search_fields = ("email",)
+    search_fields = ("email", "name")
 
 
 @admin.register(Invitation)

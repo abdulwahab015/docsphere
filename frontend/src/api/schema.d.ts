@@ -898,9 +898,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * @description The requesting user's own profile. Deliberately reachable without an
-         *     active subscription, so a client can tell an admin (send to billing) from
-         *     a member (ask your admin) before any gated call returns 402.
+         * @description The requesting user's own profile, and changing their name (the only
+         *     part they may edit). Deliberately reachable without an active
+         *     subscription, so a client can tell an admin (send to billing) from a
+         *     member (ask your admin) before any gated call returns 402.
          */
         get: operations["api_v1_users_me_retrieve"];
         put?: never;
@@ -908,7 +909,13 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * @description The requesting user's own profile, and changing their name (the only
+         *     part they may edit). Deliberately reachable without an active
+         *     subscription, so a client can tell an admin (send to billing) from a
+         *     member (ask your admin) before any gated call returns 402.
+         */
+        patch: operations["api_v1_users_me_partial_update"];
         trace?: never;
     };
     "/api/v1/users/me/password/": {
@@ -989,12 +996,14 @@ export interface components {
         };
         /**
          * @description The requesting user's own identity, role and organization - what a
-         *     client needs after login to decide which screens to offer.
+         *     client needs after login to decide which screens to offer. The name is
+         *     the only part they may change themselves.
          */
         CurrentUser: {
             readonly id: number;
             /** Format: email */
             readonly email: string;
+            name: string;
             readonly org_role: components["schemas"]["OrgRoleEnum"];
             readonly organization: components["schemas"]["OrganizationSummary"] | null;
         };
@@ -1017,6 +1026,7 @@ export interface components {
             readonly created_by: number;
             /** Format: email */
             readonly created_by_email: string;
+            readonly created_by_name: string;
             readonly organization: number;
             readonly project: number | null;
             /** Format: date-time */
@@ -1035,9 +1045,11 @@ export interface components {
             readonly requested_by: number;
             /** Format: email */
             readonly requested_by_email: string;
+            readonly requested_by_name: string;
             readonly reviewed_by: number | null;
             /** Format: email */
             readonly reviewed_by_email: string | null;
+            readonly reviewed_by_name: string | null;
             /** @default PENDING */
             readonly status: components["schemas"]["DocumentAccessRequestStatusEnum"];
             /** Format: date-time */
@@ -1069,6 +1081,7 @@ export interface components {
             readonly created_by: number;
             /** Format: email */
             readonly created_by_email: string;
+            readonly created_by_name: string;
             readonly organization: number;
             project?: number | null;
             /** Format: date-time */
@@ -1082,11 +1095,14 @@ export interface components {
             readonly user: number;
             /** Format: email */
             readonly user_email: string;
+            readonly user_name: string;
             readonly access_level: components["schemas"]["AccessLevelEnum"];
         };
         InvitationAccept: {
             token: string;
             password: string;
+            /** @default  */
+            name: string;
         };
         /**
          * @description What a bulk upload did: how many invitations were sent, and every row
@@ -1116,6 +1132,7 @@ export interface components {
             readonly invited_by: number | null;
             /** Format: email */
             readonly invited_by_email: string | null;
+            readonly invited_by_name: string | null;
             readonly status: components["schemas"]["InvitationCreateStatusEnum"];
             /** Format: date-time */
             readonly created: string;
@@ -1174,6 +1191,8 @@ export interface components {
             /** Format: email */
             admin_email: string;
             admin_password: string;
+            /** @default  */
+            admin_name: string;
         };
         /**
          * @description The slice of an organization any member may see about their own org:
@@ -1344,6 +1363,19 @@ export interface components {
             email: string;
         };
         /**
+         * @description The requesting user's own identity, role and organization - what a
+         *     client needs after login to decide which screens to offer. The name is
+         *     the only part they may change themselves.
+         */
+        PatchedCurrentUser: {
+            readonly id?: number;
+            /** Format: email */
+            readonly email?: string;
+            name?: string;
+            readonly org_role?: components["schemas"]["OrgRoleEnum"];
+            readonly organization?: components["schemas"]["OrganizationSummary"] | null;
+        };
+        /**
          * @description ``created_by``, ``organization`` and ``project`` are always set server-side
          *     in the view (the latter after explicit org-scoped validation, and may be left
          *     unset entirely for a personal document) and never accepted from the client
@@ -1362,6 +1394,7 @@ export interface components {
             readonly created_by?: number;
             /** Format: email */
             readonly created_by_email?: string;
+            readonly created_by_name?: string;
             readonly organization?: number;
             readonly project?: number | null;
             /** Format: date-time */
@@ -1401,6 +1434,7 @@ export interface components {
             readonly created_by?: number;
             /** Format: email */
             readonly created_by_email?: string;
+            readonly created_by_name?: string;
             readonly organization?: number;
             /** Format: date-time */
             readonly created?: string;
@@ -1436,6 +1470,7 @@ export interface components {
             readonly created_by: number;
             /** Format: email */
             readonly created_by_email: string;
+            readonly created_by_name: string;
             readonly organization: number;
             /** Format: date-time */
             readonly created: string;
@@ -1448,6 +1483,7 @@ export interface components {
             readonly user: number;
             /** Format: email */
             readonly user_email: string;
+            readonly user_name: string;
             readonly access_level: components["schemas"]["AccessLevelEnum"];
         };
         RosterUser: components["schemas"]["UserDetail"] | components["schemas"]["User"];
@@ -1488,6 +1524,7 @@ export interface components {
             readonly id: number;
             /** Format: email */
             readonly email: string;
+            readonly name: string;
         };
         /**
          * @description Adds role and join-date - admin-only, for actual user management
@@ -1497,6 +1534,7 @@ export interface components {
             readonly id: number;
             /** Format: email */
             readonly email: string;
+            readonly name: string;
             readonly org_role: components["schemas"]["OrgRoleEnum"];
             /** Format: date-time */
             readonly created: string;
@@ -2881,6 +2919,31 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUser"];
+                };
+            };
+        };
+    };
+    api_v1_users_me_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedCurrentUser"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedCurrentUser"];
+                "multipart/form-data": components["schemas"]["PatchedCurrentUser"];
+            };
+        };
         responses: {
             200: {
                 headers: {

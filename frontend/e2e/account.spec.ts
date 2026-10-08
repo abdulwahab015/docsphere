@@ -7,15 +7,10 @@ import {
   logIn,
   logInElsewhere,
   logOut,
+  openAccountSettings,
 } from './fixtures'
 
 const NEW_PASSWORD = 'Changed-E2e-Pass-789!'
-
-async function openAccountSettings(page: Page) {
-  await page.getByRole('button', { name: 'Account menu' }).click()
-  await page.getByRole('menuitem', { name: 'Account settings' }).click()
-  await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible()
-}
 
 async function changePassword(page: Page, current: string, next: string) {
   await page.getByLabel('Current password').fill(current)

@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useChangeRole, useDeactivateUser, useSoleOwnership } from '@/features/team/hooks'
+import { displayName } from '@/lib/people'
 
 type PendingAction = 'role' | 'deactivate'
 
@@ -42,7 +43,7 @@ export function MemberActions({ member }: { member: UserDetail }) {
   const deactivate = useDeactivateUser()
   const soleOwnership = useSoleOwnership(member.id, { enabled: confirming === 'deactivate' })
   const ownershipWarning = soleOwnership.data && soleOwnershipWarning(soleOwnership.data)
-  const { email } = member
+  const who = displayName(member)
   const isAdmin = member.org_role === 'ADMIN'
 
   const close = () => setConfirming(null)
@@ -56,29 +57,27 @@ export function MemberActions({ member }: { member: UserDetail }) {
       { userId: member.id, orgRole: isAdmin ? 'MEMBER' : 'ADMIN' },
       {
         onSuccess: (updated) => {
-          toast.success(
-            `${email} is now ${updated.org_role === 'ADMIN' ? 'an admin' : 'a member'}.`,
-          )
+          toast.success(`${who} is now ${updated.org_role === 'ADMIN' ? 'an admin' : 'a member'}.`)
           close()
         },
-        onError: reportFailure(`Couldn't change ${email}'s role.`),
+        onError: reportFailure(`Couldn't change ${who}'s role.`),
       },
     )
 
   const deactivateMember = () =>
     deactivate.mutate(member.id, {
       onSuccess: () => {
-        toast.success(`Deactivated ${email}.`)
+        toast.success(`Deactivated ${who}.`)
         close()
       },
-      onError: reportFailure(`Couldn't deactivate ${email}.`),
+      onError: reportFailure(`Couldn't deactivate ${who}.`),
     })
 
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${email}`}>
+          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${who}`}>
             <EllipsisIcon aria-hidden />
           </Button>
         </DropdownMenuTrigger>
@@ -94,7 +93,7 @@ export function MemberActions({ member }: { member: UserDetail }) {
       <ConfirmDialog
         open={confirming === 'role'}
         onOpenChange={close}
-        title={isAdmin ? `Make ${email} a member?` : `Make ${email} an admin?`}
+        title={isAdmin ? `Make ${who} a member?` : `Make ${who} an admin?`}
         description={
           isAdmin
             ? "They'll no longer be able to manage people, billing or organization settings."
@@ -107,7 +106,7 @@ export function MemberActions({ member }: { member: UserDetail }) {
       <ConfirmDialog
         open={confirming === 'deactivate'}
         onOpenChange={close}
-        title={`Deactivate ${email}?`}
+        title={`Deactivate ${who}?`}
         description={
           <>
             They&apos;ll be signed out and can&apos;t log in until an admin reactivates them. What
