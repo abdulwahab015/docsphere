@@ -114,6 +114,10 @@ echo "Django, behind the same origin"
 check_django "$BASE_URL"
 check "redirects plain HTTP to HTTPS" "location: https://" "$(headers "$BASE_URL/healthz/")"
 check "serves the admin" "302" "$(status "${VIA_HTTPS[@]}" "$BASE_URL/${DJANGO_ADMIN_PATH:-admin/}")"
+# Invitations and password resets must leave the server, not land in its log.
+check "sends email over SMTP" "[django.core.mail.backends.smtp.EmailBackend]" \
+  "[$("${COMPOSE[@]}" exec -T web python manage.py shell -v 0 -c \
+    'from django.conf import settings; print(settings.EMAIL_BACKEND)' 2>/dev/null | tr -d '\r')]"
 
 echo
 echo "Signing up through the API"

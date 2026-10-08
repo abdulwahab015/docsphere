@@ -1,5 +1,6 @@
 from celery import shared_task
 from django.core.mail import send_mail
+from django.core.mail.backends import console
 from django.template import Context
 from django.template.loader import get_template
 
@@ -55,3 +56,22 @@ def email_task(task_function):
         retry_backoff_max=EMAIL_RETRY_BACKOFF_MAX_SECONDS,
         max_retries=EMAIL_MAX_RETRIES,
     )(task_function)
+
+
+class ConsoleEmailBackend(console.EmailBackend):
+    """Prints each email as it was written, for local development.
+
+    Django's own console backend prints the encoded message, and a text body
+    with a line over 78 characters is encoded quoted-printable: every link
+    then shows as ``token=3D...``, broken across two lines, and can't be
+    pasted into a browser. A mail client decodes that; a terminal doesn't.
+    """
+
+    def write_message(self, message):
+        self.stream.write(
+            f"From: {message.from_email}\n"
+            f"To: {', '.join(message.to)}\n"
+            f"Subject: {message.subject}\n\n"
+            f"{message.body}\n"
+        )
+        self.stream.write("-" * 79 + "\n")

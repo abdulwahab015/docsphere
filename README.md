@@ -1,5 +1,11 @@
 # DocSphere
 
+Organizations store, manage and share documents among their members, with access sold as a
+Stripe subscription. A Django REST API and a React app.
+
+**Working on it:** [CONTRIBUTING.md](CONTRIBUTING.md) covers running it locally, the tests,
+demo accounts, Stripe test mode, and the rules the code follows.
+
 ## Deploying
 
 `docker-compose.yml` is the production stack:
@@ -125,4 +131,4 @@ restore round trip. It includes the read-only checks every deploy runs
 (`scripts/smoke-test.sh`). CI runs it on every pull request, and lints the workflows and
 shell scripts (`make lint-scripts`).
 
-For local development, see `frontend/README.md` and `make help`.
+For local development, see [CONTRIBUTING.md](CONTRIBUTING.md).
