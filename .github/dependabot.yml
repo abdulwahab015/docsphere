@@ -27,6 +27,20 @@ updates:
       # openapi-typescript only supports TypeScript 5 so far.
       - dependency-name: typescript
         update-types: [version-update:semver-major]
+      # Node's types follow the Node version we run (frontend/.nvmrc), not
+      # the newest release.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+      # Vitest (an optional peer) still requires MSW 2, and MSW 3 lets jsdom
+      # make real CORS requests to the test API, which needs the test setup
+      # reworked. Revisit once Vitest's peer range allows 3.
+      - dependency-name: msw
+        update-types: [version-update:semver-major]
+      # jsdom 30 made the unit tests about a quarter slower, enough for tests
+      # that wait on several requests to miss their 3s wait under load.
+      # Revisit with a later release.
+      - dependency-name: jsdom
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /

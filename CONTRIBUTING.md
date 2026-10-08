@@ -28,7 +28,7 @@ it, and the rules the code follows.
 | Tool | Version | Needed for |
 | --- | --- | --- |
 | Python | 3.12 | the backend |
-| Node | 22 (`frontend/.nvmrc`) | the frontend |
+| Node | 22.22 or later 22.x (`frontend/.nvmrc`) | the frontend |
 | Docker | any recent | optional: `make test-pg`, `make docker-smoke`, `make lint-scripts`, `make up` |
 | Stripe CLI | any recent | optional: trying real Stripe test-mode payments |
 
