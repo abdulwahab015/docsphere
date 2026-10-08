@@ -122,6 +122,23 @@ class OrganizationSignupAPITests(APITestCase):
         self.assertEqual(user.organization, organization)
         self.assertEqual(user.org_role, "ADMIN")
         self.assertTrue(user.check_password("Str0ng-New-Pass!"))
+        self.assertEqual(user.name, "")
+
+    def test_signup_records_the_admins_name(self):
+        # One query fewer than above: no billing email to check for uniqueness.
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                reverse("organization_signup"),
+                {
+                    "name": "Acme Inc",
+                    "admin_email": "admin@acme.test",
+                    "admin_password": "Str0ng-New-Pass!",
+                    "admin_name": " Grace Hopper ",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(User.objects.get(email="admin@acme.test").name, "Grace Hopper")
 
     def test_signup_without_billing_email_succeeds(self):
         response = self.client.post(

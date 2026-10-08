@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { organizationNameSchema } from '@/features/organization/schemas'
-import { emailSchema, optionalEmailSchema } from '@/lib/schemas'
+import { emailSchema, optionalEmailSchema, nameSchema } from '@/lib/schemas'
 
 // Mirrors the backend's password policy so most mistakes are caught before a
 // round trip. The server stays authoritative: it also rejects common passwords
@@ -32,6 +32,7 @@ export const signupSchema = z
   .object({
     name: organizationNameSchema,
     billing_email: optionalEmailSchema,
+    admin_name: nameSchema,
     admin_email: emailSchema,
     admin_password: passwordSchema,
     confirm_password: z.string(),
@@ -49,8 +50,12 @@ export const resetPasswordSchema = z
   })
   .refine((values) => values.new_password === values.confirm_password, PASSWORDS_DIFFER)
 
+/** Shown under the optional name field when an account is created. */
+export const NAME_HINT = 'How your team sees you. You can change it later in your account settings.'
+
 export const acceptInvitationSchema = z
   .object({
+    name: nameSchema,
     password: passwordSchema,
     confirm_password: z.string(),
   })

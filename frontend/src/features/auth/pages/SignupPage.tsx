@@ -8,7 +8,7 @@ import { TextField } from '@/components/form/TextField'
 import { TextLink } from '@/components/TextLink'
 import { AuthCard } from '@/features/auth/components/AuthCard'
 import { useSignup } from '@/features/auth/hooks'
-import { PASSWORD_HINT, signupSchema } from '@/features/auth/schemas'
+import { NAME_HINT, PASSWORD_HINT, signupSchema } from '@/features/auth/schemas'
 import { applyApiErrors } from '@/lib/form-errors'
 
 export function SignupPage() {
@@ -18,6 +18,7 @@ export function SignupPage() {
     defaultValues: {
       name: '',
       billing_email: '',
+      admin_name: '',
       admin_email: '',
       admin_password: '',
       confirm_password: '',
@@ -26,11 +27,12 @@ export function SignupPage() {
   const { errors } = form.formState
 
   // On success RequireGuest sees the new session and redirects.
-  const onSubmit = form.handleSubmit(({ name, billing_email, admin_email, admin_password }) =>
-    signup.mutate(
-      { name, billing_email: billing_email || null, admin_email, admin_password },
-      { onError: (error) => applyApiErrors(error, form) },
-    ),
+  const onSubmit = form.handleSubmit(
+    ({ name, billing_email, admin_name, admin_email, admin_password }) =>
+      signup.mutate(
+        { name, billing_email: billing_email || null, admin_name, admin_email, admin_password },
+        { onError: (error) => applyApiErrors(error, form) },
+      ),
   )
 
   return (
@@ -58,6 +60,13 @@ export function SignupPage() {
           description="Where invoices go. Leave blank to decide later."
           error={errors.billing_email?.message}
           {...form.register('billing_email')}
+        />
+        <TextField
+          label="Your name (optional)"
+          autoComplete="name"
+          description={NAME_HINT}
+          error={errors.admin_name?.message}
+          {...form.register('admin_name')}
         />
         <TextField
           label="Your email"

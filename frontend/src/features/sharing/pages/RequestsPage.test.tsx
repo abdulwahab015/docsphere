@@ -83,6 +83,22 @@ describe('RequestsPage', () => {
       expect(list).toHaveBeenCalledTimes(1)
     })
 
+    it('names the person asking, and names them when answering', async () => {
+      const fromGrace = buildAccessRequest({ requested_by_name: 'Grace Hopper' })
+      serveList(INCOMING_PATH, [fromGrace])
+      serveReview(fromGrace, 'approve', () =>
+        HttpResponse.json({ ...fromGrace, status: 'APPROVED' }),
+      )
+      const { user } = renderRoute('/requests', { signedInAs })
+
+      await screen.findByRole('link', { name: 'Findings' })
+      expect(rowFor('Findings').getByText('Grace Hopper')).toBeInTheDocument()
+      expect(rowFor('Findings').getByText('grace@example.com')).toBeInTheDocument()
+      await user.click(rowFor('Findings').getByRole('button', { name: 'Approve' }))
+
+      expect(await screen.findByText('Grace Hopper can now edit "Findings".')).toBeInTheDocument()
+    })
+
     it('denies a request', async () => {
       serveList(INCOMING_PATH, [FROM_GRACE])
       const deny = serveReview(FROM_GRACE, 'deny', () =>
@@ -181,6 +197,24 @@ describe('RequestsPage', () => {
       expect(rowFor('Findings').getByText('Pending')).toBeInTheDocument()
       expect(rowFor('Findings').getByText('—')).toBeInTheDocument()
       expect(router.state.location.search).toBe('?tab=sent')
+    })
+
+    it('names whoever answered', async () => {
+      serveList(INCOMING_PATH, [])
+      serveList(MINE_PATH, [
+        buildAccessRequest({
+          status: 'APPROVED',
+          reviewed_by: 4,
+          reviewed_by_email: 'owner@example.com',
+          reviewed_by_name: 'Olive Owner',
+        }),
+      ])
+      const { user } = renderRoute('/requests', { signedInAs })
+
+      await user.click(await screen.findByRole('tab', { name: 'Sent' }))
+
+      expect(await screen.findByRole('link', { name: 'Findings' })).toBeInTheDocument()
+      expect(rowFor('Findings').getByText('Olive Owner')).toBeInTheDocument()
     })
 
     it('opens on the sent tab from its link, and goes back to incoming', async () => {

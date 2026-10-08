@@ -69,7 +69,7 @@ def send_access_request_created_email_task(access_request_id):
         "projects/email/access_request_created",
         {
             "document_title": access_request.document.title,
-            "requested_by": access_request.requested_by.email,
+            "requested_by": access_request.requested_by.name_and_email,
         },
         owner_emails,
     )

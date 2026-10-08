@@ -23,6 +23,7 @@ import {
 import { useInvitations, useResendInvitation, useRevokeInvitation } from '@/features/team/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { formatDate } from '@/lib/format'
+import { displayName } from '@/lib/people'
 import { SECONDARY_COLUMN } from '@/lib/table-columns'
 import { cn } from '@/lib/utils'
 
@@ -109,7 +110,12 @@ export function InvitationList() {
                       </Badge>
                     </TableCell>
                     <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
-                      {invitation.invited_by_email ?? '—'}
+                      {invitation.invited_by_email
+                        ? displayName({
+                            name: invitation.invited_by_name,
+                            email: invitation.invited_by_email,
+                          })
+                        : '—'}
                     </TableCell>
                     <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {formatDate(invitation.sent_at)}

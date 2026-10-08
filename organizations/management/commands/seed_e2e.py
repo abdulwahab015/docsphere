@@ -76,6 +76,7 @@ class Command(BaseCommand):
         users_by_email = {
             user_spec["email"]: UserFactory(
                 email=user_spec["email"],
+                name=user_spec.get("name", ""),
                 org_role=user_spec["role"],
                 organization=organization,
                 password=password,

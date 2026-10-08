@@ -23,6 +23,7 @@ import { CreateProjectDialog } from '@/features/projects/components/CreateProjec
 import { useProjects } from '@/features/projects/hooks'
 import { useListParams } from '@/hooks/use-list-params'
 import { formatDate } from '@/lib/format'
+import { creatorName } from '@/lib/people'
 import { SECONDARY_COLUMN } from '@/lib/table-columns'
 import { cn } from '@/lib/utils'
 
@@ -103,7 +104,7 @@ export function ProjectsPage() {
                           <AccessLevelBadge level={project.access_level} />
                         </TableCell>
                         <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
-                          {project.created_by_email}
+                          {creatorName(project)}
                         </TableCell>
                         <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                           {formatDate(project.modified)}

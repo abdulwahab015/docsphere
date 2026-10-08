@@ -84,7 +84,7 @@ test.describe('on a phone-sized screen', () => {
     await logIn(page, ACME_ADMIN)
     await page.goto('/people')
     const table = page.getByRole('table')
-    await expect(table.getByRole('columnheader', { name: 'Email' })).toBeVisible()
+    await expect(table.getByRole('columnheader', { name: 'Person' })).toBeVisible()
     await expect(table.getByRole('columnheader', { name: 'Role' })).toBeVisible()
     await expect(table.getByRole('columnheader', { name: 'Joined' })).toBeHidden()
 

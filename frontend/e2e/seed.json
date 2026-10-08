@@ -318,6 +318,28 @@
           "role": "MEMBER"
         }
       ]
+    },
+    {
+      "name": "Names E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@names.e2e.test",
+          "role": "ADMIN",
+          "name": "Ada Admin"
+        },
+        {
+          "email": "member@names.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Launch",
+          "visibility": "PRIVATE",
+          "owner": "admin@names.e2e.test"
+        }
+      ]
     }
   ]
 }

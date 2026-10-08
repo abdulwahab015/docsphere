@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from core.models import TimeStampedModel
 from users.choices import InvitationStatus, OrganizationRole
+from users.constants import MAX_NAME_LENGTH
 from users.fields import EmailField
 from users.managers import InvitationManager, UserManager
 
@@ -23,6 +24,10 @@ class User(AbstractUser, TimeStampedModel):
     )
 
     email = EmailField(unique=True)
+    # How the person is named to everyone else, as they typed it - one field,
+    # since not every name splits into a first and a last. Empty until given;
+    # the email stands in for it until then.
+    name = models.CharField(max_length=MAX_NAME_LENGTH, blank=True)
     org_role = models.CharField(
         max_length=10, choices=OrganizationRole.choices, default=OrganizationRole.MEMBER
     )
@@ -35,6 +40,18 @@ class User(AbstractUser, TimeStampedModel):
 
     def __str__(self):
         return self.email
+
+    def get_full_name(self):
+        return self.name
+
+    def get_short_name(self):
+        return self.name
+
+    @property
+    def name_and_email(self):
+        """How an email to someone else refers to this person: their name with
+        their address, or just the address while they haven't given a name."""
+        return f"{self.name} ({self.email})" if self.name else self.email
 
 
 class Invitation(TimeStampedModel):

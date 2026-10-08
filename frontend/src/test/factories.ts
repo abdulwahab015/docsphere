@@ -8,6 +8,7 @@ import type {
   OrganizationSummary,
   Price,
   Project,
+  RosterUser,
   SoleOwnership,
   TokenPair,
   UserDetail,
@@ -29,6 +30,7 @@ export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentU
   return {
     id: 1,
     email: 'ada@example.com',
+    name: '',
     org_role: 'MEMBER',
     organization: buildOrganizationSummary(),
     ...overrides,
@@ -48,6 +50,7 @@ export function buildProject(overrides: Partial<Project> = {}): Project {
     access_level: 'OWNER',
     created_by: 1,
     created_by_email: 'ada@example.com',
+    created_by_name: '',
     organization: 1,
     created: '2026-09-01T09:00:00Z',
     modified: '2026-09-15T09:00:00Z',
@@ -65,6 +68,7 @@ export function buildDocument(overrides: Partial<Document> = {}): Document {
     revision: 1,
     created_by: 1,
     created_by_email: 'ada@example.com',
+    created_by_name: '',
     organization: 1,
     project: null,
     created: '2026-09-01T09:00:00Z',
@@ -79,6 +83,7 @@ export function buildGrant(overrides: Partial<Grant> = {}): Grant {
     project: 7,
     user: 1,
     user_email: 'ada@example.com',
+    user_name: '',
     access_level: 'OWNER',
     ...overrides,
   }
@@ -91,8 +96,10 @@ export function buildAccessRequest(overrides: Partial<AccessRequest> = {}): Acce
     document_title: 'Findings',
     requested_by: 2,
     requested_by_email: 'grace@example.com',
+    requested_by_name: '',
     reviewed_by: null,
     reviewed_by_email: null,
+    reviewed_by_name: null,
     status: 'PENDING',
     created: '2026-09-20T09:00:00Z',
     modified: '2026-09-20T09:00:00Z',
@@ -104,10 +111,16 @@ export function buildUserDetail(overrides: Partial<UserDetail> = {}): UserDetail
   return {
     id: 2,
     email: 'grace@example.com',
+    name: '',
     org_role: 'MEMBER',
     created: '2026-08-01T09:00:00Z',
     ...overrides,
   }
+}
+
+/** A roster entry as a member sees it: no role or join date. */
+export function buildRosterUser(overrides: Partial<RosterUser> = {}): RosterUser {
+  return { id: 2, email: 'grace@example.com', name: '', ...overrides }
 }
 
 /** Owns nothing alone, by default - no warning when deactivating. */
@@ -122,6 +135,7 @@ export function buildInvitation(overrides: Partial<Invitation> = {}): Invitation
     organization: 1,
     invited_by: 1,
     invited_by_email: 'ada@example.com',
+    invited_by_name: '',
     status: 'PENDING',
     created: '2026-09-25T09:00:00Z',
     sent_at: '2026-09-25T09:00:00Z',

@@ -48,6 +48,7 @@ class OrganizationSignupAPIView(APIView):
             user = User.objects.create_user(
                 email=data["admin_email"],
                 password=data["admin_password"],
+                name=data["admin_name"],
                 organization=organization,
                 org_role=OrganizationRole.ADMIN,
             )

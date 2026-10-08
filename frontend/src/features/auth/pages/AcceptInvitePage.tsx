@@ -8,7 +8,7 @@ import { SubmitButton } from '@/components/form/SubmitButton'
 import { TextField } from '@/components/form/TextField'
 import { AuthCard } from '@/features/auth/components/AuthCard'
 import { useAcceptInvitation } from '@/features/auth/hooks'
-import { acceptInvitationSchema, PASSWORD_HINT } from '@/features/auth/schemas'
+import { acceptInvitationSchema, NAME_HINT, PASSWORD_HINT } from '@/features/auth/schemas'
 import { applyApiErrors } from '@/lib/form-errors'
 
 export function AcceptInvitePage() {
@@ -32,13 +32,13 @@ function AcceptInviteForm({ token }: { token: string }) {
   const acceptInvitation = useAcceptInvitation()
   const form = useForm({
     resolver: zodResolver(acceptInvitationSchema),
-    defaultValues: { password: '', confirm_password: '' },
+    defaultValues: { name: '', password: '', confirm_password: '' },
   })
   const { errors } = form.formState
 
-  const onSubmit = form.handleSubmit(({ password }) =>
+  const onSubmit = form.handleSubmit(({ name, password }) =>
     acceptInvitation.mutate(
-      { token, password },
+      { token, name, password },
       {
         onSuccess: () => navigate(PATHS.home, { replace: true }),
         onError: (error) => applyApiErrors(error, form),
@@ -53,6 +53,13 @@ function AcceptInviteForm({ token }: { token: string }) {
     >
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
         <FormAlert message={errors.root?.server?.message} />
+        <TextField
+          label="Your name (optional)"
+          autoComplete="name"
+          description={NAME_HINT}
+          error={errors.name?.message}
+          {...form.register('name')}
+        />
         <TextField
           label="Password"
           type="password"

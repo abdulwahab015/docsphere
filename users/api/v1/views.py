@@ -107,13 +107,16 @@ class CookieTokenRefreshView(TokenRefreshView):
         return response
 
 
-class CurrentUserAPIView(generics.RetrieveAPIView):
-    """The requesting user's own profile. Deliberately reachable without an
-    active subscription, so a client can tell an admin (send to billing) from
-    a member (ask your admin) before any gated call returns 402."""
+class CurrentUserAPIView(generics.RetrieveUpdateAPIView):
+    """The requesting user's own profile, and changing their name (the only
+    part they may edit). Deliberately reachable without an active
+    subscription, so a client can tell an admin (send to billing) from a
+    member (ask your admin) before any gated call returns 402."""
 
     serializer_class = CurrentUserSerializer
     permission_classes = [IsAuthenticated]
+    # Partial updates only: a PUT would have to resend read-only fields.
+    http_method_names = ["get", "patch", "head", "options"]
 
     def get_object(self):
         return self.request.user
@@ -138,7 +141,7 @@ class UserListAPIView(generics.ListAPIView):
 
     permission_classes = [IsAuthenticated, HasActiveSubscription]
     filter_backends = [SearchFilter]
-    search_fields = ["email"]
+    search_fields = ["email", "name"]
 
     def get_serializer_class(self):
         user = self.request.user
@@ -252,6 +255,7 @@ class InvitationAcceptAPIView(APIView):
             user = User.objects.create_user(
                 email=invitation.email,
                 password=password,
+                name=serializer.validated_data["name"],
                 organization=invitation.organization,
             )
 
@@ -459,7 +463,7 @@ class DeactivatedUserListAPIView(generics.ListAPIView):
     serializer_class = UserDetailSerializer
     permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
     filter_backends = [SearchFilter]
-    search_fields = ["email"]
+    search_fields = ["email", "name"]
 
     def get_queryset(self):
         return (

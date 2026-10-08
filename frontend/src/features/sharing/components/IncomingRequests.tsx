@@ -8,6 +8,7 @@ import type { AccessRequest } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { Pagination } from '@/components/Pagination'
+import { PersonLabel } from '@/components/PersonLabel'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
@@ -22,6 +23,7 @@ import {
 import type { AccessRequestDecision } from '@/features/sharing/api'
 import { useIncomingAccessRequests, useReviewAccessRequest } from '@/features/sharing/hooks'
 import { formatDate } from '@/lib/format'
+import { displayName } from '@/lib/people'
 import { SECONDARY_COLUMN } from '@/lib/table-columns'
 import { cn } from '@/lib/utils'
 
@@ -39,18 +41,22 @@ export function IncomingRequests({ page, onPageChange }: IncomingRequestsProps) 
   const review = useReviewAccessRequest()
 
   const decide = (accessRequest: AccessRequest, decision: AccessRequestDecision) => {
-    const { requested_by_email: email, document_title: title } = accessRequest
+    const requester = displayName({
+      name: accessRequest.requested_by_name,
+      email: accessRequest.requested_by_email,
+    })
+    const title = accessRequest.document_title
     review.mutate(
       { accessRequest, decision },
       {
         onSuccess: () =>
           toast.success(
             decision === 'approve'
-              ? `${email} can now edit "${title}".`
-              : `Denied ${email}'s request for "${title}".`,
+              ? `${requester} can now edit "${title}".`
+              : `Denied ${requester}'s request for "${title}".`,
           ),
         onError: (error) =>
-          toast.error(actionErrorMessage(error, `Couldn't answer ${email}'s request.`)),
+          toast.error(actionErrorMessage(error, `Couldn't answer ${requester}'s request.`)),
       },
     )
   }
@@ -95,7 +101,14 @@ export function IncomingRequests({ page, onPageChange }: IncomingRequestsProps) 
                         {accessRequest.document_title}
                       </Link>
                     </TableCell>
-                    <TableCell>{accessRequest.requested_by_email}</TableCell>
+                    <TableCell>
+                      <PersonLabel
+                        person={{
+                          name: accessRequest.requested_by_name,
+                          email: accessRequest.requested_by_email,
+                        }}
+                      />
+                    </TableCell>
                     <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
                       {formatDate(accessRequest.created)}
                     </TableCell>

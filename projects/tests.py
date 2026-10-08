@@ -1329,6 +1329,18 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.data["title"], "Doc1")
         self.assertEqual(response.data["access_level"], AccessLevel.VIEWER)
 
+    def test_names_the_documents_creator(self):
+        creator = self.document.created_by
+        creator.name = "Grace Hopper"
+        creator.save(update_fields=["name"])
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.data["created_by_email"], creator.email)
+        self.assertEqual(response.data["created_by_name"], "Grace Hopper")
+
     def test_public_document_viewer_without_an_explicit_permission_can_retrieve(self):
         public_document = DocumentFactory(
             project=self.project, title="Doc2", visibility=Visibility.PUBLIC
@@ -1761,6 +1773,20 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(
             emails, {self.owner.email, self.editor.email, self.viewer.email}
         )
+
+    def test_grants_name_each_person_who_has_a_name(self):
+        self.editor.name = "Grace Hopper"
+        self.editor.save(update_fields=["name"])
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(4):
+            response = self.client.get(self.url)
+
+        names = {
+            row["user_email"]: row["user_name"] for row in response.data["results"]
+        }
+        self.assertEqual(names[self.editor.email], "Grace Hopper")
+        self.assertEqual(names[self.viewer.email], "")
 
     @patch("core.email.send_mail")
     def test_sharing_again_at_the_same_level_sends_no_email(self, mock_send_mail):
@@ -2574,6 +2600,32 @@ class DocumentAccessRequestListsAPITests(AssumeActiveSubscription, APITestCase):
         )
         return document
 
+    def test_requests_name_the_requester_and_whoever_answered(self):
+        self.requester.name = "Grace Hopper"
+        self.requester.save(update_fields=["name"])
+        self.owner.name = "Ada Owner"
+        self.owner.save(update_fields=["name"])
+        DocumentAccessRequestFactory(
+            document=self.first,
+            requested_by=self.requester,
+            reviewed_by=self.owner,
+            status=AccessRequestStatus.APPROVED,
+        )
+        DocumentAccessRequestFactory(document=self.second, requested_by=self.requester)
+        self.client.force_authenticate(self.requester)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("document_access_request_mine"))
+
+        rows = [
+            (row["document_title"], row["requested_by_name"], row["reviewed_by_name"])
+            for row in response.data["results"]
+        ]
+        self.assertEqual(
+            rows,
+            [("Second", "Grace Hopper", None), ("First", "Grace Hopper", "Ada Owner")],
+        )
+
     def test_requester_sees_their_own_requests_in_every_status_newest_first(self):
         DocumentAccessRequestFactory(
             document=self.first,
@@ -2727,6 +2779,30 @@ class DocumentTasksTests(TestCase):
         self.assertEqual(
             set(mock_send_mail.call_args.kwargs["recipient_list"]),
             {owner_one.email, owner_two.email},
+        )
+
+    @patch("core.email.send_mail")
+    def test_created_task_names_the_requester_by_name_and_email(self, mock_send_mail):
+        document = DocumentFactory(title="Doc1")
+        owner = UserFactory(organization=document.organization)
+        DocumentPermissionFactory(
+            document=document, user=owner, access_level=AccessLevel.OWNER
+        )
+        requester = UserFactory(
+            organization=document.organization,
+            email="grace@example.com",
+            name="Grace Hopper",
+        )
+        access_request = DocumentAccessRequestFactory(
+            document=document, requested_by=requester
+        )
+
+        with self.assertNumQueries(2):
+            send_access_request_created_email_task(access_request.pk)
+
+        self.assertIn(
+            "Grace Hopper (grace@example.com) has requested Editor access",
+            mock_send_mail.call_args.kwargs["message"],
         )
 
     @patch("core.email.send_mail")

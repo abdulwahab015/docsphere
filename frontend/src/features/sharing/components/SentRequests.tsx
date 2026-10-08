@@ -17,6 +17,7 @@ import {
 import { AccessRequestStatusBadge } from '@/features/sharing/components/AccessRequestStatusBadge'
 import { useMyAccessRequests } from '@/features/sharing/hooks'
 import { formatDate } from '@/lib/format'
+import { displayName } from '@/lib/people'
 import { SECONDARY_COLUMN } from '@/lib/table-columns'
 import { cn } from '@/lib/utils'
 
@@ -72,7 +73,12 @@ export function SentRequests({ page, onPageChange }: SentRequestsProps) {
                       {formatDate(accessRequest.created)}
                     </TableCell>
                     <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
-                      {accessRequest.reviewed_by_email ?? '—'}
+                      {accessRequest.reviewed_by_email
+                        ? displayName({
+                            name: accessRequest.reviewed_by_name,
+                            email: accessRequest.reviewed_by_email,
+                          })
+                        : '—'}
                     </TableCell>
                   </TableRow>
                 ))

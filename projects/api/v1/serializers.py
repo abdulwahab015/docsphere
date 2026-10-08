@@ -46,6 +46,7 @@ class ProjectSerializer(AccessLevelModelSerializer):
     resolve_access_fn = staticmethod(resolve_project_access)
 
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+    created_by_name = serializers.CharField(source="created_by.name", read_only=True)
 
     class Meta:
         model = Project
@@ -57,6 +58,7 @@ class ProjectSerializer(AccessLevelModelSerializer):
             "access_level",
             "created_by",
             "created_by_email",
+            "created_by_name",
             "organization",
             "created",
             "modified",
@@ -97,6 +99,7 @@ class DocumentSerializer(AccessLevelModelSerializer):
     resolve_access_fn = staticmethod(resolve_access)
 
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+    created_by_name = serializers.CharField(source="created_by.name", read_only=True)
     base_revision = serializers.IntegerField(
         min_value=1,
         required=False,
@@ -120,6 +123,7 @@ class DocumentSerializer(AccessLevelModelSerializer):
             "base_revision",
             "created_by",
             "created_by_email",
+            "created_by_name",
             "organization",
             "project",
             "created",
@@ -180,16 +184,18 @@ class ShareSerializer(serializers.Serializer):
 
 def _permission_serializer(model, resource_field):
     """Builds a read-only ModelSerializer exposing id, resource_field, user,
-    user_email, and access_level - all read-only - for a permission model."""
-    fields = ["id", resource_field, "user", "user_email", "access_level"]
+    user_email, user_name, and access_level - all read-only - for a
+    permission model."""
+    fields = ["id", resource_field, "user", "user_email", "user_name", "access_level"]
     meta = type(
         "Meta", (), {"model": model, "fields": fields, "read_only_fields": fields}
     )
     user_email = serializers.EmailField(source="user.email", read_only=True)
+    user_name = serializers.CharField(source="user.name", read_only=True)
     return type(
         f"{model.__name__}Serializer",
         (serializers.ModelSerializer,),
-        {"Meta": meta, "user_email": user_email},
+        {"Meta": meta, "user_email": user_email, "user_name": user_name},
     )
 
 
@@ -214,8 +220,14 @@ class DocumentAccessRequestSerializer(serializers.ModelSerializer):
     requested_by_email = serializers.EmailField(
         source="requested_by.email", read_only=True
     )
+    requested_by_name = serializers.CharField(
+        source="requested_by.name", read_only=True
+    )
     reviewed_by_email = serializers.EmailField(
         source="reviewed_by.email", read_only=True, allow_null=True
+    )
+    reviewed_by_name = serializers.CharField(
+        source="reviewed_by.name", read_only=True, allow_null=True
     )
 
     class Meta:
@@ -226,8 +238,10 @@ class DocumentAccessRequestSerializer(serializers.ModelSerializer):
             "document_title",
             "requested_by",
             "requested_by_email",
+            "requested_by_name",
             "reviewed_by",
             "reviewed_by_email",
+            "reviewed_by_name",
             "status",
             "created",
             "modified",

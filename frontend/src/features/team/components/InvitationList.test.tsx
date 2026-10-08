@@ -55,6 +55,14 @@ describe('InvitationList', () => {
     expect(revoked.queryByRole('button')).not.toBeInTheDocument()
   })
 
+  it('names who sent each invitation', async () => {
+    serveInvitations([buildInvitation({ invited_by_name: 'Ada Lovelace' })])
+    renderRoute(INVITATIONS_URL, { signedInAs: admin })
+
+    await screen.findByText('newcomer@example.com')
+    expect(rowFor('newcomer@example.com').getByText('Ada Lovelace')).toBeInTheDocument()
+  })
+
   it('resends an invitation with a new link', async () => {
     const list = serveInvitations([EXPIRED])
     const resend = heldResponse(() => HttpResponse.json({ ...EXPIRED, status: 'PENDING' }))

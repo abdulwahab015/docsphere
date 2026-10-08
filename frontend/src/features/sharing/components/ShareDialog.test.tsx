@@ -3,7 +3,13 @@ import type { UserEvent } from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 
 import type { Grant, Project, RosterUser } from '@/api/types'
-import { buildCurrentUser, buildDocument, buildGrant, buildProject } from '@/test/factories'
+import {
+  buildCurrentUser,
+  buildDocument,
+  buildGrant,
+  buildProject,
+  buildRosterUser,
+} from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, heldResponse, server, spyResolver } from '@/test/server'
 
@@ -16,8 +22,8 @@ const GRACE_VIEWER = buildGrant({
   user_email: 'grace@example.com',
   access_level: 'VIEWER',
 })
-const GRACE: RosterUser = { id: 2, email: 'grace@example.com' }
-const LIN: RosterUser = { id: 3, email: 'lin@example.com' }
+const GRACE = buildRosterUser()
+const LIN = buildRosterUser({ id: 3, email: 'lin@example.com' })
 
 function serveProject(project: Project = buildProject()) {
   server.use(http.get(apiUrl('/projects/7/'), () => HttpResponse.json(project)))
@@ -69,6 +75,22 @@ describe('ShareDialog', () => {
       expect(people.getByText('(you)')).toBeInTheDocument()
       expect(people.getByLabelText('Access level for ada@example.com')).toHaveValue('OWNER')
       expect(people.getByLabelText('Access level for grace@example.com')).toHaveValue('VIEWER')
+    })
+
+    it('names each person, with their email address beneath it', async () => {
+      serveProject()
+      serveGrants([
+        buildGrant({ user_name: 'Ada Lovelace' }),
+        buildGrant({ ...GRACE_VIEWER, user_name: 'Grace Hopper' }),
+      ])
+      const { user } = renderRoute('/projects/7', { signedInAs })
+
+      const dialog = await openShareDialog(user)
+      const people = await peopleWithAccess(dialog)
+
+      expect(people.getByText('Ada Lovelace')).toHaveTextContent('Ada Lovelace (you)')
+      expect(people.getByText('grace@example.com')).toBeInTheDocument()
+      expect(people.getByLabelText('Access level for Grace Hopper')).toHaveValue('VIEWER')
     })
 
     it('says everyone can already view a public document', async () => {
@@ -137,7 +159,7 @@ describe('ShareDialog', () => {
       const dialog = await openShareDialog(user)
       await user.selectOptions(dialog.getByLabelText('Add as'), 'EDITOR')
       expect(dialog.getByText('Editor: Can view and edit.')).toBeInTheDocument()
-      await user.type(dialog.getByLabelText('Search people by email'), 'example')
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'example')
       const matches = within(await dialog.findByRole('list', { name: 'Matching people' }))
       expect(matches.getByText('Has access')).toBeInTheDocument()
       await user.click(matches.getByRole('button', { name: 'Add lin@example.com' }))
@@ -150,6 +172,32 @@ describe('ShareDialog', () => {
       await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     })
 
+    it('finds people by name, and names them when adding', async () => {
+      serveProject()
+      serveGrants([ADA_OWNER])
+      servePeople([buildRosterUser({ id: 3, email: LIN.email, name: 'Lin Chen' })])
+      serveShare(() =>
+        HttpResponse.json(
+          buildGrant({
+            id: 23,
+            user: 3,
+            user_email: LIN.email,
+            user_name: 'Lin Chen',
+            access_level: 'VIEWER',
+          }),
+        ),
+      )
+      const { user } = renderRoute('/projects/7', { signedInAs })
+
+      const dialog = await openShareDialog(user)
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'lin')
+      const matches = within(await dialog.findByRole('list', { name: 'Matching people' }))
+      expect(matches.getByText('lin@example.com')).toBeInTheDocument()
+      await user.click(matches.getByRole('button', { name: 'Add Lin Chen' }))
+
+      expect(await screen.findByText('Lin Chen now has Viewer access.')).toBeInTheDocument()
+    })
+
     it('holds off further adds while one is being saved', async () => {
       serveProject()
       serveGrants([ADA_OWNER])
@@ -159,7 +207,7 @@ describe('ShareDialog', () => {
       const { user } = renderRoute('/projects/7', { signedInAs })
 
       const dialog = await openShareDialog(user)
-      await user.type(dialog.getByLabelText('Search people by email'), 'example')
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'example')
       await user.click(await dialog.findByRole('button', { name: 'Add grace@example.com' }))
 
       expect(dialog.getByRole('button', { name: 'Add grace@example.com' })).toBeDisabled()
@@ -177,7 +225,7 @@ describe('ShareDialog', () => {
       const { user } = renderRoute('/projects/7', { signedInAs })
 
       const dialog = await openShareDialog(user)
-      await user.type(dialog.getByLabelText('Search people by email'), 'nobody')
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'nobody')
 
       expect(
         await dialog.findByText('No one in your organization matches “nobody”.'),
@@ -191,7 +239,7 @@ describe('ShareDialog', () => {
       const { user } = renderRoute('/projects/7', { signedInAs })
 
       const dialog = await openShareDialog(user)
-      await user.type(dialog.getByLabelText('Search people by email'), 'example')
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'example')
 
       expect(await dialog.findByText(/Showing the first 1 of 30 matches/)).toBeInTheDocument()
     })
@@ -209,7 +257,7 @@ describe('ShareDialog', () => {
       const { user } = renderRoute('/projects/7', { signedInAs })
 
       const dialog = await openShareDialog(user)
-      await user.type(dialog.getByLabelText('Search people by email'), 'lin')
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'lin')
       await user.click(await dialog.findByRole('button', { name: 'Add lin@example.com' }))
 
       expect(
@@ -224,7 +272,7 @@ describe('ShareDialog', () => {
       const { user } = renderRoute('/projects/7', { signedInAs })
 
       const dialog = await openShareDialog(user)
-      await user.type(dialog.getByLabelText('Search people by email'), 'lin')
+      await user.type(dialog.getByLabelText('Search people by name or email'), 'lin')
       const retry = await dialog.findByRole('button', { name: 'Try again' })
       servePeople([LIN])
       await user.click(retry)

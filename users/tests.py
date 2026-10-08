@@ -32,7 +32,7 @@ from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
 from users.api.v1 import views as user_views
 from users.choices import InvitationStatus, OrganizationRole
-from users.constants import MAX_BULK_INVITE_ROWS
+from users.constants import MAX_BULK_INVITE_ROWS, MAX_NAME_LENGTH
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
@@ -534,6 +534,8 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         mock_send_mail.assert_called_once()
 
     def test_invitations_are_listed_without_their_tokens(self):
+        self.admin_a.name = "Ada Admin"
+        self.admin_a.save(update_fields=["name"])
         InvitationFactory(
             organization=self.org_a, invited_by=self.admin_a, email="one@example.com"
         )
@@ -549,6 +551,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         for row in response.data["results"]:
             self.assertNotIn("token", row)
             self.assertEqual(row["invited_by_email"], "admin-a@example.com")
+            self.assertEqual(row["invited_by_name"], "Ada Admin")
             self.assertEqual(row["status"], InvitationStatus.PENDING)
 
     @patch("core.email.send_mail")
@@ -716,10 +719,30 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         user = User.objects.get(email="new-user@example.com")
         self.assertEqual(user.organization, self.org_a)
         self.assertTrue(user.check_password("Str0ng-New-Pass!"))
+        self.assertEqual(user.name, "")
 
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, InvitationStatus.ACCEPTED)
         self.assertIsNotNone(invitation.accepted_at)
+
+    def test_accept_invitation_records_the_name_given(self):
+        InvitationFactory(
+            organization=self.org_a, email="new-user@example.com", token="valid-token"
+        )
+
+        with self.assertNumQueries(8):
+            response = self.client.post(
+                reverse("invitation_accept"),
+                {
+                    "token": "valid-token",
+                    "password": "Str0ng-New-Pass!",
+                    "name": " Grace Hopper ",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email="new-user@example.com")
+        self.assertEqual(user.name, "Grace Hopper")
 
     def test_accept_invitation_twice_fails(self):
         InvitationFactory(
@@ -854,7 +877,9 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
 class CurrentUserAPITests(APITestCase):
     def setUp(self):
         self.org = OrganizationFactory(name="Acme")
-        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.admin = AdminUserFactory(
+            email="admin@example.com", name="Ada Admin", organization=self.org
+        )
         self.member = UserFactory(email="member@example.com", organization=self.org)
         self.url = reverse("user_me")
 
@@ -871,6 +896,7 @@ class CurrentUserAPITests(APITestCase):
             {
                 "id": self.admin.pk,
                 "email": "admin@example.com",
+                "name": "Ada Admin",
                 "org_role": "ADMIN",
                 "organization": {
                     "id": self.org.pk,
@@ -930,9 +956,77 @@ class CurrentUserAPITests(APITestCase):
         ]["organization"]
         self.assertTrue(organization["nullable"])
 
+    def test_schema_always_includes_the_name_in_the_response(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        current_user = response.data["components"]["schemas"]["CurrentUser"]
+        self.assertIn("name", current_user["required"])
+
+    def test_changes_own_name_without_needing_a_subscription(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(self.url, {"name": "  Grace Hopper "})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], "Grace Hopper")
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.name, "Grace Hopper")
+
+    def test_clears_own_name(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(self.url, {"name": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.name, "")
+
+    def test_only_the_name_can_be_changed(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(
+                self.url,
+                {"name": "Grace", "email": "taken@example.com", "org_role": "ADMIN"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.name, "Grace")
+        self.assertEqual(self.member.email, "member@example.com")
+        self.assertEqual(self.member.org_role, "MEMBER")
+
+    def test_refuses_a_name_over_the_length_limit(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(
+                self.url, {"name": "x" * (MAX_NAME_LENGTH + 1)}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data)
+
+    def test_a_full_replace_is_not_offered(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.put(self.url, {"name": "Grace"})
+
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
     def test_anonymous_request_is_rejected(self):
         with self.assertNumQueries(0):
             response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_anonymous_name_change_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.patch(self.url, {"name": "Grace"})
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
@@ -1080,7 +1174,9 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
         super().setUp()
         self.org = OrganizationFactory(name="Org A")
         self.other_org = OrganizationFactory(name="Org B")
-        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.admin = AdminUserFactory(
+            email="admin@example.com", name="Grace Hopper", organization=self.org
+        )
         self.member = UserFactory(email="member@example.com", organization=self.org)
         self.url = reverse("user_list")
 
@@ -1094,14 +1190,18 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
         emails = [row["email"] for row in response.data["results"]]
         self.assertEqual(emails, ["admin@example.com", "member@example.com"])
 
-    def test_member_only_sees_id_and_email(self):
+    def test_member_only_sees_id_email_and_name(self):
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(2):
             response = self.client.get(self.url)
 
+        self.assertEqual(
+            [(row["email"], row["name"]) for row in response.data["results"]],
+            [("admin@example.com", "Grace Hopper"), ("member@example.com", "")],
+        )
         for row in response.data["results"]:
-            self.assertEqual(set(row.keys()), {"id", "email"})
+            self.assertEqual(set(row.keys()), {"id", "email", "name"})
 
     def test_admin_also_sees_role_and_join_date(self):
         self.client.force_authenticate(self.admin)
@@ -1110,7 +1210,9 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.get(self.url)
 
         for row in response.data["results"]:
-            self.assertEqual(set(row.keys()), {"id", "email", "org_role", "created"})
+            self.assertEqual(
+                set(row.keys()), {"id", "email", "name", "org_role", "created"}
+            )
 
     def test_schema_documents_both_the_admin_and_member_shapes(self):
         with self.assertNumQueries(0):
@@ -1152,6 +1254,15 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
 
         with self.assertNumQueries(2):
             response = self.client.get(self.url, {"search": "admin"})
+
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertEqual(emails, ["admin@example.com"])
+
+    def test_search_also_matches_names(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url, {"search": "hopper"})
 
         emails = [row["email"] for row in response.data["results"]]
         self.assertEqual(emails, ["admin@example.com"])
@@ -1476,6 +1587,23 @@ class ModelStrTests(TestCase):
 
         with self.assertNumQueries(0):
             self.assertEqual(str(user), "person@example.com")
+
+    def test_user_full_name_is_their_name(self):
+        user = UserFactory(name="Grace Hopper", organization=None)
+
+        with self.assertNumQueries(0):
+            self.assertEqual(user.get_full_name(), "Grace Hopper")
+            self.assertEqual(user.get_short_name(), "Grace Hopper")
+
+    def test_user_is_named_by_name_and_email_or_the_email_alone(self):
+        named = UserFactory(
+            email="grace@example.com", name="Grace Hopper", organization=None
+        )
+        unnamed = UserFactory(email="person@example.com", organization=None)
+
+        with self.assertNumQueries(0):
+            self.assertEqual(named.name_and_email, "Grace Hopper (grace@example.com)")
+            self.assertEqual(unnamed.name_and_email, "person@example.com")
 
     def test_invitation_str_includes_email_and_status(self):
         invitation = InvitationFactory(email="invitee@example.com")

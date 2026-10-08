@@ -4,6 +4,7 @@ import type { RosterUser } from '@/api/types'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { Pagination } from '@/components/Pagination'
+import { PersonLabel } from '@/components/PersonLabel'
 import { SearchInput } from '@/components/SearchInput'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -41,7 +42,7 @@ export function MemberList() {
         value={search}
         onSearch={setSearch}
         label="Search people"
-        placeholder="Search by email"
+        placeholder="Search by name or email"
       />
       {people.isError ? (
         <ErrorState error={people.error} onRetry={() => void people.refetch()} />
@@ -49,7 +50,7 @@ export function MemberList() {
         <EmptyState
           icon={UsersIcon}
           title={search ? 'No matches' : 'No one here yet'}
-          description={search ? `No one's email matches "${search}".` : undefined}
+          description={search ? `No one matches "${search}".` : undefined}
         />
       ) : (
         <>
@@ -57,7 +58,7 @@ export function MemberList() {
             <Table aria-busy={people.isFetching}>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Email</TableHead>
+                  <TableHead>Person</TableHead>
                   {isAdmin && (
                     <>
                       <TableHead>Role</TableHead>
@@ -98,7 +99,7 @@ function MemberRow({ person, isYou }: { person: RosterUser; isYou: boolean }) {
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-2">
-          {person.email}
+          <PersonLabel person={person} />
           {isYou && <Badge variant="secondary">You</Badge>}
         </div>
       </TableCell>
