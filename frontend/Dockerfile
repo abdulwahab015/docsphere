@@ -19,7 +19,7 @@ RUN VITE_API_BASE_URL="$VITE_API_BASE_URL" \
 
 
 # Runs as an unprivileged user, so it listens on 8080 rather than 80.
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 
 # Templates, filled in at start-up from the container's environment
 # (${DJANGO_ADMIN_PATH}, the SENTRY_* settings) into /etc/nginx/conf.d/, so
