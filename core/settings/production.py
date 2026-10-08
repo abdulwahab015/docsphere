@@ -16,6 +16,11 @@ if not CORS_ALLOWED_ORIGINS:
 
 REQUEST_LOG_TRUST_FORWARDED_FOR = True
 
+# Sent through the EMAIL_HOST server; the development default only prints them.
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend"
+)
+
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

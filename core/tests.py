@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import smtplib
@@ -7,6 +8,7 @@ import sentry_sdk
 import stripe
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
+from django.core.mail import send_mail
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils.module_loading import autodiscover_modules
@@ -16,7 +18,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from sentry_sdk.transport import Transport
 
 from core.celery import app as celery_app
-from core.email import EMAIL_MAX_RETRIES
+from core.email import EMAIL_MAX_RETRIES, ConsoleEmailBackend
 from core.error_tracking import init_error_tracking, scrub_event
 from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
@@ -533,6 +535,26 @@ class EmailTaskRetryTests(TestCase):
             with self.subTest(task.name):
                 self.assertEqual(task.autoretry_for, (OSError,))
                 self.assertEqual(task.max_retries, EMAIL_MAX_RETRIES)
+
+
+class ConsoleEmailBackendTests(SimpleTestCase):
+    def test_prints_an_email_as_written_so_its_link_can_be_copied(self):
+        # Long enough that the encoded message would be quoted-printable.
+        link = "http://localhost:3000/reset-password?uid=Mg&token=" + "a1b2" * 15
+        stream = io.StringIO()
+
+        send_mail(
+            subject="Reset your DocSphere password",
+            message=f"Use the link below to reset your password:\n\n{link}\n",
+            from_email="DocSphere <no-reply@example.com>",
+            recipient_list=["member@example.com"],
+            connection=ConsoleEmailBackend(stream=stream),
+        )
+
+        output = stream.getvalue()
+        self.assertIn("To: member@example.com\n", output)
+        self.assertIn("Subject: Reset your DocSphere password\n", output)
+        self.assertIn(f"\n{link}\n", output)
 
 
 DSN = "https://public@errors.example.com/1"
