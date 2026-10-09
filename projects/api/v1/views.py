@@ -19,6 +19,7 @@ from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
     DocumentAccessRequestSerializer,
     DocumentCreateSerializer,
+    DocumentListSerializer,
     DocumentPermissionSerializer,
     DocumentSerializer,
     ProjectPermissionSerializer,
@@ -233,14 +234,25 @@ class ProjectRestoreAPIView(APIView):
     ),
 )
 class DocumentListCreateAPIView(generics.ListCreateAPIView):
-    """Lists the org's documents (``?search=`` matches title, ``?project=``
-    narrows to one project); creates one either under a project the caller has
-    at least Editor access to, or - with no ``project`` given - as a personal
-    document any org member may create. The creator always becomes Owner."""
+    """Lists the documents the caller can open (``?search=`` matches title and
+    content, case-insensitively; ``?project=`` narrows to one project) without
+    their content, but with an excerpt of where a search matched it; creates
+    one either under a project the caller has at least Editor access to, or -
+    with no ``project`` given - as a personal document any org member may
+    create. The creator always becomes Owner."""
 
-    serializer_class = DocumentSerializer
     filter_backends = (SearchFilter,)
-    search_fields = ("title",)
+    search_fields = ("title", "content")
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return DocumentSerializer
+        return DocumentListSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["search_terms"] = SearchFilter().get_search_terms(self.request)
+        return context
 
     def get_queryset(self):
         queryset = Document.objects.visible_to(self.request.user).select_related(

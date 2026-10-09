@@ -11,6 +11,7 @@ from projects.models import (
     ProjectPermission,
 )
 from projects.permissions import resolve_access, resolve_project_access
+from projects.search import content_excerpt
 
 User = get_user_model()
 
@@ -138,6 +139,39 @@ class DocumentSerializer(AccessLevelModelSerializer):
             "created",
             "modified",
         ]
+
+
+class ExcerptSegmentSerializer(serializers.Serializer):
+    """A run of an excerpt's text; ``match`` marks where a search term is."""
+
+    text = serializers.CharField()
+    match = serializers.BooleanField()
+
+
+class DocumentListSerializer(DocumentSerializer):
+    """A row of the documents list: everything but the content, which only a
+    single document's page needs. While searching, ``excerpt`` shows where in
+    the content the search matched (null when it matched only the title, or
+    without a search). The view puts the search terms in the context."""
+
+    excerpt = serializers.SerializerMethodField()
+
+    class Meta(DocumentSerializer.Meta):
+        fields = [
+            *(
+                field
+                for field in DocumentSerializer.Meta.fields
+                if field not in ("content", "base_revision")
+            ),
+            "excerpt",
+        ]
+
+    @extend_schema_field(ExcerptSegmentSerializer(many=True, allow_null=True))
+    def get_excerpt(self, document):
+        segments = content_excerpt(document.content, self.context["search_terms"])
+        if not segments:
+            return None
+        return [{"text": text, "match": match} for text, match in segments]
 
 
 class DocumentCreateSerializer(DocumentSerializer):

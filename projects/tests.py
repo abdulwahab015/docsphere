@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from django.db import connection
 from django.test import (
+    SimpleTestCase,
     TestCase,
     TransactionTestCase,
     override_settings,
@@ -41,6 +42,7 @@ from projects.permissions import (
     resolve_access,
     resolve_project_access,
 )
+from projects.search import ELLIPSIS, content_excerpt
 from projects.tasks import send_access_request_created_email_task
 from users.factories import AdminUserFactory, UserFactory
 
@@ -1216,6 +1218,102 @@ class DocumentListAPITests(AssumeActiveSubscription, APITestCase):
 
         titles = [row["title"] for row in response.data["results"]]
         self.assertEqual(titles, ["Budget Doc"])
+        # Matched by its title only: nothing to point at in the content.
+        self.assertIsNone(response.data["results"][0]["excerpt"])
+
+    def test_search_finds_a_document_by_words_only_in_its_content(self):
+        DocumentFactory(
+            project=self.project,
+            title="Meeting notes",
+            content="Agreed to move the launch to the second week of March.",
+            visibility=Visibility.PUBLIC,
+        )
+        DocumentFactory(
+            project=self.project,
+            title="Other Doc",
+            content="Nothing about that here.",
+            visibility=Visibility.PUBLIC,
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url, {"search": "LAUNCH"})
+
+        self.assertEqual(
+            [row["title"] for row in response.data["results"]], ["Meeting notes"]
+        )
+        self.assertEqual(
+            response.data["results"][0]["excerpt"],
+            [
+                {"text": "Agreed to move the ", "match": False},
+                {"text": "launch", "match": True},
+                {"text": " to the second week of March.", "match": False},
+            ],
+        )
+
+    def test_every_search_word_must_appear_in_the_title_or_the_content(self):
+        DocumentFactory(
+            project=self.project,
+            title="Budget",
+            content="Figures for Q4.",
+            visibility=Visibility.PUBLIC,
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            both = self.client.get(self.url, {"search": "budget q4"})
+        with self.assertNumQueries(1):
+            one_missing = self.client.get(self.url, {"search": "budget q3"})
+
+        self.assertEqual(both.data["count"], 1)
+        self.assertEqual(one_missing.data["count"], 0)
+
+    def test_search_never_finds_a_document_the_caller_cant_open(self):
+        DocumentFactory(project=self.project, title="Plans", content="Secret merger")
+        DocumentFactory(
+            title="Foreign", content="Secret merger", visibility=Visibility.PUBLIC
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url, {"search": "merger"})
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_search_skips_deleted_documents_and_those_in_a_trashed_project(self):
+        DocumentFactory(
+            project=None,
+            organization=self.org,
+            content="quarterly review",
+            visibility=Visibility.PUBLIC,
+            is_active=False,
+        )
+        DocumentFactory(
+            project=self.project,
+            content="quarterly review",
+            visibility=Visibility.PUBLIC,
+        )
+        self.project.is_active = False
+        self.project.save(update_fields=["is_active"])
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url, {"search": "quarterly"})
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_rows_leave_out_the_content(self):
+        DocumentFactory(
+            project=self.project, content="Long text.", visibility=Visibility.PUBLIC
+        )
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        row = response.data["results"][0]
+        self.assertNotIn("content", row)
+        self.assertIsNone(row["excerpt"])
 
     def test_schema_documents_the_project_filter(self):
         with self.assertNumQueries(0):
@@ -3069,3 +3167,70 @@ class ConcurrentDocumentSaveTests(AssumeActiveSubscription, TransactionTestCase)
         )
         document.refresh_from_db()
         self.assertEqual(document.revision, 2)
+
+
+class ContentExcerptTests(SimpleTestCase):
+    def test_marks_every_occurrence_of_any_term_ignoring_case(self):
+        segments = content_excerpt("Plan the plan, then PLAN again", ["plan"])
+
+        self.assertEqual(
+            segments,
+            [
+                ("Plan", True),
+                (" the ", False),
+                ("plan", True),
+                (", then ", False),
+                ("PLAN", True),
+                (" again", False),
+            ],
+        )
+
+    def test_keeps_a_quoted_phrase_together_and_matches_it_literally(self):
+        segments = content_excerpt(
+            "Costs (approx.) rose. Approx costs fell.", ["(approx.)"]
+        )
+
+        self.assertEqual(
+            segments,
+            [
+                ("Costs ", False),
+                ("(approx.)", True),
+                (" rose. Approx costs fell.", False),
+            ],
+        )
+
+    def test_puts_a_long_text_on_one_line_around_the_first_match(self):
+        before = " ".join(f"word{number}" for number in range(40))
+        after = " ".join(f"tail{number}" for number in range(40))
+        content = f"{before}\n\nThe   needle\tis here. {after}"
+
+        segments = content_excerpt(content, ["needle"])
+
+        text = "".join(segment for segment, _match in segments)
+        self.assertTrue(text.startswith(ELLIPSIS))
+        self.assertTrue(text.endswith(ELLIPSIS))
+        self.assertIn("The needle is here.", text)
+        self.assertNotIn("\n", text)
+        # Cut between words: every word in the excerpt is whole.
+        for word in text.strip(ELLIPSIS).split():
+            self.assertIn(word, content.split())
+        self.assertLessEqual(len(text), 200 + 2 * len(ELLIPSIS))
+
+    def test_a_match_at_the_start_needs_no_leading_ellipsis(self):
+        segments = content_excerpt("needle and more", ["needle"])
+
+        self.assertEqual(segments, [("needle", True), (" and more", False)])
+
+    def test_a_match_at_the_very_end_closes_the_excerpt(self):
+        segments = content_excerpt("Look for the needle", ["needle"])
+
+        self.assertEqual(segments, [("Look for the ", False), ("needle", True)])
+
+    def test_nothing_when_the_terms_are_not_in_the_content(self):
+        self.assertIsNone(content_excerpt("Only the title matched.", ["budget"]))
+
+    def test_nothing_for_a_document_without_content(self):
+        self.assertIsNone(content_excerpt(None, ["budget"]))
+
+    def test_nothing_without_a_search(self):
+        self.assertIsNone(content_excerpt("Some content.", []))

@@ -1,7 +1,7 @@
 import { Link } from 'react-router'
 
 import { documentPath } from '@/app/paths'
-import type { Document, Paginated } from '@/api/types'
+import type { DocumentListItem, Paginated } from '@/api/types'
 import { AccessLevelBadge, VisibilityBadge } from '@/components/AccessBadges'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { SearchExcerpt } from '@/features/documents/components/SearchExcerpt'
 import { formatDate } from '@/lib/format'
 import { creatorName } from '@/lib/people'
 import { SECONDARY_COLUMN } from '@/lib/table-columns'
@@ -22,7 +23,7 @@ const LOADING_ROWS = 5
 const COLUMN_COUNT = 5
 
 interface DocumentsTableProps {
-  documents: Paginated<Document> | undefined
+  documents: Paginated<DocumentListItem> | undefined
   isFetching: boolean
   /** Mark documents that aren't filed under any project. */
   markPersonal?: boolean
@@ -58,6 +59,7 @@ export function DocumentsTable({
                         <Badge variant="secondary">Personal</Badge>
                       )}
                     </div>
+                    {document.excerpt && <SearchExcerpt segments={document.excerpt} />}
                   </TableCell>
                   <TableCell>
                     <VisibilityBadge visibility={document.visibility} />

@@ -30,6 +30,12 @@ export type ProjectUpdatePayload = Pick<
 >
 // Same default-value quirk as `Project.visibility`.
 export type Document = Omit<Schemas['Document'], 'visibility'> & { visibility: Visibility }
+// A row of the documents list: no content, but an excerpt of where a search
+// matched it. Same default-value quirk as `Project.visibility`.
+export type DocumentListItem = Omit<Schemas['DocumentList'], 'visibility'> & {
+  visibility: Visibility
+}
+export type ExcerptSegment = Schemas['ExcerptSegment']
 export type DocumentCreatePayload = Pick<
   Schemas['DocumentCreate'],
   'title' | 'content' | 'visibility' | 'project'

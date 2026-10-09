@@ -2043,7 +2043,7 @@
                 }
               ]
             },
-            "description": "?search matches title. Add &project={{project_id}} to narrow to one project. Only returns documents you have an explicit DocumentPermission on, plus any PUBLIC document in your organization (Document.objects.visible_to) - having access to the parent project grants nothing here.",
+            "description": "?search matches title and content (case-insensitive; every word must appear in one or the other, \"quoted phrases\" stay together). Rows leave out the content; while searching, `excerpt` shows where the content matched (null for a title-only match). Add &project={{project_id}} to narrow to one project. Only returns documents you have an explicit DocumentPermission on, plus any PUBLIC document in your organization (Document.objects.visible_to) - having access to the parent project grants nothing here.",
             "auth": {
               "type": "bearer",
               "bearer": [

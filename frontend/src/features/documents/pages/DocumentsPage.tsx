@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { CreateDocumentDialog } from '@/features/documents/components/CreateDocumentDialog'
 import { DocumentsTable } from '@/features/documents/components/DocumentsTable'
 import { useDocuments } from '@/features/documents/hooks'
+import { DOCUMENT_SEARCH_PLACEHOLDER, noDocumentMatches } from '@/features/documents/search'
 import { useListParams } from '@/hooks/use-list-params'
 
 export function DocumentsPage() {
@@ -38,7 +39,7 @@ export function DocumentsPage() {
         value={search}
         onSearch={setSearch}
         label="Search documents"
-        placeholder="Search by title"
+        placeholder={DOCUMENT_SEARCH_PLACEHOLDER}
       />
       {documents.isError ? (
         <ErrorState error={documents.error} onRetry={() => void documents.refetch()} />
@@ -48,7 +49,7 @@ export function DocumentsPage() {
           title={search ? 'No matches' : 'No documents yet'}
           description={
             search
-              ? `No document's title matches "${search}".`
+              ? noDocumentMatches(search)
               : 'Create a personal document, or open a project to add one there.'
           }
         />

@@ -5,6 +5,7 @@ import { HTTP_STATUS } from '@/api/constants'
 import type {
   Document,
   DocumentCreatePayload,
+  DocumentListItem,
   DocumentUpdatePayload,
   ListParams,
   Paginated,
@@ -28,7 +29,7 @@ function documentPath(documentId: number) {
 }
 
 export async function listDocuments({ page, search, project }: DocumentListParams) {
-  const { data } = await apiClient.get<Paginated<Document>>(DOCUMENTS_PATH, {
+  const { data } = await apiClient.get<Paginated<DocumentListItem>>(DOCUMENTS_PATH, {
     params: { page, search: search || undefined, project },
   })
   return data

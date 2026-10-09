@@ -102,6 +102,13 @@ test.describe("the app's pages", () => {
   }
 })
 
+test('document search results, showing where each matched', async ({ page }) => {
+  await logIn(page, DOCS_ADMIN)
+  await visit(page, '/documents?search=aboard')
+  await expect(page.locator('mark').filter({ hasText: 'aboard' })).toBeVisible()
+  await expectAccessible(page)
+})
+
 test('project and document pages, and their dialogs', async ({ page }) => {
   await logIn(page, DOCS_ADMIN)
   await openProject(page, 'Research')
