@@ -90,7 +90,7 @@ class RecordingTestCase(AssumeActiveSubscription, APITestCase):
 
 class AccessEventTests(RecordingTestCase):
     def test_sharing_a_project_records_the_grant(self):
-        with self.assertNumQueries(16):
+        with self.assertNumQueries(17):
             response = self.client.post(
                 reverse("project_share", args=[self.project.pk]),
                 {"user": self.member.pk, "access_level": AccessLevel.EDITOR},
@@ -109,7 +109,7 @@ class AccessEventTests(RecordingTestCase):
             document=self.document, user=self.member, access_level=AccessLevel.VIEWER
         )
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 reverse("document_share", args=[self.document.pk]),
                 {"user": self.member.pk, "access_level": AccessLevel.EDITOR},
@@ -246,7 +246,7 @@ class AccessEventTests(RecordingTestCase):
             document=self.document, requested_by=self.member
         )
 
-        with self.assertNumQueries(12):
+        with self.assertNumQueries(13):
             response = self.client.post(
                 reverse(
                     "document_access_request_approve",
@@ -266,7 +266,7 @@ class AccessEventTests(RecordingTestCase):
             document=self.document, requested_by=self.member
         )
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.post(
                 reverse(
                     "document_access_request_deny",

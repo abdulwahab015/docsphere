@@ -7,6 +7,8 @@ from django.utils import timezone
 
 from audit.choices import AuditVerb
 from audit.models import AuditEvent
+from notifications.choices import NotificationVerb
+from notifications.models import Notification
 from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
@@ -110,7 +112,8 @@ class Command(BaseCommand):
     def _seed_project(self, spec, organization, users_by_email):
         """Mirrors project creation through the API: the creator gets an Owner
         permission row, then each listed share its own row, recorded in the
-        organization's activity as the creator sharing it."""
+        organization's activity as the creator sharing it and notified to the
+        person shared with."""
         owner = users_by_email[spec["owner"]]
         project = ProjectFactory(
             organization=organization,
@@ -168,6 +171,13 @@ class Command(BaseCommand):
             owner,
             AuditVerb.ACCESS_GRANTED,
             target_user=user,
+            access_level=access_level,
+            **resource,
+        )
+        Notification.objects.notify(
+            [user],
+            owner,
+            NotificationVerb.ACCESS_GRANTED,
             access_level=access_level,
             **resource,
         )

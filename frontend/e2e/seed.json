@@ -394,6 +394,30 @@
           }
         }
       ]
+    },
+    {
+      "name": "Notify E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "owner@notify.e2e.test",
+          "role": "ADMIN",
+          "name": "Olive Owner"
+        },
+        {
+          "email": "member@notify.e2e.test",
+          "role": "MEMBER",
+          "name": "Max Member"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Bulletin",
+          "content": "Asked about, approved, and announced through the bell.",
+          "visibility": "PUBLIC",
+          "owner": "owner@notify.e2e.test"
+        }
+      ]
     }
   ]
 }

@@ -8,6 +8,7 @@ import type {
   DocumentVersionDetail,
   Grant,
   Invitation,
+  Notification,
   Organization,
   OrganizationSummary,
   Price,
@@ -126,6 +127,22 @@ export function buildAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent
     target_user_email: 'grace@example.com',
     target_user_name: 'Grace Hopper',
     resource_kind: 'DOCUMENT',
+    resource_name: 'Q3 plan',
+    details: { access_level: 'EDITOR' },
+    ...overrides,
+  }
+}
+
+export function buildNotification(overrides: Partial<Notification> = {}): Notification {
+  return {
+    id: 51,
+    created: '2026-09-04T10:00:00Z',
+    verb: 'ACCESS_GRANTED',
+    read: false,
+    actor_email: 'grace@example.com',
+    actor_name: 'Grace Hopper',
+    resource_kind: 'DOCUMENT',
+    resource_id: 11,
     resource_name: 'Q3 plan',
     details: { access_level: 'EDITOR' },
     ...overrides,

@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "users",
     "projects",
     "audit",
+    "notifications",
     "subscriptions",
     "djstripe",
     "rest_framework",
@@ -211,6 +212,7 @@ SPECTACULAR_SETTINGS = {
         "AccessLevelEnum": "projects.choices.AccessLevel",
         "OrgRoleEnum": "users.choices.OrganizationRole",
         "AuditVerbEnum": "audit.choices.AuditVerb",
+        "NotificationVerbEnum": "notifications.choices.NotificationVerb",
     },
 }
 
@@ -265,6 +267,10 @@ CELERY_BEAT_SCHEDULE = {
     "remove-expired-audit-events": {
         "task": "audit.tasks.remove_expired_audit_events_task",
         "schedule": crontab(hour=2, minute=0),
+    },
+    "remove-expired-notifications": {
+        "task": "notifications.tasks.remove_expired_notifications_task",
+        "schedule": crontab(hour=2, minute=30),
     },
 }
 

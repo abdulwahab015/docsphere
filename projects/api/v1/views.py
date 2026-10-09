@@ -20,6 +20,8 @@ from rest_framework.views import APIView
 from audit.choices import AuditVerb
 from audit.models import AuditEvent
 from core.permissions import HasActiveSubscription
+from notifications.choices import NotificationVerb
+from notifications.models import Notification
 from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
     AttachmentSerializer,
@@ -53,6 +55,7 @@ from projects.permissions import (
     HasDocumentAccess,
     HasProjectAccess,
     access_permits,
+    active_owners,
     check_can_share,
     resolve_access,
     resolve_project_access,
@@ -155,6 +158,17 @@ def _grant_access(
             access_level=access_level,
             **{resource_field: resource},
         )
+    Notification.objects.notify(
+        [user],
+        actor,
+        (
+            NotificationVerb.ACCESS_CHANGED
+            if existing
+            else NotificationVerb.ACCESS_GRANTED
+        ),
+        access_level=access_level,
+        **{resource_field: resource},
+    )
     return permission, True
 
 
@@ -824,7 +838,14 @@ class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
                 {"detail": "You already have a pending request for this document."}
             )
 
-        access_request = serializer.save(document=document, requested_by=user)
+        with transaction.atomic():
+            access_request = serializer.save(document=document, requested_by=user)
+            Notification.objects.notify(
+                active_owners(document),
+                user,
+                NotificationVerb.ACCESS_REQUESTED,
+                document=document,
+            )
         send_access_request_created_email_task.delay(access_request.pk)
 
 
@@ -871,6 +892,12 @@ class DocumentAccessRequestApproveAPIView(APIView):
                 target_user=access_request.requested_by,
                 document=access_request.document,
             )
+            Notification.objects.notify(
+                [access_request.requested_by],
+                request.user,
+                NotificationVerb.ACCESS_REQUEST_APPROVED,
+                document=access_request.document,
+            )
 
         send_access_request_approved_email_task.delay(access_request.pk)
 
@@ -893,6 +920,12 @@ class DocumentAccessRequestDenyAPIView(APIView):
                 request.user,
                 AuditVerb.ACCESS_REQUEST_DENIED,
                 target_user=access_request.requested_by,
+                document=access_request.document,
+            )
+            Notification.objects.notify(
+                [access_request.requested_by],
+                request.user,
+                NotificationVerb.ACCESS_REQUEST_DENIED,
                 document=access_request.document,
             )
 

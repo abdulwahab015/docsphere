@@ -33,3 +33,10 @@ class AccessRequestStatus(models.TextChoices):
     PENDING = "PENDING", "Pending"
     APPROVED = "APPROVED", "Approved"
     DENIED = "DENIED", "Denied"
+
+
+class ResourceKind(models.TextChoices):
+    """Which of the two kinds of shared resource something refers to."""
+
+    PROJECT = "PROJECT", "Project"
+    DOCUMENT = "DOCUMENT", "Document"

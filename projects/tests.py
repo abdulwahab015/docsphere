@@ -2319,7 +2319,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(16):
+        with self.assertNumQueries(17):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
@@ -2340,7 +2340,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.OWNER},
@@ -2364,7 +2364,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(16):
+        with self.assertNumQueries(17):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.EDITOR},
@@ -2695,7 +2695,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(16):
+        with self.assertNumQueries(17):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -2719,7 +2719,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.OWNER},
@@ -2743,7 +2743,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(16):
+        with self.assertNumQueries(17):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -3021,7 +3021,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
     ):
         self.client.force_authenticate(self.viewer)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(10):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -3109,7 +3109,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(12):
+        with self.assertNumQueries(13):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3136,7 +3136,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(11):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3156,7 +3156,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(9):
+        with self.assertNumQueries(10):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3175,7 +3175,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

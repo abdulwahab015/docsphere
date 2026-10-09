@@ -1,10 +1,10 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from audit.choices import AuditKind, ResourceKind
+from audit.choices import AuditKind
 from audit.mappings import RESOURCE_CONTENT_DETAILS
 from audit.models import AuditEvent
-from projects.choices import AccessLevel, Visibility
+from projects.choices import AccessLevel, ResourceKind, Visibility
 from users.choices import OrganizationRole
 
 

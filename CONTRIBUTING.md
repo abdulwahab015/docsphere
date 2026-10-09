@@ -217,6 +217,7 @@ users/           User (email login, no username), Invitation, authentication end
 organizations/   Organization, its signup and profile, its subscription properties
 projects/        Project, Document, their permissions, sharing and access requests
 audit/           The organization's activity (audit log) that admins read
+notifications/   What each person is told in the app (the bell in the top bar)
 subscriptions/   Plans, checkout, billing portal, renewal reminders
 clients/         Code that calls Stripe over the network (not a Django app)
 frontend/        The React app (frontend/README.md)
@@ -267,6 +268,12 @@ still pass, so a change that touches them needs a test that pins them down.
   or failed action records nothing. Admins read them on the Activity page; a private
   project or document they can't open is listed without its name. Events are kept for a
   year (a daily task removes older ones).
+- **People are told in the app as well as by email** when something is shared with them or
+  their level changes, when someone asks to edit their document, and when their request is
+  answered: `Notification.objects.notify(...)`, in the same transaction, never telling
+  people about their own actions. The app polls the unread count every 30 seconds and when
+  the tab regains focus. A notification about something its recipient can no longer open
+  doesn't name it. Notifications are kept for 90 days.
 
 ### Subscriptions
 
