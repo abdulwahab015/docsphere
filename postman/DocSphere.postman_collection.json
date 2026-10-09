@@ -6404,7 +6404,173 @@
       ]
     },
     {
-      "name": "15. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
+      "name": "15. Leaving: export, account and organization deletion",
+      "description": "Export runs in the background and emails the admin a link (printed in the runserver console) to /settings/organization/export?token=..., downloaded through GET /api/v1/organizations/exports/download/?token=... . The deletions here are refused on purpose, so the demo data survives: deleting your account is POST /api/v1/users/me/delete/ with current_password; deleting the organization is POST /api/v1/organizations/delete/ with its exact name (restorable for 30 days via /delete/cancel/).",
+      "item": [
+        {
+          "name": "Export the Organization",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/exports/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "exports",
+                ""
+              ]
+            },
+            "description": "Holds only what the admin can open; private things are counted, not included. The link works for 7 days.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('export started', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the Organization With the Wrong Name (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/delete/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "delete",
+                ""
+              ]
+            },
+            "description": "Confirmed by typing the organization's name exactly.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"not the organization's name\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('under the name', () => pm.expect(pm.response.json()).to.have.property('name'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] Delete Own Account With a Wrong Password (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/delete/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "delete",
+                ""
+              ]
+            },
+            "description": "With the right password the account is anonymised and signed out everywhere; refused for the only admin or the only Owner of anything.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"not-the-password\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('under the password', () => pm.expect(pm.response.json()).to.have.property('current_password'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "16. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
       "item": [
         {
           "name": "Repeated Login Attempt (expect 429 partway through)",

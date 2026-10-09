@@ -1,6 +1,7 @@
 from django.urls import path
 
 from users.api.v1.views import (
+    AccountDeleteAPIView,
     CookieTokenRefreshView,
     CurrentUserAPIView,
     DeactivatedUserListAPIView,
@@ -29,6 +30,7 @@ urlpatterns = [
     path("me/", CurrentUserAPIView.as_view(), name="user_me"),
     path("me/password/", PasswordChangeAPIView.as_view(), name="user_password_change"),
     path("me/email/", EmailChangeRequestAPIView.as_view(), name="user_email_change"),
+    path("me/delete/", AccountDeleteAPIView.as_view(), name="user_account_delete"),
     path(
         "me/verification-email/",
         EmailVerificationResendAPIView.as_view(),

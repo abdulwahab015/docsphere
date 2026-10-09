@@ -222,6 +222,15 @@ class EmailVerificationSerializer(serializers.Serializer):
         return attrs
 
 
+class AccountDeletionSerializer(serializers.Serializer):
+    """Deleting your own account: your password proves it's really you."""
+
+    current_password = serializers.CharField(write_only=True)
+
+    def validate_current_password(self, value):
+        return validate_current_password(self.context["request"].user, value)
+
+
 class EmailChangeRequestSerializer(serializers.Serializer):
     """A signed-in user asks to move their account to another address. Their
     password proves it's them; the link sent to the new address proves it's

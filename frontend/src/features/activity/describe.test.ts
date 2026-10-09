@@ -61,6 +61,7 @@ describe('describeEvent', () => {
       'Joined from an invitation',
       { verb: 'INVITATION_ACCEPTED', ...NO_RESOURCE, details: { email: 'ada@example.com' } },
     ],
+    ['Deleted their account', { verb: 'ACCOUNT_DELETED', ...NO_RESOURCE, details: {} }],
     ['Moved the project "Launch" to the trash', { verb: 'DELETED', ...PROJECT, details: {} }],
     ['Restored the document "Q3 plan" from the trash', { verb: 'RESTORED', details: {} }],
     [

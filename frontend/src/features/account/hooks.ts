@@ -1,9 +1,15 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import type { CurrentUserUpdatePayload, PasswordChangePayload } from '@/api/types'
-import { changePassword, requestEmailChange, updateCurrentUser } from '@/features/account/api'
+import {
+  changePassword,
+  deleteAccount,
+  requestEmailChange,
+  updateCurrentUser,
+} from '@/features/account/api'
 import { authKeys } from '@/features/auth/query-keys'
-import { renewSession } from '@/features/auth/session'
+import { endSessionDeliberately, renewSession } from '@/features/auth/session'
+import { announceSessionChange } from '@/features/auth/session-broadcast'
 
 /** Changes the signed-in user's password. The API revokes every session they
  * had and returns a fresh token pair, which keeps this one going. */
@@ -28,4 +34,18 @@ export function useUpdateName() {
  * followed, so the session and its data stay as they are. */
 export function useRequestEmailChange() {
   return useMutation({ mutationFn: requestEmailChange })
+}
+
+/** Deletes the signed-in user's own account. The API has signed them out
+ * everywhere, so this tab ends its session as a deliberate logout would, and
+ * other tabs re-read theirs. */
+export function useDeleteAccount() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: () => {
+      endSessionDeliberately(queryClient)
+      announceSessionChange()
+    },
+  })
 }

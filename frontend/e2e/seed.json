@@ -418,6 +418,76 @@
           "owner": "owner@notify.e2e.test"
         }
       ]
+    },
+    {
+      "name": "Leaving E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@leaving.e2e.test",
+          "role": "ADMIN",
+          "name": "Lane Admin"
+        },
+        {
+          "email": "member@leaving.e2e.test",
+          "role": "MEMBER",
+          "name": "Lee Leaving"
+        }
+      ]
+    },
+    {
+      "name": "Closing E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@closing.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@closing.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Export E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@export.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@export.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Handbook",
+          "content": "Exported, with its file.",
+          "visibility": "PUBLIC",
+          "owner": "member@export.e2e.test",
+          "attachments": ["policies.pdf"]
+        },
+        {
+          "title": "Secret diary",
+          "content": "Counted, never exported.",
+          "visibility": "PRIVATE",
+          "owner": "member@export.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Deleted E2E",
+      "subscribed": false,
+      "deleted": true,
+      "users": [
+        {
+          "email": "admin@deleted.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
     }
   ]
 }

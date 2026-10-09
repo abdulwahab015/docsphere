@@ -23,6 +23,7 @@ from audit.models import AuditEvent
 from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
+    AccountDeletionSerializer,
     CurrentUserSerializer,
     EmailChangeConfirmSerializer,
     EmailChangeRequestSerializer,
@@ -53,6 +54,7 @@ from users.services import (
     EMAIL_IN_USE_MESSAGE,
     blacklist_outstanding_tokens,
     bulk_create_invitations,
+    delete_account,
     find_invitation_conflict,
     is_email_in_use,
     lock_organization_for_admin_change,
@@ -139,6 +141,39 @@ class CurrentUserAPIView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class AccountDeleteAPIView(APIView):
+    """A signed-in user deletes their own account (see
+    ``users/services.py::delete_account``) and is signed out. Reachable
+    without a subscription, so a member of a lapsed organization can still
+    leave."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_change"
+
+    @extend_schema(
+        request=AccountDeletionSerializer,
+        responses={
+            204: OpenApiResponse(description="Deleted and signed out."),
+            400: OpenApiResponse(
+                description="Wrong password, the organization's only admin, or "
+                "the only Owner of something."
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = AccountDeletionSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        delete_account(request.user)
+
+        response = Response(status=status.HTTP_204_NO_CONTENT)
+        clear_refresh_cookie(response)
+        return response
 
 
 class EmailVerificationResendAPIView(APIView):
@@ -620,7 +655,8 @@ class OrganizationRoleUpdateAPIView(APIView):
 
 class DeactivatedUserListAPIView(generics.ListAPIView):
     """Deactivated users in the requesting admin's organization - the list
-    ``ReactivateUserAPIView`` restores from."""
+    ``ReactivateUserAPIView`` restores from. Deleted accounts aren't
+    deactivated ones: they can never come back."""
 
     serializer_class = UserDetailSerializer
     permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
@@ -629,20 +665,25 @@ class DeactivatedUserListAPIView(generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            _organization_users(self.request).filter(is_active=False).order_by("email")
+            _organization_users(self.request)
+            .filter(is_active=False, deleted_at__isnull=True)
+            .order_by("email")
         )
 
 
 class ReactivateUserAPIView(APIView):
     """Reverses a deactivation within the requesting admin's organization.
-    An already-active or cross-organization user is a 404."""
+    An already-active, deleted or cross-organization user is a 404."""
 
     permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     @extend_schema(request=None, responses={200: UserDetailSerializer})
     def post(self, request, pk):
         user = get_object_or_404(
-            _organization_users(request).filter(is_active=False), pk=pk
+            _organization_users(request).filter(
+                is_active=False, deleted_at__isnull=True
+            ),
+            pk=pk,
         )
         with transaction.atomic():
             user.is_active = True

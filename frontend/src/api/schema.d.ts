@@ -485,6 +485,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/delete/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description An admin deletes their organization, confirming with its name: from
+         *     then on nobody in it can use the app, the subscription is cancelled at
+         *     once, and it's purged with everything in it after 30 days unless an
+         *     admin restores it. Reachable without a subscription, so a lapsed
+         *     organization can leave too.
+         */
+        post: operations["api_v1_organizations_delete_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/delete/cancel/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description An admin restores their deleted organization before it's purged. Its
+         *     subscription stays cancelled.
+         */
+        post: operations["api_v1_organizations_delete_cancel_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/exports/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description An admin asks for an export of the organization: it's built in the
+         *     background and a download link is emailed to them.
+         */
+        post: operations["api_v1_organizations_exports_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/exports/download/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Downloads an export from the token in its emailed link, for an admin
+         *     of its organization, while the link hasn't expired.
+         */
+        get: operations["api_v1_organizations_exports_download_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/profile/": {
         parameters: {
             query?: never;
@@ -840,7 +923,7 @@ export interface paths {
         put?: never;
         /**
          * @description Reverses a deactivation within the requesting admin's organization.
-         *     An already-active or cross-organization user is a 404.
+         *     An already-active, deleted or cross-organization user is a 404.
          */
         post: operations["api_v1_users_reactivate_create"];
         delete?: never;
@@ -1024,7 +1107,8 @@ export interface paths {
         };
         /**
          * @description Deactivated users in the requesting admin's organization - the list
-         *     ``ReactivateUserAPIView`` restores from.
+         *     ``ReactivateUserAPIView`` restores from. Deleted accounts aren't
+         *     deactivated ones: they can never come back.
          */
         get: operations["api_v1_users_deactivated_list"];
         put?: never;
@@ -1167,6 +1251,28 @@ export interface paths {
         patch: operations["api_v1_users_me_partial_update"];
         trace?: never;
     };
+    "/api/v1/users/me/delete/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description A signed-in user deletes their own account (see
+         *     ``users/services.py::delete_account``) and is signed out. Reachable
+         *     without a subscription, so a member of a lapsed organization can still
+         *     leave.
+         */
+        post: operations["api_v1_users_me_delete_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/email/": {
         parameters: {
             query?: never;
@@ -1264,6 +1370,10 @@ export interface components {
          * @enum {string}
          */
         AccessLevelEnum: "VIEWER" | "EDITOR" | "OWNER";
+        /** @description Deleting your own account: your password proves it's really you. */
+        AccountDeletion: {
+            current_password: string;
+        };
         /** @description Read-only summary of a dj-stripe Subscription. */
         ActiveSubscription: {
             id: string;
@@ -1344,13 +1454,14 @@ export interface components {
          *     * `INVITATION_RESENT` - Invitation resent
          *     * `INVITATION_REVOKED` - Invitation revoked
          *     * `INVITATION_ACCEPTED` - Invitation accepted
+         *     * `ACCOUNT_DELETED` - Account deleted
          *     * `DELETED` - Moved to the trash
          *     * `RESTORED` - Restored
          *     * `ATTACHMENT_ADDED` - File attached
          *     * `ATTACHMENT_DELETED` - File deleted
          * @enum {string}
          */
-        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
+        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "ACCOUNT_DELETED" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
         BillingPortalSessionResponse: {
             /** Format: uri */
             portal_url: string;
@@ -1656,6 +1767,10 @@ export interface components {
             /** Format: date-time */
             readonly modified: string;
         };
+        /** @description Deleting the organization is confirmed by typing its name. */
+        OrganizationDeletion: {
+            name: string;
+        };
         /** @description Input for creating an Organization together with its first admin User. */
         OrganizationSignup: {
             name: string;
@@ -1682,6 +1797,8 @@ export interface components {
              *     payment details before Stripe gives up.
              */
             readonly payment_failed: boolean;
+            /** Format: date-time */
+            readonly deletion_scheduled_for: string | null;
         };
         PaginatedAttachmentList: {
             /** @example 123 */
@@ -2809,6 +2926,115 @@ export interface operations {
             };
         };
     };
+    api_v1_organizations_delete_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDeletion"];
+                "application/x-www-form-urlencoded": components["schemas"]["OrganizationDeletion"];
+                "multipart/form-data": components["schemas"]["OrganizationDeletion"];
+            };
+        };
+        responses: {
+            /** @description Deleted; purged in 30 days. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The name doesn't match, or it's already deleted. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stripe couldn't cancel the subscription; nothing changed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_organizations_delete_cancel_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The organization isn't deleted. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_organizations_exports_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Building; a link will be emailed. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_organizations_exports_download_retrieve: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Invalid or expired link. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     api_v1_organizations_profile_retrieve: {
         parameters: {
             query?: never;
@@ -3834,6 +4060,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CurrentUser"];
                 };
+            };
+        };
+    };
+    api_v1_users_me_delete_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountDeletion"];
+                "application/x-www-form-urlencoded": components["schemas"]["AccountDeletion"];
+                "multipart/form-data": components["schemas"]["AccountDeletion"];
+            };
+        };
+        responses: {
+            /** @description Deleted and signed out. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wrong password, the organization's only admin, or the only Owner of something. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

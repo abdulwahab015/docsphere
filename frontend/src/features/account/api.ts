@@ -1,5 +1,6 @@
 import { apiClient } from '@/api/client'
 import type {
+  AccountDeletionPayload,
   CurrentUser,
   CurrentUserUpdatePayload,
   EmailChangeRequestPayload,
@@ -19,4 +20,8 @@ export async function updateCurrentUser(payload: CurrentUserUpdatePayload) {
 
 export async function requestEmailChange(payload: EmailChangeRequestPayload) {
   await apiClient.post('/users/me/email/', payload)
+}
+
+export async function deleteAccount(payload: AccountDeletionPayload) {
+  await apiClient.post('/users/me/delete/', payload)
 }

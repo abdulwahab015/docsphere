@@ -272,6 +272,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "notifications.tasks.remove_expired_notifications_task",
         "schedule": crontab(hour=2, minute=30),
     },
+    "remove-expired-exports": {
+        "task": "organizations.tasks.remove_expired_exports_task",
+        "schedule": crontab(hour=3, minute=0),
+    },
+    "purge-deleted-organizations": {
+        "task": "organizations.tasks.purge_deleted_organizations_task",
+        "schedule": crontab(hour=3, minute=30),
+    },
 }
 
 SUBSCRIPTION_EXPIRY_REMINDER_DAYS = config(

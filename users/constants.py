@@ -15,3 +15,7 @@ MAX_PASSWORD_LENGTH = 128
 MAX_NAME_LENGTH = 150
 
 MAX_BULK_INVITE_ROWS = 500
+
+# How a deleted account is shown wherever it's still named (as the author of
+# a document, the sender of an invitation, ...).
+DELETED_USER_NAME = "Deleted user"

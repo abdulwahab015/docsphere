@@ -187,6 +187,13 @@ export const routes: RouteObject[] = [
                             ),
                           },
                           {
+                            path: PATHS.organizationExport,
+                            lazy: lazyPage(
+                              () => import('@/features/organization/pages/ExportDownloadPage'),
+                              (module) => module.ExportDownloadPage,
+                            ),
+                          },
+                          {
                             path: PATHS.billing,
                             lazy: lazyPage(
                               () => import('@/features/billing/pages/BillingPage'),

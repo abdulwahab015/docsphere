@@ -17,3 +17,7 @@ export const changeEmailSchema = z.object({
   new_email: emailSchema,
   current_password: z.string().min(1, { error: 'Enter your current password.' }),
 })
+
+export const deleteAccountSchema = z.object({
+  current_password: z.string().min(1, { error: 'Enter your current password.' }),
+})

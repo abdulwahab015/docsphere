@@ -60,3 +60,24 @@ def sync_billing_email(organization):
         )
     except stripe_client.StripeError as error:
         raise PaymentProviderUnavailable() from error
+
+
+def cancel_subscription(organization):
+    """Cancels the organization's subscription at once, if it has one, and
+    records the new status locally so access ends now rather than when the
+    webhook arrives (which brings the rest). Raises
+    ``PaymentProviderUnavailable`` if Stripe can't do it."""
+    subscription = organization.active_subscription
+    if not subscription:
+        return
+
+    try:
+        cancelled = stripe_client.cancel_subscription(subscription.id)
+    except stripe_client.StripeError as error:
+        raise PaymentProviderUnavailable() from error
+
+    subscription.stripe_data = {
+        **subscription.stripe_data,
+        "status": cancelled["status"],
+    }
+    subscription.save(update_fields=["stripe_data"])

@@ -13,7 +13,7 @@ demo accounts, Stripe test mode, and the rules the code follows.
 | Service | What it is |
 | --- | --- |
 | `frontend` | nginx: serves the built app and forwards Django's paths to `web`. The only published port (`APP_PORT`, default 8080). |
-| `web` | Django on gunicorn (`core.settings.production`), reachable only inside the stack. Files attached to documents are stored on its `media` volume. |
+| `web` | Django on gunicorn (`core.settings.production`), reachable only inside the stack. Files attached to documents, and organizations' data exports, are stored on its `media` volume. |
 | `worker`, `flower` | Celery worker, and its dashboard |
 | `beat` | Sends scheduled tasks (the daily renewal reminders and clean-ups) to the worker. Run exactly one. |
 | `db`, `redis` | Postgres, and the Celery broker |

@@ -72,7 +72,10 @@ class Command(BaseCommand):
 
     def _seed_organization(self, spec, password):
         organization = OrganizationFactory(
-            name=spec["name"], billing_email=spec.get("billing_email")
+            name=spec["name"],
+            billing_email=spec.get("billing_email"),
+            # Deleted by its admin, waiting to be purged.
+            deletion_requested_at=timezone.now() if spec.get("deleted") else None,
         )
         if spec["subscribed"]:
             StripeSubscriptionFactory(

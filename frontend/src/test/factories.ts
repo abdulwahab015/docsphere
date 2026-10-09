@@ -27,6 +27,7 @@ export function buildOrganizationSummary(
     name: 'Acme',
     has_active_subscription: true,
     payment_failed: false,
+    deletion_scheduled_for: null,
     ...overrides,
   }
 }

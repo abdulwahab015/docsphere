@@ -214,7 +214,8 @@ core/            settings/ (base, local, test, production), URLs, Celery, and sh
                  the base model, pagination, request logging, email, health check,
                  subscription gate, error reporting. No business models.
 users/           User (email login, no username), Invitation, authentication endpoints
-organizations/   Organization, its signup and profile, its subscription properties
+organizations/   Organization, its signup and profile, its subscription properties,
+                 deleting it (purged after 30 days) and exporting its data
 projects/        Project, Document, their permissions, sharing and access requests
 audit/           The organization's activity (audit log) that admins read
 notifications/   What each person is told in the app (the bell in the top bar)
@@ -253,6 +254,14 @@ still pass, so a change that touches them needs a test that pins them down.
 - **Deactivating a user** (`is_active=False`) is how people are removed. Deactivated users
   can't sign in, be shared with, or receive emails. Nothing is hard-deleted, and every
   project and document keeps its creator.
+- **Leaving.** A person deleting their own account is *anonymised*, not deleted: the row
+  stays (as "Deleted user", no email or password, never reactivatable) so what they wrote
+  keeps an author; it's refused for the organization's only admin and for the only Owner
+  of anything. An admin deleting the organization (typing its name) signs everyone out,
+  cancels the subscription at once and blocks the app (`403 organization_deleted`); an
+  admin can restore it for 30 days, then a daily task purges it, files included. An admin's
+  export (a .zip, emailed as a 7-day link) holds only what that admin can open: private
+  things are counted, never exported.
 - **A new signup verifies its email before anything else.** Until they open the emailed
   link, the API refuses them everywhere with **403** `email_unverified` (checked before the
   subscription), except to verify, ask for a new link, read `/users/me/` and log out.

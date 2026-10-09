@@ -1,4 +1,6 @@
 import json
+import time
+import zipfile
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
@@ -11,6 +13,7 @@ from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
+from django.core.files.storage import default_storage
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
@@ -20,18 +23,50 @@ from djstripe.models import Price
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
+from audit.factories import AuditEventFactory
+from audit.models import AuditEvent
+from core.tests import AssumeActiveSubscription
+from notifications.factories import NotificationFactory
+from notifications.models import Notification
 from organizations.admin import OrganizationAdmin
+from organizations.exports import (
+    INVALID_EXPORT_LINK_MESSAGE,
+    build_export,
+    make_export_token,
+)
 from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
+    StripePriceFactory,
     StripeSubscriptionFactory,
 )
-from organizations.models import Organization
+from organizations.models import Organization, OrganizationExport
+from organizations.tasks import (
+    purge_deleted_organizations_task,
+    remove_expired_exports_task,
+)
+from projects.choices import AccessLevel, Visibility
+from projects.factories import (
+    AttachmentFactory,
+    DocumentFactory,
+    DocumentPermissionFactory,
+    DocumentVersionFactory,
+    ProjectFactory,
+    ProjectPermissionFactory,
+)
 from projects.models import Document, Project
-from users.factories import AdminUserFactory, UserFactory
+from projects.tests import TemporaryMediaRoot
+from subscriptions.api.v1.serializers import ORGANIZATION_DELETED_MESSAGE
+from users.choices import InvitationStatus
+from users.factories import AdminUserFactory, InvitationFactory, UserFactory
+from users.models import Invitation
 
 User = get_user_model()
+
+DAY = 24 * 60 * 60
 
 
 class OrganizationModelTests(TestCase):
@@ -524,6 +559,7 @@ class SeedE2ECommandTests(TestCase):
             {
                 "name": "Unpaid Org",
                 "subscribed": False,
+                "deleted": True,
                 "users": [
                     {"email": "member@unpaid.test", "role": "MEMBER"},
                     {
@@ -625,6 +661,13 @@ class SeedE2ECommandTests(TestCase):
             Organization.objects.get(name="Paid Org").billing_email, "billing@paid.test"
         )
         self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
+        # ...and one can already be deleted, waiting to be purged.
+        self.assertTrue(
+            Organization.objects.get(name="Unpaid Org").deletion_requested_at
+        )
+        self.assertIsNone(
+            Organization.objects.get(name="Paid Org").deletion_requested_at
+        )
 
     def test_seeds_projects_with_their_owner_and_shares(self):
         with self.assertNumQueries(43):
@@ -724,3 +767,381 @@ class SeedE2ECommandTests(TestCase):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         self.assertFalse(Organization.objects.exists())
+
+
+class OrganizationDeletionTests(APITestCase):
+    url = reverse("organization_delete")
+    cancel_url = reverse("organization_delete_cancel")
+
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory(name="Acme")
+        self.subscription = StripeSubscriptionFactory(customer__subscriber=self.org)
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(organization=self.org)
+        self.client.force_authenticate(self.admin)
+
+    def mark_deleted(self):
+        """Deleted already - on the instance the signed-in admin shares."""
+        self.org.deletion_requested_at = timezone.now()
+        self.org.save()
+
+    def delete_organization(self, name="Acme", queries=0):
+        with self.assertNumQueries(queries):
+            return self.client.post(self.url, {"name": name})
+
+    @patch("clients.stripe.cancel_subscription", return_value={"status": "canceled"})
+    def test_an_admin_deletes_the_organization_by_typing_its_name(self, cancel):
+        invitation = InvitationFactory(organization=self.org, invited_by=self.admin)
+        RefreshToken.for_user(self.member)
+
+        response = self.delete_organization(queries=15)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.org.refresh_from_db()
+        self.assertTrue(self.org.deletion_requested_at)
+        cancel.assert_called_once_with(self.subscription.id)
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.stripe_data["status"], "canceled")
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, InvitationStatus.REVOKED)
+        self.assertFalse(
+            OutstandingToken.objects.filter(
+                user=self.member, blacklistedtoken__isnull=True
+            ).exists()
+        )
+
+    @patch("clients.stripe.cancel_subscription", return_value={"status": "canceled"})
+    def test_nobody_in_it_can_use_the_app_and_it_says_when_it_goes(self, _cancel):
+        self.delete_organization(queries=11)
+        self.org.refresh_from_db()
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            projects = self.client.get(reverse("project_list_create"))
+        with self.assertNumQueries(2):
+            me = self.client.get(reverse("user_me"))
+
+        self.assertEqual(projects.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(projects.data["code"], "organization_deleted")
+        self.assertEqual(
+            me.data["organization"]["deletion_scheduled_for"],
+            (self.org.deletion_requested_at + timedelta(days=30))
+            .isoformat()
+            .replace("+00:00", "Z"),
+        )
+
+    @patch("clients.stripe.cancel_subscription")
+    def test_a_lapsed_organization_can_delete_itself(self, cancel):
+        self.subscription.delete()
+
+        response = self.delete_organization(queries=10)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        cancel.assert_not_called()
+
+    @patch("clients.stripe.cancel_subscription")
+    def test_a_name_that_doesnt_match_changes_nothing(self, cancel):
+        response = self.delete_organization(name="acme", queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data)
+        self.org.refresh_from_db()
+        self.assertIsNone(self.org.deletion_requested_at)
+        cancel.assert_not_called()
+
+    @patch("clients.stripe.cancel_subscription", side_effect=stripe.StripeError("down"))
+    def test_if_stripe_cant_cancel_nothing_changes(self, _cancel):
+        invitation = InvitationFactory(organization=self.org, invited_by=self.admin)
+
+        response = self.delete_organization(queries=11)
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        self.org.refresh_from_db()
+        self.assertIsNone(self.org.deletion_requested_at)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, InvitationStatus.PENDING)
+
+    def test_members_cant_delete_it(self):
+        self.client.force_authenticate(self.member)
+
+        response = self.delete_organization(queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_deleting_it_twice_is_refused(self):
+        self.mark_deleted()
+
+        response = self.delete_organization(queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_an_admin_restores_it_and_it_needs_a_new_subscription(self):
+        self.subscription.delete()
+        self.mark_deleted()
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.cancel_url)
+        with self.assertNumQueries(2):
+            projects = self.client.get(reverse("project_list_create"))
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.org.refresh_from_db()
+        self.assertIsNone(self.org.deletion_requested_at)
+        self.assertEqual(projects.status_code, status.HTTP_402_PAYMENT_REQUIRED)
+
+    def test_restoring_one_that_isnt_deleted_is_refused(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(self.cancel_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_it_cant_subscribe_while_deleted(self):
+        self.subscription.delete()
+        self.mark_deleted()
+        price = StripePriceFactory()
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("subscriptions_checkout"), {"price_id": price.id}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(ORGANIZATION_DELETED_MESSAGE, str(response.data))
+
+
+class OrganizationPurgeTests(TemporaryMediaRoot, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory()
+        admin = AdminUserFactory(organization=self.org)
+        member = UserFactory(organization=self.org)
+        project = ProjectFactory(organization=self.org, created_by=admin)
+        ProjectPermissionFactory(project=project, user=member)
+        self.document = DocumentFactory(project=project, created_by=member)
+        DocumentVersionFactory(document=self.document, created_by=member)
+        DocumentPermissionFactory(document=self.document, user=admin)
+        self.attachment = AttachmentFactory(document=self.document, uploaded_by=member)
+        InvitationFactory(organization=self.org, invited_by=admin)
+        AuditEventFactory(organization=self.org, actor=admin, target_user=member)
+        NotificationFactory(recipient=member, actor=admin, document=self.document)
+        self.other_document = DocumentFactory()
+        self.export = OrganizationExport.objects.create(
+            organization=self.org, requested_by=admin
+        )
+        build_export(self.export)
+
+    def deleted_days_ago(self, days):
+        Organization.objects.filter(pk=self.org.pk).update(
+            deletion_requested_at=timezone.now() - timedelta(days=days)
+        )
+
+    def test_an_organization_deleted_over_30_days_ago_is_purged_entirely(self):
+        self.deleted_days_ago(31)
+        stored = self.attachment.file.name
+
+        with self.captureOnCommitCallbacks(execute=True):
+            purge_deleted_organizations_task()
+
+        org_id = self.org.pk
+        self.assertFalse(Organization.objects.filter(pk=org_id).exists())
+        self.assertFalse(User.objects.filter(organization_id=org_id).exists())
+        self.assertFalse(Project.objects.filter(organization_id=org_id).exists())
+        self.assertFalse(Document.objects.filter(organization_id=org_id).exists())
+        self.assertFalse(Invitation.objects.filter(organization_id=org_id).exists())
+        self.assertFalse(AuditEvent.objects.filter(organization_id=org_id).exists())
+        self.assertFalse(Notification.objects.exists())
+        self.assertFalse(default_storage.exists(stored))
+        self.assertFalse(default_storage.exists(self.export.file.name))
+        # Other organizations are untouched.
+        self.assertTrue(Document.objects.filter(pk=self.other_document.pk).exists())
+
+    def test_one_deleted_more_recently_is_kept(self):
+        self.deleted_days_ago(29)
+
+        purge_deleted_organizations_task()
+
+        self.assertTrue(Organization.objects.filter(pk=self.org.pk).exists())
+        self.assertTrue(default_storage.exists(self.attachment.file.name))
+
+
+class OrganizationExportTests(
+    TemporaryMediaRoot, AssumeActiveSubscription, APITestCase
+):
+    create_url = reverse("organization_export_create")
+    download_url = reverse("organization_export_download")
+
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory(name="Acme")
+        self.admin = AdminUserFactory(organization=self.org, email="ada@acme.test")
+        self.member = UserFactory(organization=self.org, email="mia@acme.test")
+        self.client.force_authenticate(self.admin)
+
+    def make_export(self):
+        export = OrganizationExport.objects.create(
+            organization=self.org, requested_by=self.admin
+        )
+        build_export(export)
+        return export
+
+    def read_export(self, export):
+        with zipfile.ZipFile(export.file.open("rb")) as archive:
+            return {
+                name: (
+                    json.loads(archive.read(name))
+                    if name.endswith(".json")
+                    else archive.read(name)
+                )
+                for name in archive.namelist()
+            }
+
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+    def test_an_admin_asks_for_an_export_and_is_emailed_a_link(self):
+        with (
+            self.assertNumQueries(10),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            response = self.client.post(self.create_url)
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        export = OrganizationExport.objects.get()
+        self.assertTrue(export.file)
+        self.assertEqual(mail.outbox[0].to, ["ada@acme.test"])
+        self.assertIn(
+            f"/settings/organization/export?token={make_export_token(export)}",
+            mail.outbox[0].body,
+        )
+
+    def test_it_holds_only_what_the_admin_can_open(self):
+        shared = DocumentFactory(
+            project=None,
+            organization=self.org,
+            created_by=self.member,
+            title="Shared",
+            content="Shared text",
+        )
+        DocumentPermissionFactory(
+            document=shared, user=self.member, access_level=AccessLevel.OWNER
+        )
+        DocumentPermissionFactory(
+            document=shared, user=self.admin, access_level=AccessLevel.VIEWER
+        )
+        AttachmentFactory(document=shared, uploaded_by=self.member, name="a.pdf")
+        DocumentFactory(
+            project=None,
+            organization=self.org,
+            created_by=self.member,
+            title="Private",
+            content="Secret text",
+        )
+        ProjectFactory(
+            organization=self.org,
+            created_by=self.admin,
+            name="Roadmap",
+            visibility=Visibility.PUBLIC,
+        )
+        ProjectFactory(organization=self.org, created_by=self.member, name="Layoffs")
+        DocumentFactory(title="Elsewhere")
+
+        contents = self.read_export(self.make_export())
+
+        self.assertEqual(
+            [document["title"] for document in contents["documents.json"]], ["Shared"]
+        )
+        self.assertEqual(contents["documents.json"][0]["content"], "Shared text")
+        self.assertEqual(
+            contents["documents.json"][0]["shared_with"],
+            [
+                {"email": "mia@acme.test", "access_level": "OWNER"},
+                {"email": "ada@acme.test", "access_level": "VIEWER"},
+            ],
+        )
+        self.assertEqual(
+            [project["name"] for project in contents["projects.json"]], ["Roadmap"]
+        )
+        self.assertEqual(
+            contents["organization.json"]["not_included"],
+            {"private_projects": 1, "private_documents": 1},
+        )
+        self.assertEqual(
+            [member["email"] for member in contents["members.json"]],
+            ["ada@acme.test", "mia@acme.test"],
+        )
+        attachment_path = contents["documents.json"][0]["attachments"][0]
+        self.assertTrue(attachment_path.endswith("-a.pdf"))
+        self.assertIn(attachment_path, contents)
+        self.assertNotIn("Secret text", str(contents))
+        self.assertNotIn("Elsewhere", str(contents))
+
+    def test_an_admin_downloads_it_from_the_link(self):
+        export = self.make_export()
+
+        with self.assertNumQueries(1):
+            response = self.client.get(
+                self.download_url, {"token": make_export_token(export)}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "application/zip")
+        self.assertIn("attachment;", response["Content-Disposition"])
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+        self.assertTrue(b"".join(response.streaming_content).startswith(b"PK"))
+
+    def test_an_expired_or_altered_link_is_refused(self):
+        export = self.make_export()
+        token = make_export_token(export)
+
+        with self.assertNumQueries(0):
+            altered = self.client.get(self.download_url, {"token": token + "x"})
+        with (
+            patch("django.core.signing.time.time", return_value=time.time() + 8 * DAY),
+            self.assertNumQueries(0),
+        ):
+            expired = self.client.get(self.download_url, {"token": token})
+
+        self.assertEqual(altered.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(expired.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(expired.data["detail"]), INVALID_EXPORT_LINK_MESSAGE)
+
+    def test_another_organizations_export_is_not_found(self):
+        other_admin = AdminUserFactory()
+        theirs = OrganizationExport.objects.create(
+            organization=other_admin.organization, requested_by=other_admin
+        )
+        build_export(theirs)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(
+                self.download_url, {"token": make_export_token(theirs)}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_members_cant_ask_for_or_download_one(self):
+        export = self.make_export()
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            asked = self.client.post(self.create_url)
+        with self.assertNumQueries(0):
+            downloaded = self.client.get(
+                self.download_url, {"token": make_export_token(export)}
+            )
+
+        self.assertEqual(asked.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(downloaded.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_exports_older_than_a_week_are_removed_daily(self):
+        kept, expired = self.make_export(), self.make_export()
+        OrganizationExport.objects.filter(pk=expired.pk).update(
+            created=timezone.now() - timedelta(days=8)
+        )
+        stored = expired.file.name
+
+        with self.assertNumQueries(2):
+            remove_expired_exports_task()
+
+        self.assertQuerySetEqual(OrganizationExport.objects.all(), [kept])
+        self.assertFalse(default_storage.exists(stored))
+        self.assertTrue(default_storage.exists(kept.file.name))

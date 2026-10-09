@@ -17,6 +17,7 @@ VERBS_BY_KIND = {
         AuditVerb.INVITATION_RESENT,
         AuditVerb.INVITATION_REVOKED,
         AuditVerb.INVITATION_ACCEPTED,
+        AuditVerb.ACCOUNT_DELETED,
     ),
     AuditKind.TRASH: (AuditVerb.DELETED, AuditVerb.RESTORED),
     AuditKind.ATTACHMENTS: (AuditVerb.ATTACHMENT_ADDED, AuditVerb.ATTACHMENT_DELETED),

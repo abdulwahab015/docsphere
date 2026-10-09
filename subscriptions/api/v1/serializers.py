@@ -3,6 +3,9 @@ from rest_framework import serializers
 
 from subscriptions.utils import active_recurring_prices
 
+ORGANIZATION_DELETED_MESSAGE = (
+    "Your organization has been deleted. Restore it before subscribing again."
+)
 ALREADY_SUBSCRIBED_MESSAGE = (
     "Your organization already has an active subscription. "
     "Manage it from the billing portal."
@@ -48,6 +51,8 @@ class CheckoutSessionSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         organization = self.context["organization"]
+        if organization.deletion_requested_at:
+            raise serializers.ValidationError(ORGANIZATION_DELETED_MESSAGE)
         if not organization.billing_email:
             raise serializers.ValidationError("Organization billing email is not set.")
         # A second checkout would start a second, separately billed subscription.

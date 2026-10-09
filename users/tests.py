@@ -28,11 +28,23 @@ from openpyxl import Workbook
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from core.tests import AssumeActiveSubscription
+from notifications.factories import NotificationFactory
 from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
 from organizations.models import Organization
+from projects.choices import AccessLevel, AccessRequestStatus
+from projects.factories import (
+    DocumentAccessRequestFactory,
+    DocumentFactory,
+    DocumentPermissionFactory,
+)
+from projects.models import DocumentAccessRequest, DocumentPermission
+from users import services as user_services
 from users.api.v1 import views as user_views
 from users.choices import InvitationStatus, OrganizationRole
 from users.constants import MAX_BULK_INVITE_ROWS, MAX_NAME_LENGTH
@@ -41,10 +53,20 @@ from users.email_links import (
     make_email_change_token,
     make_verification_token,
 )
-from users.factories import AdminUserFactory, InvitationFactory, UserFactory
+from users.factories import (
+    DEFAULT_TEST_PASSWORD,
+    AdminUserFactory,
+    InvitationFactory,
+    UserFactory,
+)
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
-from users.services import EMAIL_IN_USE_MESSAGE, NO_LONGER_ADMIN_MESSAGE
+from users.services import (
+    EMAIL_IN_USE_MESSAGE,
+    LAST_ADMIN_LEAVING_MESSAGE,
+    NO_LONGER_ADMIN_MESSAGE,
+    sole_owner_message,
+)
 from users.tasks import remove_unverified_accounts_task
 
 User = get_user_model()
@@ -1354,6 +1376,7 @@ class CurrentUserAPITests(APITestCase):
                     "name": "Acme",
                     "has_active_subscription": True,
                     "payment_failed": False,
+                    "deletion_scheduled_for": None,
                 },
             },
         )
@@ -2456,6 +2479,231 @@ class ConcurrentAdminChangeTests(AssumeActiveSubscription, TransactionTestCase):
         self.assertEqual(
             User.objects.filter(
                 organization=organization, org_role=OrganizationRole.ADMIN
+            ).count(),
+            1,
+        )
+
+
+class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
+    url = reverse("user_account_delete")
+
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(
+            organization=self.org, name="Mia", email="mia@example.com"
+        )
+        self.document = DocumentFactory(
+            project=None, organization=self.org, created_by=self.admin
+        )
+        DocumentPermissionFactory(
+            document=self.document, user=self.admin, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.member)
+
+    def delete_account(self, password=DEFAULT_TEST_PASSWORD, queries=0):
+        with self.assertNumQueries(queries):
+            return self.client.post(self.url, {"current_password": password})
+
+    def test_a_member_deletes_their_account_which_is_anonymised(self):
+        written = DocumentFactory(
+            project=None, organization=self.org, created_by=self.member
+        )
+        for user in (self.admin, self.member):
+            DocumentPermissionFactory(
+                document=written, user=user, access_level=AccessLevel.OWNER
+            )
+        DocumentPermissionFactory(
+            document=self.document, user=self.member, access_level=AccessLevel.EDITOR
+        )
+        pending = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.member
+        )
+        answered = DocumentAccessRequestFactory(
+            document=written,
+            requested_by=self.member,
+            status=AccessRequestStatus.DENIED,
+        )
+        NotificationFactory(recipient=self.member)
+        RefreshToken.for_user(self.member)
+
+        response = self.delete_account(queries=16)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.cookies[settings.REFRESH_COOKIE_NAME].value, "")
+        self.member.refresh_from_db()
+        self.assertEqual(
+            (
+                self.member.email,
+                self.member.name,
+                self.member.is_active,
+                self.member.has_usable_password(),
+                bool(self.member.deleted_at),
+            ),
+            (
+                f"deleted-{self.member.pk}@deleted.invalid",
+                "Deleted user",
+                False,
+                False,
+                True,
+            ),
+        )
+        # What they wrote keeps its (now anonymous) author; their access,
+        # pending request and notifications are gone, answered requests kept.
+        written.refresh_from_db()
+        self.assertEqual(written.created_by, self.member)
+        self.assertFalse(DocumentPermission.objects.filter(user=self.member).exists())
+        self.assertFalse(DocumentAccessRequest.objects.filter(pk=pending.pk).exists())
+        self.assertTrue(DocumentAccessRequest.objects.filter(pk=answered.pk).exists())
+        self.assertFalse(self.member.notifications.exists())
+        self.assertFalse(
+            OutstandingToken.objects.filter(user=self.member)
+            .exclude(blacklistedtoken__isnull=False)
+            .exists()
+        )
+        self.assertEqual(
+            list(AuditEvent.objects.values_list("actor", "verb")),
+            [(self.member.pk, AuditVerb.ACCOUNT_DELETED)],
+        )
+
+    def test_the_old_address_can_no_longer_sign_in_and_is_free_again(self):
+        self.delete_account(queries=12)
+        self.client.force_authenticate(None)
+
+        with self.assertNumQueries(1):
+            login = self.client.post(
+                reverse("auth_login"),
+                {"email": "mia@example.com", "password": DEFAULT_TEST_PASSWORD},
+            )
+        self.client.force_authenticate(self.admin)
+        with self.assertNumQueries(8):
+            invite = self.client.post(
+                reverse("invitation_list_create"), {"email": "mia@example.com"}
+            )
+
+        self.assertEqual(login.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(invite.status_code, status.HTTP_201_CREATED)
+
+    def test_a_deleted_account_is_neither_deactivated_nor_reactivatable(self):
+        self.delete_account(queries=12)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            listed = self.client.get(reverse("user_deactivated_list"))
+        with self.assertNumQueries(1):
+            reactivated = self.client.post(
+                reverse("user_reactivate", args=[self.member.pk])
+            )
+
+        self.assertEqual(listed.data["count"], 0)
+        self.assertEqual(reactivated.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_a_wrong_password_changes_nothing(self):
+        response = self.delete_account(password="Wrong-Pass-123!", queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", response.data)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_active)
+
+    def test_the_only_owner_of_something_is_refused(self):
+        sole = DocumentFactory(
+            project=None, organization=self.org, created_by=self.member
+        )
+        DocumentPermissionFactory(
+            document=sole, user=self.member, access_level=AccessLevel.OWNER
+        )
+
+        response = self.delete_account(queries=6)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            str(response.data["detail"]), sole_owner_message(projects=0, documents=1)
+        )
+        self.member.refresh_from_db()
+        self.assertEqual(
+            (self.member.is_active, self.member.email), (True, "mia@example.com")
+        )
+
+    def test_the_organizations_only_admin_is_refused(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.delete_account(queries=5)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(response.data["detail"]), LAST_ADMIN_LEAVING_MESSAGE)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_an_admin_may_leave_while_another_admin_remains(self):
+        leaving = AdminUserFactory(organization=self.org)
+        self.client.force_authenticate(leaving)
+
+        response = self.delete_account(queries=13)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_signing_in_is_required(self):
+        self.client.force_authenticate(None)
+
+        response = self.delete_account(queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentAccountDeletionTests(AssumeActiveSubscription, TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    def test_two_admins_leaving_at_once_leave_one_admin(self):
+        organization = OrganizationFactory()
+        admins = AdminUserFactory.create_batch(2, organization=organization)
+        both_checked = threading.Barrier(2)
+        revoke_sessions = user_services.blacklist_outstanding_tokens
+        responses = []
+
+        def revoke_after_the_other_checked(user):
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return revoke_sessions(user)
+
+        def leave(admin):
+            client = APIClient()
+            client.force_authenticate(admin)
+            try:
+                responses.append(
+                    client.post(
+                        reverse("user_account_delete"),
+                        {"current_password": DEFAULT_TEST_PASSWORD},
+                    )
+                )
+            finally:
+                connection.close()
+
+        with patch.object(
+            user_services,
+            "blacklist_outstanding_tokens",
+            side_effect=revoke_after_the_other_checked,
+        ):
+            requests = [
+                threading.Thread(target=leave, args=(admin,)) for admin in admins
+            ]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_204_NO_CONTENT, status.HTTP_400_BAD_REQUEST],
+        )
+        self.assertEqual(
+            User.objects.filter(
+                organization=organization,
+                org_role=OrganizationRole.ADMIN,
+                is_active=True,
             ).count(),
             1,
         )

@@ -17,6 +17,7 @@ class AuditVerb(models.TextChoices):
     INVITATION_RESENT = "INVITATION_RESENT", "Invitation resent"
     INVITATION_REVOKED = "INVITATION_REVOKED", "Invitation revoked"
     INVITATION_ACCEPTED = "INVITATION_ACCEPTED", "Invitation accepted"
+    ACCOUNT_DELETED = "ACCOUNT_DELETED", "Account deleted"
     DELETED = "DELETED", "Moved to the trash"
     RESTORED = "RESTORED", "Restored"
     ATTACHMENT_ADDED = "ATTACHMENT_ADDED", "File attached"

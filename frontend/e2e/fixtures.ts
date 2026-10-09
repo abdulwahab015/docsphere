@@ -67,6 +67,12 @@ export const NAMES_MEMBER = seededAccount('member@names.e2e.test')
 export const ACTIVITY_ADMIN = seededAccount('admin@activity.e2e.test')
 export const NOTIFY_OWNER = seededAccount('owner@notify.e2e.test')
 export const NOTIFY_MEMBER = seededAccount('member@notify.e2e.test')
+export const LEAVING_ADMIN = seededAccount('admin@leaving.e2e.test')
+export const LEAVING_MEMBER = seededAccount('member@leaving.e2e.test')
+export const CLOSING_ADMIN = seededAccount('admin@closing.e2e.test')
+export const CLOSING_MEMBER = seededAccount('member@closing.e2e.test')
+export const EXPORT_ADMIN = seededAccount('admin@export.e2e.test')
+export const DELETED_ADMIN = seededAccount('admin@deleted.e2e.test')
 // Signed up, but hasn't followed the verification link yet.
 export const VERIFY_ADMIN = seededAccount('admin@verify.e2e.test')
 
