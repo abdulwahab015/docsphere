@@ -1,4 +1,4 @@
-import type { components } from '@/api/schema'
+import type { components, operations } from '@/api/schema'
 
 type Schemas = components['schemas']
 
@@ -74,6 +74,12 @@ export type InvitationBulkResult = Schemas['InvitationBulkResult']
 export type UserDetail = Schemas['UserDetail']
 // How many live projects/documents a member is the only active Owner of.
 export type SoleOwnership = Schemas['SoleOwnership']
+// One entry in the organization's activity (the audit log), for admins.
+export type AuditEvent = Schemas['AuditEvent']
+export type AuditVerb = Schemas['AuditVerbEnum']
+export type AuditKind = NonNullable<
+  NonNullable<operations['api_v1_audit_events_list']['parameters']['query']>['kind']
+>
 
 /** DRF's page-number pagination envelope, shared by every list endpoint. */
 export interface Paginated<TItem> {

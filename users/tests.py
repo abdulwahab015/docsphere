@@ -932,7 +932,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
     def test_admin_can_create_invitation_for_own_organization(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "invitee@example.com"}
             )
@@ -970,7 +970,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
     def test_creating_an_invitation_does_not_return_its_token(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "invitee@example.com"}
             )
@@ -1008,7 +1008,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.admin_a)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "again@example.com"}
             )
@@ -1028,7 +1028,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
 
         with (
             patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1),
-            self.assertNumQueries(5),
+            self.assertNumQueries(8),
         ):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "extra@example.com"}
@@ -1081,7 +1081,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.admin_a)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "squatted@example.com"}
             )
@@ -1131,7 +1131,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             token="valid-token",
         )
 
-        with self.assertNumQueries(9):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {"token": "valid-token", "password": "Str0ng-New-Pass!"},
@@ -1160,7 +1160,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             organization=self.org_a, email="new-user@example.com", token="valid-token"
         )
 
-        with self.assertNumQueries(9):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {
@@ -1523,7 +1523,7 @@ class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
         Invitation.objects.filter(pk=self.invitation.pk).update(sent_at=stale)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(self.resend_url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1592,7 +1592,7 @@ class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
     def test_revoke_marks_the_invitation_revoked_and_kills_its_link(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             response = self.client.delete(self.revoke_url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -1777,7 +1777,7 @@ class DeactivateUserTests(AssumeActiveSubscription, APITestCase):
     def test_admin_deactivates_a_user_in_their_own_organization(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.delete(self._url(self.member))
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -1872,7 +1872,7 @@ class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
     def test_admin_promotes_a_member_to_admin(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self._url(self.member), {"org_role": "ADMIN"}, format="json"
             )
@@ -1886,7 +1886,7 @@ class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
         other_admin = AdminUserFactory(organization=self.org)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self._url(other_admin), {"org_role": "MEMBER"}, format="json"
             )
@@ -1960,7 +1960,7 @@ class DeactivatedUserListAndReactivateTests(AssumeActiveSubscription, APITestCas
     def test_admin_reactivates_a_deactivated_user(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             response = self.client.post(
                 reverse("user_reactivate", args=[self.deactivated.pk])
             )
@@ -2174,7 +2174,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(13):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -2191,7 +2191,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["one@example.com", "two@example.com"])
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(13):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -2205,7 +2205,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "dupe@example.com", "DUPE@example.com"])
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -2237,7 +2237,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "not-an-email", "valid@example.com"])
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -2263,7 +2263,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
             ["Email", "existing@example.com", "pending@example.com", "new@example.com"]
         )
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -2287,7 +2287,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["late@example.com"])
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -2325,7 +2325,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
 
         with (
             patch("users.services.MAX_PENDING_INVITATIONS_PER_ORG", 1),
-            self.assertNumQueries(5),
+            self.assertNumQueries(8),
         ):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"

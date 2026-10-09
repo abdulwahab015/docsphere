@@ -356,6 +356,44 @@
           "email_verified": false
         }
       ]
+    },
+    {
+      "name": "Activity E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@activity.e2e.test",
+          "role": "ADMIN",
+          "name": "Avery Admin"
+        },
+        {
+          "email": "member@activity.e2e.test",
+          "role": "MEMBER",
+          "name": "Morgan Member"
+        },
+        {
+          "email": "colleague@activity.e2e.test",
+          "role": "MEMBER",
+          "name": "Casey Colleague"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Charter",
+          "content": "Shared during the test, then found in Activity.",
+          "visibility": "PRIVATE",
+          "owner": "admin@activity.e2e.test"
+        },
+        {
+          "title": "Diary",
+          "content": "Private to its owner and the person it's shared with.",
+          "visibility": "PRIVATE",
+          "owner": "member@activity.e2e.test",
+          "shared_with": {
+            "colleague@activity.e2e.test": "VIEWER"
+          }
+        }
+      ]
     }
   ]
 }

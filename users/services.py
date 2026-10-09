@@ -4,6 +4,7 @@ from zipfile import BadZipFile
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.db import transaction
 from django.utils import timezone
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
@@ -13,6 +14,8 @@ from rest_framework_simplejwt.token_blacklist.models import (
     OutstandingToken,
 )
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from users.choices import OrganizationRole
 from users.constants import (
     INVITATION_TOKEN_BYTES,
@@ -61,14 +64,20 @@ def _generate_invitation_token():
 
 
 def create_invitation(*, organization, invited_by, email):
-    """Create a pending Invitation with a freshly generated token. Shared by the
-    single-invite endpoint and the bulk upload so both produce identical rows."""
-    return Invitation.objects.create(
-        organization=organization,
-        invited_by=invited_by,
-        email=email,
-        token=_generate_invitation_token(),
-    )
+    """Create a pending Invitation with a freshly generated token, recorded as
+    sent by ``invited_by``. Shared by the single-invite endpoint and the bulk
+    upload so both produce identical rows."""
+    with transaction.atomic():
+        invitation = Invitation.objects.create(
+            organization=organization,
+            invited_by=invited_by,
+            email=email,
+            token=_generate_invitation_token(),
+        )
+        AuditEvent.objects.record(
+            invited_by, AuditVerb.INVITATION_SENT, email=invitation.email
+        )
+    return invitation
 
 
 def find_invitation_conflict(organization, email, *, renewing=None):

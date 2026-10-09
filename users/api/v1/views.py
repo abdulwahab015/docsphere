@@ -18,6 +18,8 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
@@ -407,6 +409,9 @@ class InvitationAcceptAPIView(APIView):
             invitation.status = InvitationStatus.ACCEPTED
             invitation.accepted_at = timezone.now()
             invitation.save(update_fields=["status", "accepted_at"])
+            AuditEvent.objects.record(
+                user, AuditVerb.INVITATION_ACCEPTED, email=invitation.email
+            )
 
         return token_pair_response(user, status.HTTP_201_CREATED)
 
@@ -532,6 +537,9 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
             lock_organization_for_admin_change(self.request.user)
             instance.is_active = False
             instance.save(update_fields=["is_active"])
+            AuditEvent.objects.record(
+                self.request.user, AuditVerb.MEMBER_DEACTIVATED, target_user=instance
+            )
 
 
 class PasswordChangeAPIView(APIView):
@@ -594,9 +602,18 @@ class OrganizationRoleUpdateAPIView(APIView):
         )
         serializer = OrganizationRoleSerializer(user, data=request.data)
         serializer.is_valid(raise_exception=True)
+        previous_role = user.org_role
         with transaction.atomic():
             lock_organization_for_admin_change(request.user)
             serializer.save()
+            if user.org_role != previous_role:
+                AuditEvent.objects.record(
+                    request.user,
+                    AuditVerb.ROLE_CHANGED,
+                    target_user=user,
+                    role=user.org_role,
+                    previous_role=previous_role,
+                )
 
         return Response(UserDetailSerializer(user).data)
 
@@ -627,8 +644,12 @@ class ReactivateUserAPIView(APIView):
         user = get_object_or_404(
             _organization_users(request).filter(is_active=False), pk=pk
         )
-        user.is_active = True
-        user.save(update_fields=["is_active"])
+        with transaction.atomic():
+            user.is_active = True
+            user.save(update_fields=["is_active"])
+            AuditEvent.objects.record(
+                request.user, AuditVerb.MEMBER_REACTIVATED, target_user=user
+            )
 
         return Response(UserDetailSerializer(user).data)
 
@@ -648,8 +669,12 @@ class InvitationRevokeAPIView(APIView):
     )
     def delete(self, request, pk):
         invitation = _get_pending_invitation(request, pk)
-        invitation.status = InvitationStatus.REVOKED
-        invitation.save(update_fields=["status", "modified"])
+        with transaction.atomic():
+            invitation.status = InvitationStatus.REVOKED
+            invitation.save(update_fields=["status", "modified"])
+            AuditEvent.objects.record(
+                request.user, AuditVerb.INVITATION_REVOKED, email=invitation.email
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -680,7 +705,11 @@ class InvitationResendAPIView(APIView):
         if conflict:
             raise ValidationError({"detail": conflict})
 
-        refresh_invitation(invitation)
+        with transaction.atomic():
+            refresh_invitation(invitation)
+            AuditEvent.objects.record(
+                request.user, AuditVerb.INVITATION_RESENT, email=invitation.email
+            )
         send_invitation_email_task.delay(invitation.pk)
 
         return Response(InvitationCreateSerializer(invitation).data)

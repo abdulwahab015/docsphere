@@ -6031,7 +6031,201 @@
       "description": ""
     },
     {
-      "name": "13. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
+      "name": "13. Activity (audit log, admins only)",
+      "description": "Who changed access and membership, deleted and restored things, and attached files - newest first, kept for a year. Run after the folders above, which make plenty of it.",
+      "item": [
+        {
+          "name": "Activity - Everything",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ]
+            },
+            "description": "The organization's activity, newest first. A private project or document the admin can't open is listed with resource_name null (and no file name).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('activity listed', () => pm.response.to.have.status(200));",
+                  "pm.test('earlier steps were recorded', () => pm.expect(pm.response.json().count).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activity - Only Access Changes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/?kind=ACCESS",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "kind",
+                  "value": "ACCESS"
+                }
+              ]
+            },
+            "description": "kind is ACCESS, MEMBERSHIP, TRASH or ATTACHMENTS. after/before take ISO 8601 times.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('activity listed', () => pm.response.to.have.status(200));",
+                  "const accessVerbs = ['ACCESS_GRANTED', 'ACCESS_CHANGED', 'ACCESS_REVOKED', 'VISIBILITY_CHANGED', 'ACCESS_REQUEST_APPROVED', 'ACCESS_REQUEST_DENIED'];",
+                  "pm.test('only access changes', () => pm.response.json().results.forEach(event => pm.expect(accessVerbs).to.include(event.verb)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activity - About One Person",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/?search={{member_email}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "{{member_email}}"
+                }
+              ]
+            },
+            "description": "search matches the name or email of who did it, who it was about, or the address an invitation went to.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('activity listed', () => pm.response.to.have.status(200));",
+                  "pm.test('found the member', () => pm.expect(pm.response.json().count).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] Activity (expect 403)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('members cannot read the activity', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "14. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
       "item": [
         {
           "name": "Repeated Login Attempt (expect 429 partway through)",

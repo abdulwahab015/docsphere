@@ -17,6 +17,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from core.permissions import HasActiveSubscription
 from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
@@ -115,12 +117,14 @@ def _lock_access(resource):
     type(resource).objects.select_for_update().get(pk=resource.pk)
 
 
-def _grant_access(permission_model, resource_field, resource, user, access_level):
-    """Gives ``user`` ``access_level`` on ``resource``, updating an existing
-    grant in place, and returns ``(permission, changed)`` - unchanged when
-    they already had that level. Lowering the resource's last Owner is
-    refused, the same as revoking them. Call inside a transaction, after
-    ``_lock_access``."""
+def _grant_access(
+    actor, permission_model, resource_field, resource, user, access_level
+):
+    """``actor`` gives ``user`` ``access_level`` on ``resource``, updating an
+    existing grant in place, and returns ``(permission, changed)`` -
+    unchanged when they already had that level. Lowering the resource's last
+    Owner is refused, the same as revoking them. Call inside a transaction,
+    after ``_lock_access``."""
     existing = permission_model.objects.filter(
         user=user, **{resource_field: resource}
     ).first()
@@ -134,19 +138,57 @@ def _grant_access(permission_model, resource_field, resource, user, access_level
     permission, _ = permission_model.objects.update_or_create(
         user=user, defaults={"access_level": access_level}, **{resource_field: resource}
     )
+    if existing:
+        AuditEvent.objects.record(
+            actor,
+            AuditVerb.ACCESS_CHANGED,
+            target_user=user,
+            access_level=access_level,
+            previous_access_level=existing.access_level,
+            **{resource_field: resource},
+        )
+    else:
+        AuditEvent.objects.record(
+            actor,
+            AuditVerb.ACCESS_GRANTED,
+            target_user=user,
+            access_level=access_level,
+            **{resource_field: resource},
+        )
     return permission, True
 
 
-def _revoke_access(permission_model, resource_field, resource, user_id):
-    """Deletes ``user_id``'s grant on ``resource`` (a 404 if they have none),
-    unless it's the resource's last active Owner."""
+def _revoke_access(actor, permission_model, resource_field, resource, user_id):
+    """``actor`` deletes ``user_id``'s grant on ``resource`` (a 404 if they
+    have none), unless it's the resource's last active Owner."""
     with transaction.atomic():
         _lock_access(resource)
         permission = get_object_or_404(
-            permission_model, user_id=user_id, **{resource_field: resource}
+            permission_model.objects.select_related("user"),
+            user_id=user_id,
+            **{resource_field: resource},
         )
         ensure_not_last_owner(permission, permission_model, resource_field, resource)
         permission.delete()
+        AuditEvent.objects.record(
+            actor,
+            AuditVerb.ACCESS_REVOKED,
+            target_user=permission.user,
+            previous_access_level=permission.access_level,
+            **{resource_field: resource},
+        )
+
+
+def _record_visibility_change(actor, resource_field, resource, previous_visibility):
+    """Records that ``actor`` changed ``resource``'s visibility, if the save
+    just made did. Call in the save's transaction."""
+    if resource.visibility != previous_visibility:
+        AuditEvent.objects.record(
+            actor,
+            AuditVerb.VISIBILITY_CHANGED,
+            visibility=resource.visibility,
+            **{resource_field: resource},
+        )
 
 
 def _filter_by_id_param(queryset, request, param, field):
@@ -225,7 +267,13 @@ class ProjectRetrieveUpdateDestroyAPIView(
                 raise PermissionDenied(
                     "You must have Owner access to this project to change its visibility."
                 )
-        serializer.save()
+
+        previous_visibility = serializer.instance.visibility
+        with transaction.atomic():
+            project = serializer.save()
+            _record_visibility_change(
+                self.request.user, "project", project, previous_visibility
+            )
 
 
 class ProjectRestoreAPIView(APIView):
@@ -243,8 +291,10 @@ class ProjectRestoreAPIView(APIView):
             .select_related("created_by"),
             pk=pk,
         )
-        project.is_active = True
-        project.save(update_fields=["is_active"])
+        with transaction.atomic():
+            project.is_active = True
+            project.save(update_fields=["is_active"])
+            AuditEvent.objects.record(request.user, AuditVerb.RESTORED, project=project)
 
         return Response(ProjectSerializer(project, context={"request": request}).data)
 
@@ -359,6 +409,17 @@ class DocumentRetrieveUpdateDestroyAPIView(
                     "You must have Owner access to this document to change its visibility."
                 )
 
+        previous_visibility = serializer.instance.visibility
+        with transaction.atomic():
+            self._save(serializer)
+            _record_visibility_change(
+                self.request.user, "document", serializer.instance, previous_visibility
+            )
+
+    def _save(self, serializer):
+        """Saves the update, as a new revision and version when it changes
+        the text - refused if it was based on an older revision. Call inside
+        a transaction."""
         base_revision = serializer.validated_data.pop("base_revision", None)
         changes_text = any(
             field in serializer.validated_data
@@ -371,25 +432,22 @@ class DocumentRetrieveUpdateDestroyAPIView(
 
         # Locked, so two saves based on the same revision can't both pass the
         # check, and each text change gets a revision number of its own.
-        with transaction.atomic():
-            current = (
-                Document.objects.select_for_update(of=("self",))
-                .select_related("created_by")
-                .get(pk=serializer.instance.pk)
+        current = (
+            Document.objects.select_for_update(of=("self",))
+            .select_related("created_by")
+            .get(pk=serializer.instance.pk)
+        )
+        current.user_access_level = serializer.instance.user_access_level
+        if base_revision and base_revision != current.revision:
+            raise EditConflict(
+                DocumentSerializer(current, context=self.get_serializer_context()).data
             )
-            current.user_access_level = serializer.instance.user_access_level
-            if base_revision and base_revision != current.revision:
-                raise EditConflict(
-                    DocumentSerializer(
-                        current, context=self.get_serializer_context()
-                    ).data
-                )
-            serializer.instance = current
-            if changes_text:
-                document = serializer.save(revision=current.revision + 1)
-                DocumentVersion.objects.record(document, self.request.user)
-            else:
-                serializer.save()
+        serializer.instance = current
+        if changes_text:
+            document = serializer.save(revision=current.revision + 1)
+            DocumentVersion.objects.record(document, self.request.user)
+        else:
+            serializer.save()
 
 
 def _document_for_history(request, pk):
@@ -494,6 +552,13 @@ class DocumentAttachmentListCreateAPIView(generics.ListCreateAPIView):
                 content_type=serializer.validated_data["content_type"],
                 size=upload.size,
             )
+            AuditEvent.objects.record(
+                request.user,
+                AuditVerb.ATTACHMENT_ADDED,
+                document=document,
+                file_name=attachment.name,
+                size=attachment.size,
+            )
 
         return Response(
             AttachmentSerializer(attachment).data, status=status.HTTP_201_CREATED
@@ -537,7 +602,14 @@ class DocumentAttachmentDestroyAPIView(generics.DestroyAPIView):
         """The row goes now; the stored file once that's committed, so a
         rolled-back delete never leaves a row pointing at nothing."""
         storage, name = instance.file.storage, instance.file.name
-        instance.delete()
+        with transaction.atomic():
+            instance.delete()
+            AuditEvent.objects.record(
+                self.request.user,
+                AuditVerb.ATTACHMENT_DELETED,
+                document=instance.document,
+                file_name=instance.name,
+            )
         transaction.on_commit(lambda: storage.delete(name))
 
 
@@ -569,8 +641,12 @@ class DocumentRestoreAPIView(APIView):
         if document.project and not document.project.is_active:
             raise ValidationError({"detail": DOCUMENT_IN_TRASHED_PROJECT_MESSAGE})
 
-        document.is_active = True
-        document.save(update_fields=["is_active"])
+        with transaction.atomic():
+            document.is_active = True
+            document.save(update_fields=["is_active"])
+            AuditEvent.objects.record(
+                request.user, AuditVerb.RESTORED, document=document
+            )
 
         return Response(DocumentSerializer(document, context={"request": request}).data)
 
@@ -617,7 +693,11 @@ class ProjectShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
         with transaction.atomic():
             _lock_access(project)
             permission, changed = _grant_access(
-                ProjectPermission, "project", project, **serializer.validated_data
+                request.user,
+                ProjectPermission,
+                "project",
+                project,
+                **serializer.validated_data,
             )
         if changed:
             send_project_shared_email_task.delay(permission.pk)
@@ -634,7 +714,7 @@ class ProjectShareRevokeAPIView(APIView):
     def delete(self, request, pk, user_id):
         project = get_object_or_404(Project.objects.visible_to(request.user), pk=pk)
         check_can_share(request.user, project, "project", resolve_project_access)
-        _revoke_access(ProjectPermission, "project", project, user_id)
+        _revoke_access(request.user, ProjectPermission, "project", project, user_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -679,7 +759,11 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
         with transaction.atomic():
             _lock_access(document)
             permission, changed = _grant_access(
-                DocumentPermission, "document", document, **serializer.validated_data
+                request.user,
+                DocumentPermission,
+                "document",
+                document,
+                **serializer.validated_data,
             )
         if changed:
             send_document_shared_email_task.delay(permission.pk)
@@ -697,7 +781,7 @@ class DocumentShareRevokeAPIView(APIView):
     def delete(self, request, pk, user_id):
         document = get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
         check_can_share(request.user, document, "document", resolve_access)
-        _revoke_access(DocumentPermission, "document", document, user_id)
+        _revoke_access(request.user, DocumentPermission, "document", document, user_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -781,6 +865,12 @@ class DocumentAccessRequestApproveAPIView(APIView):
             access_request.status = AccessRequestStatus.APPROVED
             access_request.reviewed_by = request.user
             access_request.save(update_fields=["status", "reviewed_by", "modified"])
+            AuditEvent.objects.record(
+                request.user,
+                AuditVerb.ACCESS_REQUEST_APPROVED,
+                target_user=access_request.requested_by,
+                document=access_request.document,
+            )
 
         send_access_request_approved_email_task.delay(access_request.pk)
 
@@ -795,9 +885,16 @@ class DocumentAccessRequestDenyAPIView(APIView):
         access_request = _get_pending_access_request_to_review(
             request.user, pk, request_id
         )
-        access_request.status = AccessRequestStatus.DENIED
-        access_request.reviewed_by = request.user
-        access_request.save(update_fields=["status", "reviewed_by", "modified"])
+        with transaction.atomic():
+            access_request.status = AccessRequestStatus.DENIED
+            access_request.reviewed_by = request.user
+            access_request.save(update_fields=["status", "reviewed_by", "modified"])
+            AuditEvent.objects.record(
+                request.user,
+                AuditVerb.ACCESS_REQUEST_DENIED,
+                target_user=access_request.requested_by,
+                document=access_request.document,
+            )
 
         send_access_request_denied_email_task.delay(access_request.pk)
 

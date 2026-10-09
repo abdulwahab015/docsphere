@@ -92,6 +92,8 @@ test.describe("the app's pages", () => {
     '/settings/organization',
     '/settings/account',
     '/billing',
+    // Seeded shares, including some on private documents the admin can't open.
+    '/activity',
     '/no-such-page',
   ]) {
     test(path, async ({ page }) => {
