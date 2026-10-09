@@ -32,3 +32,20 @@ export function formatMoney(minorUnits: number, currency: string) {
   const decimals = format.resolvedOptions().maximumFractionDigits ?? 0
   return format.format(minorUnits / 10 ** decimals)
 }
+
+const BYTES_PER_KILOBYTE = 1024
+const SIZE_UNITS = ['KB', 'MB', 'GB'] as const
+
+/** A file size the way a person reads it: "820 B", "12 KB", "3.4 MB". */
+export function formatBytes(bytes: number) {
+  if (bytes < BYTES_PER_KILOBYTE) {
+    return `${bytes} B`
+  }
+  let size = bytes / BYTES_PER_KILOBYTE
+  let unit = 0
+  while (size >= BYTES_PER_KILOBYTE && unit < SIZE_UNITS.length - 1) {
+    size /= BYTES_PER_KILOBYTE
+    unit += 1
+  }
+  return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${SIZE_UNITS[unit]}`
+}

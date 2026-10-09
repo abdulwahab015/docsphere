@@ -31,7 +31,12 @@ SECURE_HSTS_PRELOAD = True
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# Setting STORAGES replaces Django's default for every entry, so "default"
+# (where attached files are stored, in MEDIA_ROOT) has to be named too.
 STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },

@@ -1,7 +1,12 @@
 import contextlib
+import io
 import threading
+import zipfile
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from django.core.files.storage import default_storage
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import (
     SimpleTestCase,
@@ -21,7 +26,9 @@ from projects.api.v1 import views as project_views
 from projects.api.v1.serializers import DocumentSerializer, ProjectSerializer
 from projects.api.v1.views import ProjectListCreateAPIView
 from projects.choices import AccessLevel, AccessRequestStatus, Action, Visibility
+from projects.constants import MAX_ATTACHMENT_BYTES
 from projects.factories import (
+    AttachmentFactory,
     DocumentAccessRequestFactory,
     DocumentFactory,
     DocumentPermissionFactory,
@@ -29,7 +36,9 @@ from projects.factories import (
     ProjectFactory,
     ProjectPermissionFactory,
 )
+from projects.managers import AttachmentQuerySet
 from projects.models import (
+    Attachment,
     Document,
     DocumentAccessRequest,
     DocumentPermission,
@@ -59,6 +68,11 @@ class ModelStrTests(TestCase):
         document = DocumentFactory(title="Q3 Plan")
 
         self.assertEqual(str(document), "Q3 Plan")
+
+    def test_attachment_str_is_its_name(self):
+        attachment = Attachment(name="Q3 report.pdf")
+
+        self.assertEqual(str(attachment), "Q3 report.pdf")
 
     def test_document_version_str_names_the_document_and_revision(self):
         version = DocumentVersionFactory(document__title="Q3 Plan", revision=4)
@@ -1860,6 +1874,304 @@ class DocumentVersionAPITests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class TemporaryMediaRoot:
+    """Stores the files a test attaches in a directory of its own, removed
+    afterwards."""
+
+    def setUp(self):
+        super().setUp()
+        media_root = self.enterContext(TemporaryDirectory())
+        self.enterContext(override_settings(MEDIA_ROOT=media_root))
+
+
+def office_file(main_part):
+    """A minimal Word, Excel or PowerPoint file: a zip archive with Office's
+    content-types list and the part that makes it that kind of document."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr(main_part, "<document/>")
+    return buffer.getvalue()
+
+
+PDF = b"%PDF-1.7\n1 0 obj\n"
+ALLOWED_FILES = [
+    ("report.pdf", PDF, "application/pdf"),
+    ("chart.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", "image/png"),
+    ("photo.JPG", b"\xff\xd8\xff\xe0\x00\x10JFIF", "image/jpeg"),
+    ("photo.jpeg", b"\xff\xd8\xff\xe1\x00\x10Exif", "image/jpeg"),
+    ("loop.gif", b"GIF89a\x01\x00\x01\x00", "image/gif"),
+    ("icon.webp", b"RIFF\x24\x00\x00\x00WEBPVP8 ", "image/webp"),
+    ("notes.txt", "\ufeffCafé notes".encode(), "text/plain"),
+    ("figures.csv", b"month,total\nMarch,12\n", "text/csv"),
+    (
+        "brief.docx",
+        office_file("word/document.xml"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
+    (
+        "budget.xlsx",
+        office_file("xl/workbook.xml"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
+    (
+        "pitch.pptx",
+        office_file("ppt/presentation.xml"),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ),
+]
+
+
+class AttachmentAPITests(TemporaryMediaRoot, AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.document = DocumentFactory(title="Plan")
+        self.org = self.document.organization
+        self.owner = self.document.created_by
+        self.editor = UserFactory(organization=self.org)
+        self.viewer = UserFactory(organization=self.org)
+        for user, level in (
+            (self.owner, AccessLevel.OWNER),
+            (self.editor, AccessLevel.EDITOR),
+            (self.viewer, AccessLevel.VIEWER),
+        ):
+            DocumentPermissionFactory(
+                document=self.document, user=user, access_level=level
+            )
+        self.list_url = reverse(
+            "document_attachment_list_create", args=[self.document.pk]
+        )
+
+    def upload(self, user, name, content):
+        self.client.force_authenticate(user)
+        return self.client.post(
+            self.list_url,
+            {"file": SimpleUploadedFile(name, content)},
+            format="multipart",
+        )
+
+    def download_url(self, attachment, document=None):
+        return reverse(
+            "document_attachment_download",
+            args=[(document or self.document).pk, attachment.pk],
+        )
+
+    def detail_url(self, attachment):
+        return reverse(
+            "document_attachment_detail", args=[self.document.pk, attachment.pk]
+        )
+
+    def test_an_editor_attaches_a_file(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(6):
+            response = self.client.post(
+                self.list_url,
+                {"file": SimpleUploadedFile("report.pdf", PDF)},
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        attachment = Attachment.objects.get()
+        self.assertEqual(
+            (
+                attachment.name,
+                attachment.content_type,
+                attachment.size,
+                attachment.uploaded_by,
+            ),
+            ("report.pdf", "application/pdf", len(PDF), self.editor),
+        )
+        # Stored under its organization by a random name, never the one given.
+        self.assertRegex(
+            attachment.file.name, rf"^attachments/{self.org.pk}/[0-9a-f]{{32}}$"
+        )
+        with attachment.file.open("rb") as stored:
+            self.assertEqual(stored.read(), PDF)
+        self.assertEqual(response.data["uploaded_by_email"], self.editor.email)
+        self.assertNotIn("file", response.data)
+
+    def test_every_allowed_kind_is_recognised_by_its_content(self):
+        for name, content, content_type in ALLOWED_FILES:
+            with self.subTest(name):
+                response = self.upload(self.editor, name, content)
+
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+                self.assertEqual(response.data["content_type"], content_type)
+
+    def test_a_path_in_the_name_is_dropped(self):
+        response = self.upload(self.editor, "../../etc/report.pdf", PDF)
+
+        self.assertEqual(response.data["name"], "report.pdf")
+
+    def test_a_file_whose_content_isnt_what_its_name_says_is_refused(self):
+        for name, content in (
+            ("invoice.pdf", b"MZ\x90\x00 a renamed program"),
+            ("notes.txt", b"text with a \x00 byte"),
+            ("notes.csv", b"\xff\xfe not UTF-8"),
+            ("brief.docx", office_file("xl/workbook.xml")),
+            ("budget.xlsx", b"PK\x03\x04 not really a zip"),
+            ("icon.webp", b"RIFF\x24\x00\x00\x00WAVEfmt "),
+        ):
+            with self.subTest(name):
+                # Only the document is looked up: the file is refused unread.
+                with self.assertNumQueries(1):
+                    response = self.upload(self.editor, name, content)
+
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("doesn't match", response.data["file"][0])
+        self.assertFalse(Attachment.objects.exists())
+
+    def test_a_kind_of_file_that_isnt_allowed_is_refused(self):
+        for name in ("setup.exe", "page.html", "archive.zip", "no-extension"):
+            with self.subTest(name):
+                response = self.upload(self.editor, name, PDF)
+
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("Attach a PDF", response.data["file"][0])
+
+    def test_a_file_over_the_size_limit_is_refused(self):
+        too_large = PDF + b"\x00" * MAX_ATTACHMENT_BYTES
+
+        response = self.upload(self.editor, "large.pdf", too_large)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["file"], ["Files can be at most 10 MB."])
+
+    def test_an_upload_past_the_organizations_quota_is_refused(self):
+        AttachmentFactory(document=self.document)
+        # Another organization's files don't count against this one's.
+        AttachmentFactory()
+        used = Attachment.objects.bytes_used_by(self.org)
+
+        with patch.object(
+            project_views, "ORGANIZATION_ATTACHMENT_QUOTA_BYTES", used + len(PDF) - 1
+        ):
+            refused = self.upload(self.editor, "one-too-many.pdf", PDF)
+        with patch.object(
+            project_views, "ORGANIZATION_ATTACHMENT_QUOTA_BYTES", used + len(PDF)
+        ):
+            fits = self.upload(self.editor, "just-fits.pdf", PDF)
+
+        self.assertEqual(refused.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("used its 1 GB", refused.data["detail"])
+        self.assertEqual(fits.status_code, status.HTTP_201_CREATED)
+
+    def test_a_viewer_cannot_attach_files(self):
+        with self.assertNumQueries(1):
+            response = self.upload(self.viewer, "report.pdf", PDF)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(Attachment.objects.exists())
+
+    def test_anyone_who_can_open_the_document_lists_its_files_newest_first(self):
+        older = AttachmentFactory(document=self.document, name="older.pdf")
+        newer = AttachmentFactory(
+            document=self.document, name="newer.pdf", uploaded_by=self.editor
+        )
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [row["id"] for row in response.data["results"]], [newer.pk, older.pk]
+        )
+        self.assertEqual(response.data["results"][0]["uploaded_by"], self.editor.pk)
+
+    def test_a_viewer_downloads_a_file_as_a_download(self):
+        attachment = AttachmentFactory(document=self.document, name="Q3 report.pdf")
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.download_url(attachment))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(b"".join(response.streaming_content), b"%PDF-1.7 attached")
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertEqual(
+            response["Content-Disposition"], 'attachment; filename="Q3 report.pdf"'
+        )
+        self.assertEqual(response["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(response["Cache-Control"], "private, no-store")
+
+    def test_a_file_is_only_reached_through_its_own_document(self):
+        other = DocumentFactory(project=None, organization=self.org)
+        DocumentPermissionFactory(
+            document=other, user=self.viewer, access_level=AccessLevel.OWNER
+        )
+        elsewhere = AttachmentFactory(document=other)
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.download_url(elsewhere))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_files_of_a_document_the_caller_cant_open_are_not_found(self):
+        attachment = AttachmentFactory(document=self.document)
+        outsider = UserFactory(organization=self.org)
+        foreign_admin = AdminUserFactory()
+        statuses = []
+
+        for user in (outsider, foreign_admin):
+            self.client.force_authenticate(user)
+            with self.assertNumQueries(1):
+                statuses.append(self.client.get(self.list_url).status_code)
+            with self.assertNumQueries(1):
+                statuses.append(
+                    self.client.get(self.download_url(attachment)).status_code
+                )
+            with self.assertNumQueries(1):
+                statuses.append(
+                    self.client.delete(self.detail_url(attachment)).status_code
+                )
+
+        self.assertEqual(statuses, [status.HTTP_404_NOT_FOUND] * 6)
+
+    def test_files_of_a_deleted_document_are_not_found(self):
+        attachment = AttachmentFactory(document=self.document)
+        Document.objects.filter(pk=self.document.pk).update(is_active=False)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.download_url(attachment))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_an_editor_deletes_a_file_and_its_stored_copy(self):
+        attachment = AttachmentFactory(document=self.document)
+        stored_name = attachment.file.name
+        self.client.force_authenticate(self.editor)
+
+        with (
+            self.assertNumQueries(3),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            response = self.client.delete(self.detail_url(attachment))
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Attachment.objects.exists())
+        self.assertFalse(default_storage.exists(stored_name))
+
+    def test_a_viewer_cannot_delete_a_file(self):
+        attachment = AttachmentFactory(document=self.document)
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(1):
+            response = self.client.delete(self.detail_url(attachment))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(default_storage.exists(attachment.file.name))
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
         super().setUp()
@@ -3412,6 +3724,71 @@ class ConcurrentDocumentSaveTests(AssumeActiveSubscription, TransactionTestCase)
         )
         document.refresh_from_db()
         self.assertEqual(document.revision, 2)
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentAttachmentUploadTests(
+    TemporaryMediaRoot, AssumeActiveSubscription, TransactionTestCase
+):
+    """Two uploads that each fit in the organization's remaining space, but
+    not together. Real concurrent requests, so only on a database with row
+    locks (Postgres: CI and `make test-pg`)."""
+
+    def test_only_one_of_two_uploads_racing_for_the_last_space_is_kept(self):
+        document = DocumentFactory()
+        first, second = UserFactory.create_batch(2, organization=document.organization)
+        for user in (first, second):
+            DocumentPermissionFactory(
+                document=document, user=user, access_level=AccessLevel.EDITOR
+            )
+        url = reverse("document_attachment_list_create", args=[document.pk])
+        both_checked = threading.Barrier(2)
+        bytes_used_by = AttachmentQuerySet.bytes_used_by
+        statuses = []
+
+        def count_once_the_other_has(queryset, organization):
+            used = bytes_used_by(queryset, organization)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return used
+
+        def upload(editor):
+            client = APIClient()
+            client.force_authenticate(editor)
+            try:
+                response = client.post(
+                    url,
+                    {"file": SimpleUploadedFile("report.pdf", PDF)},
+                    format="multipart",
+                )
+                statuses.append(response.status_code)
+            finally:
+                connection.close()
+
+        with (
+            patch.object(
+                project_views, "ORGANIZATION_ATTACHMENT_QUOTA_BYTES", len(PDF) + 1
+            ),
+            patch.object(
+                AttachmentQuerySet,
+                "bytes_used_by",
+                autospec=True,
+                side_effect=count_once_the_other_has,
+            ),
+        ):
+            threads = [
+                threading.Thread(target=upload, args=(editor,))
+                for editor in (first, second)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(
+            sorted(statuses), [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
+        )
+        self.assertEqual(Attachment.objects.count(), 1)
 
 
 class ContentExcerptTests(SimpleTestCase):

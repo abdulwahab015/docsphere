@@ -10,6 +10,8 @@ FE_TYPES_CHECK := node_modules/.tmp/schema.d.ts
 E2E_DATABASE := frontend/node_modules/.tmp/e2e.sqlite3
 # Where the end-to-end API writes the emails it sends; e2e/fixtures.ts reads them.
 E2E_MAILBOX := frontend/node_modules/.tmp/e2e-mail
+# Where the end-to-end API stores attached files.
+E2E_MEDIA := frontend/node_modules/.tmp/e2e-media
 # The requirements files are fully pinned, so nothing needs installing to audit them.
 PIP_AUDIT := pip-audit --no-deps --disable-pip --progress-spinner off
 ACTIONLINT_IMAGE := rhysd/actionlint:1.7.12
@@ -140,11 +142,12 @@ e2e-api: export FRONTEND_URL := $(E2E_APP_ORIGIN)
 e2e-api: export CORS_ALLOWED_ORIGINS := $(E2E_APP_ORIGIN)
 e2e-api: export EMAIL_BACKEND := django.core.mail.backends.filebased.EmailBackend
 e2e-api: export EMAIL_FILE_PATH := $(E2E_MAILBOX)
+e2e-api: export MEDIA_ROOT := $(abspath $(E2E_MEDIA))
 e2e-api: ## (Started by Playwright) Fresh seeded database, then the API on $$E2E_API_PORT
 	@test -n "$(E2E_API_PORT)" -a -n "$(E2E_APP_ORIGIN)" || (echo "Run via 'make fe-e2e'."; exit 1)
 	mkdir -p $(dir $(E2E_DATABASE))
 	rm -f $(E2E_DATABASE)
-	rm -rf $(E2E_MAILBOX)
+	rm -rf $(E2E_MAILBOX) $(E2E_MEDIA)
 	python manage.py migrate --noinput --verbosity 0
 	python manage.py seed_e2e frontend/e2e/seed.json
 	python manage.py runserver $(E2E_API_PORT) --noreload
@@ -174,13 +177,13 @@ smoke: ## Check a running deployment from outside, read-only: make smoke URL=htt
 	@test -n "$(URL)" || (echo "Usage: make smoke URL=<the app's URL>"; exit 1)
 	./scripts/smoke-test.sh "$(URL)"
 
-db-backup: ## Back up the running stack's database now (into the db_backups volume)
+db-backup: ## Back up the running stack's database and attached files now (into the db_backups volume)
 	docker compose exec backup sh /usr/local/bin/db-backup
 
 db-backups: ## List the running stack's database backups
 	docker compose exec backup ls -lh /backups
 
-db-restore: ## Replace the database with a backup: make db-restore BACKUP=docsphere-<time>.dump
+db-restore: ## Replace the database and attached files with a backup: make db-restore BACKUP=docsphere-<time>.dump
 	@test -n "$(BACKUP)" || (echo "Usage: make db-restore BACKUP=<a file from make db-backups>"; exit 1)
 	docker compose stop web worker beat flower
 	docker compose exec backup sh /usr/local/bin/db-restore "$(BACKUP)"; \

@@ -140,6 +140,10 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Where attached files are stored. Never served directly: the API checks who
+# may download each one. The stack keeps it on the `media` volume.
+MEDIA_ROOT = config("MEDIA_ROOT", default=str(BASE_DIR / "media"))
+
 
 # Development prints emails in the runserver terminal; production sends them
 # over SMTP (production.py).

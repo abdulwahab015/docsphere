@@ -109,3 +109,12 @@ class DocumentVersionManager(models.Manager):
             content=document.content,
             created_by=user,
         )
+
+
+class AttachmentQuerySet(models.QuerySet):
+    def bytes_used_by(self, organization):
+        """How much ``organization``'s attached files take up, in bytes -
+        including those of documents in the trash, which are still stored."""
+        return self.filter(document__organization=organization).aggregate(
+            total=Coalesce(models.Sum("size"), 0)
+        )["total"]

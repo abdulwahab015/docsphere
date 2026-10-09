@@ -41,4 +41,8 @@ export const server = setupServer(
   http.get(apiUrl('/documents/access-requests/mine/'), () =>
     HttpResponse.json({ count: 0, results: [] }),
   ),
+  // Every document page lists the document's files; by default it has none.
+  http.get(apiUrl('/documents/:documentId/attachments/'), () =>
+    HttpResponse.json({ count: 0, results: [] }),
+  ),
 )

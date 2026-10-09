@@ -1,20 +1,25 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import type { Document, DocumentUpdatePayload } from '@/api/types'
+import type { Attachment, Document, DocumentUpdatePayload } from '@/api/types'
 import {
   createDocument,
+  deleteAttachment,
   deleteDocument,
+  downloadAttachment,
   type DocumentListParams,
   editConflictDocument,
   fetchDocument,
   fetchDocumentVersion,
+  listAttachments,
   listDocuments,
   listDocumentVersions,
   listDocumentTrash,
   restoreDocument,
   updateDocument,
+  uploadAttachment,
 } from '@/features/documents/api'
 import { documentKeys } from '@/features/documents/query-keys'
+import { fileSaver } from '@/lib/save-file'
 
 export function useDocuments(params: DocumentListParams) {
   return useQuery({
@@ -103,5 +108,40 @@ export function useRestoreDocument() {
   return useMutation({
     mutationFn: restoreDocument,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: documentKeys.all }),
+  })
+}
+
+export function useAttachments(documentId: number, page: number) {
+  return useQuery({
+    queryKey: documentKeys.attachmentList(documentId, page),
+    queryFn: () => listAttachments(documentId, page),
+    placeholderData: keepPreviousData,
+  })
+}
+
+/** Attaches a file. `onProgress` follows the upload from 0 to 1. */
+export function useUploadAttachment(documentId: number, onProgress: (fraction: number) => void) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => uploadAttachment(documentId, file, onProgress),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: documentKeys.attachments(documentId) }),
+  })
+}
+
+/** Fetches an attached file through the API, then saves it in the browser. */
+export function useDownloadAttachment(documentId: number) {
+  return useMutation({
+    mutationFn: async (attachment: Attachment) =>
+      fileSaver.save(await downloadAttachment(documentId, attachment.id), attachment.name),
+  })
+}
+
+export function useDeleteAttachment(documentId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (attachment: Attachment) => deleteAttachment(documentId, attachment.id),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: documentKeys.attachments(documentId) }),
   })
 }

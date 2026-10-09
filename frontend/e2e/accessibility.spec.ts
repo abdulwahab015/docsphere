@@ -116,6 +116,8 @@ test('project and document pages, and their dialogs', async ({ page }) => {
 
   await openDocument(page, 'Findings')
   await expectAccessible(page)
+  // Findings has a seeded attachment, so its row and buttons are checked too.
+  await expect(page.getByRole('list', { name: 'Attachments' })).toContainText('results.pdf')
   await page.getByRole('button', { name: 'Share' }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await expectAccessible(page)
@@ -130,7 +132,7 @@ test('project and document pages, and their dialogs', async ({ page }) => {
   await expectAccessible(page)
   await page.keyboard.press('Escape')
 
-  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(page.getByRole('alertdialog')).toBeVisible()
   await expectAccessible(page)
 })

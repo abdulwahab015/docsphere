@@ -2,8 +2,14 @@ from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from projects.attachments import UnsupportedFileError, attachment_content_type
 from projects.choices import AccessLevel
+from projects.constants import (
+    MAX_ATTACHMENT_BYTES,
+    MEGABYTE,
+)
 from projects.models import (
+    Attachment,
     Document,
     DocumentAccessRequest,
     DocumentPermission,
@@ -201,6 +207,55 @@ class DocumentVersionDetailSerializer(DocumentVersionSerializer):
     class Meta(DocumentVersionSerializer.Meta):
         fields = [*DocumentVersionSerializer.Meta.fields, "content"]
         read_only_fields = fields
+
+
+class AttachmentSerializer(serializers.ModelSerializer):
+    """A file attached to a document, as listed: what it is and who added it.
+    The file itself is fetched from its download endpoint."""
+
+    uploaded_by_email = serializers.EmailField(
+        source="uploaded_by.email", read_only=True
+    )
+    uploaded_by_name = serializers.CharField(source="uploaded_by.name", read_only=True)
+
+    class Meta:
+        model = Attachment
+        fields = [
+            "id",
+            "name",
+            "content_type",
+            "size",
+            "uploaded_by",
+            "uploaded_by_email",
+            "uploaded_by_name",
+            "created",
+        ]
+        read_only_fields = fields
+
+
+class AttachmentUploadSerializer(serializers.Serializer):
+    """An upload: at most ``MAX_ATTACHMENT_BYTES``, and one of the allowed
+    kinds, recognised from its content (``attachment_content_type``)."""
+
+    file = serializers.FileField()
+
+    def validate_file(self, upload):
+        if upload.size > MAX_ATTACHMENT_BYTES:
+            raise serializers.ValidationError(
+                f"Files can be at most {MAX_ATTACHMENT_BYTES // MEGABYTE} MB."
+            )
+        return upload
+
+    def validate(self, attrs):
+        upload = attrs["file"]
+        try:
+            attrs["content_type"] = attachment_content_type(upload)
+        except UnsupportedFileError as error:
+            raise serializers.ValidationError({"file": [str(error)]}) from None
+        # Django keeps only an upload's base name, cut to 255 characters - never a
+        # path someone typed into it.
+        attrs["name"] = upload.name
+        return attrs
 
 
 class DocumentCreateSerializer(DocumentSerializer):

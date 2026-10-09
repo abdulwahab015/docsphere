@@ -144,7 +144,8 @@
           "shared_with": {
             "writer@docs.e2e.test": "EDITOR",
             "reader@docs.e2e.test": "VIEWER"
-          }
+          },
+          "attachments": ["results.pdf"]
         },
         {
           "title": "Draft notes",

@@ -1,5 +1,6 @@
 import type {
   AccessRequest,
+  Attachment,
   CurrentUser,
   Document,
   DocumentListItem,
@@ -96,6 +97,20 @@ export function buildDocumentVersion(
     created_by_email: 'ada@example.com',
     created_by_name: '',
     created: '2026-09-01T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildAttachment(overrides: Partial<Attachment> = {}): Attachment {
+  return {
+    id: 31,
+    name: 'Q3 report.pdf',
+    content_type: 'application/pdf',
+    size: 2_400_000,
+    uploaded_by: 1,
+    uploaded_by_email: 'ada@example.com',
+    uploaded_by_name: 'Ada Lovelace',
+    created: '2026-09-02T09:00:00Z',
     ...overrides,
   }
 }

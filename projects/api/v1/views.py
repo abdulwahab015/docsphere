@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.http import FileResponse
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiResponse,
@@ -10,6 +12,7 @@ from rest_framework import generics, mixins, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.generics import get_object_or_404
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +20,8 @@ from rest_framework.views import APIView
 from core.permissions import HasActiveSubscription
 from projects.api.v1.mixins import SoftDeleteMixin
 from projects.api.v1.serializers import (
+    AttachmentSerializer,
+    AttachmentUploadSerializer,
     DocumentAccessRequestSerializer,
     DocumentCreateSerializer,
     DocumentListSerializer,
@@ -30,9 +35,11 @@ from projects.api.v1.serializers import (
     SoleOwnershipSerializer,
 )
 from projects.choices import AccessLevel, AccessRequestStatus, Action
+from projects.constants import GIGABYTE, ORGANIZATION_ATTACHMENT_QUOTA_BYTES
 from projects.exceptions import EditConflict
 from projects.managers import outside_trashed_projects
 from projects.models import (
+    Attachment,
     Document,
     DocumentAccessRequest,
     DocumentPermission,
@@ -62,6 +69,15 @@ User = get_user_model()
 
 # The fields whose change makes a new revision of a document.
 DOCUMENT_TEXT_FIELDS = ("title", "content")
+
+ATTACHING_NEEDS_EDITOR_MESSAGE = (
+    "You must have Editor access to this document to attach or delete files."
+)
+ATTACHMENT_QUOTA_MESSAGE = (
+    f"Your organization has used its {ORGANIZATION_ATTACHMENT_QUOTA_BYTES // GIGABYTE} "
+    "GB for attached files. Delete some (files of documents in the trash count "
+    "too) to make room."
+)
 
 HISTORY_NEEDS_EDITOR_MESSAGE = (
     "You must have Editor access to this document to see its history."
@@ -412,6 +428,117 @@ class DocumentVersionRetrieveAPIView(generics.RetrieveAPIView):
             document.versions.select_related("created_by"),
             revision=self.kwargs["revision"],
         )
+
+
+def _document_for_attachments(request, pk, action):
+    """The document ``pk`` if the caller may ``action`` its files: anyone who
+    can open it may list and download them (``Action.READ``); attaching and
+    deleting files (``Action.WRITE``) is for its Editors and Owners. A
+    document they can't open is a 404, like everywhere else."""
+    document = _visible_document(request, pk)
+    if not access_permits(document.user_access_level, action):
+        raise PermissionDenied(ATTACHING_NEEDS_EDITOR_MESSAGE)
+    return document
+
+
+def _lock_organization_of(document):
+    """Locks the document's organization row until the transaction ends, so
+    uploads to it are checked against its quota one at a time - two at once
+    would otherwise both fit into the same free space."""
+    organization_model = document._meta.get_field("organization").related_model
+    organization_model.objects.select_for_update().get(pk=document.organization_id)
+
+
+class DocumentAttachmentListCreateAPIView(generics.ListCreateAPIView):
+    """A document's attached files, newest first, and attaching a new one -
+    within the size limit, of an allowed kind (checked by content), and
+    within the organization's storage quota."""
+
+    serializer_class = AttachmentSerializer
+    parser_classes = [MultiPartParser]
+
+    def get_queryset(self):
+        document = _document_for_attachments(
+            self.request, self.kwargs["pk"], Action.READ
+        )
+        return document.attachments.select_related("uploaded_by").order_by(
+            "-created", "-pk"
+        )
+
+    @extend_schema(
+        request={"multipart/form-data": AttachmentUploadSerializer},
+        responses={
+            201: AttachmentSerializer,
+            400: OpenApiResponse(
+                description="Too large, not an allowed kind of file, or over the "
+                "organization's storage quota."
+            ),
+        },
+    )
+    def post(self, request, pk):
+        document = _document_for_attachments(request, pk, Action.WRITE)
+        serializer = AttachmentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        upload = serializer.validated_data["file"]
+
+        with transaction.atomic():
+            _lock_organization_of(document)
+            used = Attachment.objects.bytes_used_by(document.organization_id)
+            if used + upload.size > ORGANIZATION_ATTACHMENT_QUOTA_BYTES:
+                raise ValidationError({"detail": ATTACHMENT_QUOTA_MESSAGE})
+            attachment = Attachment.objects.create(
+                document=document,
+                uploaded_by=request.user,
+                file=upload,
+                name=serializer.validated_data["name"],
+                content_type=serializer.validated_data["content_type"],
+                size=upload.size,
+            )
+
+        return Response(
+            AttachmentSerializer(attachment).data, status=status.HTTP_201_CREATED
+        )
+
+
+class DocumentAttachmentDownloadAPIView(APIView):
+    """One attached file, always as a download - never shown in the browser,
+    which with ``nosniff`` never runs it either."""
+
+    @extend_schema(responses={(200, "application/octet-stream"): OpenApiTypes.BINARY})
+    def get(self, request, pk, attachment_id):
+        document = _document_for_attachments(request, pk, Action.READ)
+        attachment = get_object_or_404(document.attachments, pk=attachment_id)
+
+        response = FileResponse(
+            attachment.file.open("rb"),
+            as_attachment=True,
+            filename=attachment.name,
+            content_type=attachment.content_type,
+        )
+        # Only for whoever may open the document: never kept by a shared cache.
+        response["Cache-Control"] = "private, no-store"
+        return response
+
+
+class DocumentAttachmentDestroyAPIView(generics.DestroyAPIView):
+    """Deletes an attached file, for the document's Editors and Owners."""
+
+    def get_object(self):
+        document = _document_for_attachments(
+            self.request, self.kwargs["pk"], Action.WRITE
+        )
+        return get_object_or_404(document.attachments, pk=self.kwargs["attachment_id"])
+
+    @extend_schema(responses={204: None})
+    def delete(self, request, *args, **kwargs):
+        return super().delete(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        """The row goes now; the stored file once that's committed, so a
+        rolled-back delete never leaves a row pointing at nothing."""
+        storage, name = instance.file.storage, instance.file.name
+        instance.delete()
+        transaction.on_commit(lambda: storage.delete(name))
 
 
 class DocumentRestoreAPIView(APIView):

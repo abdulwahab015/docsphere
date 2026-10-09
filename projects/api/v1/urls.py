@@ -4,6 +4,9 @@ from projects.api.v1.views import (
     DocumentAccessRequestApproveAPIView,
     DocumentAccessRequestDenyAPIView,
     DocumentAccessRequestListCreateAPIView,
+    DocumentAttachmentDestroyAPIView,
+    DocumentAttachmentDownloadAPIView,
+    DocumentAttachmentListCreateAPIView,
     DocumentListCreateAPIView,
     DocumentRestoreAPIView,
     DocumentRetrieveUpdateDestroyAPIView,
@@ -67,6 +70,21 @@ document_urlpatterns = [
         "<int:pk>/restore/",
         DocumentRestoreAPIView.as_view(),
         name="document_restore",
+    ),
+    path(
+        "<int:pk>/attachments/",
+        DocumentAttachmentListCreateAPIView.as_view(),
+        name="document_attachment_list_create",
+    ),
+    path(
+        "<int:pk>/attachments/<int:attachment_id>/",
+        DocumentAttachmentDestroyAPIView.as_view(),
+        name="document_attachment_detail",
+    ),
+    path(
+        "<int:pk>/attachments/<int:attachment_id>/download/",
+        DocumentAttachmentDownloadAPIView.as_view(),
+        name="document_attachment_download",
     ),
     path(
         "<int:pk>/versions/",

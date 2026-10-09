@@ -13,6 +13,7 @@ x-django: &django
     CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/0
     CELERY_TASK_ALWAYS_EAGER: "False"
+    MEDIA_ROOT: /app/media
   restart: unless-stopped
 
 # Django processes start once the database and the broker answer and the
@@ -75,6 +76,9 @@ services:
     # Not published: the `frontend` service is the way in.
     expose:
       - "8000"
+    # The files attached to documents, kept across releases (and in backups).
+    volumes:
+      - media:/app/media
     # As the load balancer would ask: for one of ALLOWED_HOSTS, over HTTPS
     # (anything else is refused or redirected).
     healthcheck:
@@ -149,16 +153,19 @@ services:
       worker:
         condition: service_started
 
-  # Dumps the database when it starts and then every BACKUP_INTERVAL_SECONDS
-  # (daily by default) into the db_backups volume, deleting dumps older than
-  # BACKUP_RETENTION_DAYS days. `make db-backup` and `make db-restore` run
+  # Dumps the database, and archives the attached files beside it, when it
+  # starts and then every BACKUP_INTERVAL_SECONDS (daily by default) into the
+  # db_backups volume, deleting backups older than BACKUP_RETENTION_DAYS days. `make db-backup` and `make db-restore` run
   # their scripts in here too. Copy dumps off the server with
   # `docker compose cp backup:/backups ./backups`.
   backup:
     image: postgres:16-alpine
     entrypoint: ["/bin/sh", "-c"]
+    # A new `media` volume is owned by whichever service mounts it first; when
+    # that's this one (as root), it's handed to the app user (uid 1000) that
+    # `web` writes attached files as.
     command:
-      - while true; do sh /usr/local/bin/db-backup || echo "Backup failed"; sleep "$$BACKUP_INTERVAL_SECONDS"; done
+      - chown 1000:1000 /media; while true; do sh /usr/local/bin/db-backup || echo "Backup failed"; sleep "$$BACKUP_INTERVAL_SECONDS"; done
     environment:
       PGHOST: db
       PGUSER: ${POSTGRES_USER}
@@ -166,8 +173,11 @@ services:
       PGDATABASE: ${POSTGRES_DB}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      MEDIA_DIR: /media
     volumes:
       - db_backups:/backups
+      # Writable: a restore puts the backed-up files back.
+      - media:/media
       - ./scripts/db-backup.sh:/usr/local/bin/db-backup:ro
       - ./scripts/db-restore.sh:/usr/local/bin/db-restore:ro
     depends_on:
@@ -179,3 +189,4 @@ volumes:
   postgres_data:
   beat_schedule:
   db_backups:
+  media:

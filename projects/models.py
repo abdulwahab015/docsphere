@@ -1,9 +1,13 @@
+from uuid import uuid4
+
 from django.conf import settings
 from django.db import models
 
 from core.models import TimeStampedModel
 from projects.choices import AccessLevel, AccessRequestStatus, Visibility
+from projects.constants import MAX_ATTACHMENT_NAME_LENGTH
 from projects.managers import (
+    AttachmentQuerySet,
     DocumentQuerySet,
     DocumentVersionManager,
     VisibilityScopedQuerySet,
@@ -112,6 +116,40 @@ class DocumentVersion(TimeStampedModel):
 
     def __str__(self):
         return f"{self.document} (revision {self.revision})"
+
+
+def attachment_path(attachment, _filename):
+    """Where an attached file is stored: under its organization, by a random
+    name. The name it was uploaded with is kept on the row, never used as a
+    path."""
+    return f"attachments/{attachment.document.organization_id}/{uuid4().hex}"
+
+
+class Attachment(TimeStampedModel):
+    """A file attached to a document. It has no access of its own: whoever can
+    open the document can download it, and its Editors and Owners can attach
+    and delete files. Stored in ``MEDIA_ROOT`` and only ever served through
+    the API, as a download."""
+
+    document = models.ForeignKey(
+        "projects.Document", on_delete=models.CASCADE, related_name="attachments"
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="attachments",
+    )
+
+    file = models.FileField(upload_to=attachment_path)
+    name = models.CharField(max_length=MAX_ATTACHMENT_NAME_LENGTH)
+    # Recognised from the content when uploaded (projects/attachments.py).
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()
+
+    objects = AttachmentQuerySet.as_manager()
+
+    def __str__(self):
+        return self.name
 
 
 class ProjectPermission(models.Model):

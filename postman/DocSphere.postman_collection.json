@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "09c4bb9c-31a2-448e-9c65-6a213c102b95",
     "name": "DocSphere \u2014 Full Demo Flow",
-    "description": "End-to-end walkthrough of DocSphere: org self-signup (with email verification), invitations (single + bulk), projects, documents (including personal, project-less documents, and their version history), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
+    "description": "End-to-end walkthrough of DocSphere: org self-signup (with email verification), invitations (single + bulk), projects, documents (including personal, project-less documents, their version history and attached files), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -2218,6 +2218,193 @@
                 "exec": [
                   "pm.test('version read', () => pm.response.to.have.status(200));",
                   "pm.test('has its content', () => pm.expect(pm.response.json()).to.have.property('content'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Attach a File (pick a PDF in the Body tab)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments"
+              ]
+            },
+            "description": "Editors and Owners. Before sending, choose a file for the `file` field in the Body tab: a PDF, PNG, JPEG, GIF, WebP, text, CSV, Word, Excel or PowerPoint file, up to 10 MB. The type is checked from the file's content, not its name, and an organization's files may take up 1 GB in all.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('file attached', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('attachment_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Attachments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments"
+              ]
+            },
+            "description": "Anyone who can open the document. Newest first.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('attachments listed', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download the Attachment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/{{attachment_id}}/download/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments",
+                "{{attachment_id}}",
+                "download"
+              ]
+            },
+            "description": "Anyone who can open the document. Always a download (Content-Disposition: attachment, nosniff), never shown in the browser.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('file downloaded', () => pm.response.to.have.status(200));",
+                  "pm.test('as a download', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the Attachment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/{{attachment_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments",
+                "{{attachment_id}}"
+              ]
+            },
+            "description": "Editors and Owners. The stored file goes too.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('file deleted', () => pm.response.to.have.status(204));"
                 ]
               }
             }

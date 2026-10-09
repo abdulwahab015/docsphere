@@ -13,12 +13,12 @@ demo accounts, Stripe test mode, and the rules the code follows.
 | Service | What it is |
 | --- | --- |
 | `frontend` | nginx: serves the built app and forwards Django's paths to `web`. The only published port (`APP_PORT`, default 8080). |
-| `web` | Django on gunicorn (`core.settings.production`), reachable only inside the stack |
+| `web` | Django on gunicorn (`core.settings.production`), reachable only inside the stack. Files attached to documents are stored on its `media` volume. |
 | `worker`, `flower` | Celery worker, and its dashboard |
 | `beat` | Sends scheduled tasks (the daily renewal reminders) to the worker. Run exactly one. |
 | `db`, `redis` | Postgres, and the Celery broker |
 | `migrate` | Applies the database migrations at every start, then exits; the Django services wait for it |
-| `backup` | Dumps the database daily into the `db_backups` volume and keeps 14 days of dumps |
+| `backup` | Dumps the database, and archives the attached files with it, daily into the `db_backups` volume; keeps 14 days |
 
 Every long-running service has a health check (`docker compose ps` shows it), and each
 waits for what it needs to be healthy before starting.
@@ -110,24 +110,26 @@ security updates, so fixes arrive as soon as an advisory is published.
 
 ### Backups
 
-The `backup` service dumps the database (`pg_dump` custom format) when it starts and then
-every `BACKUP_INTERVAL_SECONDS` (default daily), and deletes dumps older than
-`BACKUP_RETENTION_DAYS` (default 14). They live in the `db_backups` volume on the same
+The `backup` service dumps the database (`pg_dump` custom format) and archives the files
+attached to documents beside it (`docsphere-<time>.files.tar.gz`, from the `media` volume)
+when it starts and then every `BACKUP_INTERVAL_SECONDS` (default daily), and deletes
+backups older than `BACKUP_RETENTION_DAYS` (default 14). They live in the `db_backups` volume on the same
 server, so also copy them somewhere else (`docker compose cp backup:/backups ./backups`,
 then your usual off-site copy).
 
 - `make db-backup` takes one now; `make db-backups` lists them.
 - **Restoring:** `make db-restore BACKUP=docsphere-20261008T000000Z.dump` stops the app,
-  replaces the database with that dump in one transaction (all or nothing), and starts the
-  app again. Everything written after the dump is lost, so take a fresh backup first if you
+  replaces the database with that dump in one transaction (all or nothing), replaces the
+  attached files with those archived beside it, and starts the app again. Everything written after the dump is lost, so take a fresh backup first if you
   may want to go back.
 
 ### Checking the stack
 
 `make docker-smoke` builds the stack from `.env` and checks it through nginx: every service
 healthy without any manual step, the app's files and routes, Django behind the same origin,
-the cookie's production flags, scheduled tasks reaching the worker, and a backup → change →
-restore round trip. It includes the read-only checks every deploy runs
+the cookie's production flags, scheduled tasks reaching the worker, the upload size limit
+and file storage for attachments, and a backup → change → restore round trip (files
+included). It includes the read-only checks every deploy runs
 (`scripts/smoke-test.sh`). CI runs it on every pull request, and lints the workflows and
 shell scripts (`make lint-scripts`).
 
