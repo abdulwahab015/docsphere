@@ -1,8 +1,13 @@
 import { screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
-import type { Document, Project } from '@/api/types'
-import { buildCurrentUser, buildDocument, buildProject } from '@/test/factories'
+import type { DocumentListItem, Project } from '@/api/types'
+import {
+  buildCurrentUser,
+  buildDocument,
+  buildDocumentListItem,
+  buildProject,
+} from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
@@ -12,7 +17,7 @@ function serveProject(project: Project) {
   server.use(http.get(apiUrl('/projects/7/'), () => HttpResponse.json(project)))
 }
 
-function serveDocuments(documents: Document[]) {
+function serveDocuments(documents: DocumentListItem[]) {
   const list = spyResolver(() => HttpResponse.json({ count: documents.length, results: documents }))
   server.use(http.get(apiUrl('/documents/'), list))
   return list
@@ -21,7 +26,7 @@ function serveDocuments(documents: Document[]) {
 describe("a project's documents", () => {
   it('lists only documents in this project the reader can open, and says why', async () => {
     serveProject(buildProject({ access_level: 'VIEWER' }))
-    const list = serveDocuments([buildDocument({ id: 1, title: 'Findings', project: 7 })])
+    const list = serveDocuments([buildDocumentListItem({ id: 1, title: 'Findings', project: 7 })])
     renderRoute('/projects/7', { signedInAs })
 
     expect(await screen.findByRole('link', { name: 'Findings' })).toBeInTheDocument()
@@ -85,7 +90,7 @@ describe("a project's documents", () => {
     const { user } = renderRoute('/projects/7', { signedInAs })
 
     const retry = await screen.findByRole('button', { name: 'Try again' })
-    serveDocuments([buildDocument({ title: 'Findings', project: 7 })])
+    serveDocuments([buildDocumentListItem({ title: 'Findings', project: 7 })])
     await user.click(retry)
 
     expect(await screen.findByRole('link', { name: 'Findings' })).toBeInTheDocument()

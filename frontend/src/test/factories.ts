@@ -2,6 +2,7 @@ import type {
   AccessRequest,
   CurrentUser,
   Document,
+  DocumentListItem,
   Grant,
   Invitation,
   Organization,
@@ -76,6 +77,11 @@ export function buildDocument(overrides: Partial<Document> = {}): Document {
     modified: '2026-09-15T09:00:00Z',
     ...overrides,
   }
+}
+
+export function buildDocumentListItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
+  const { content: _content, ...listed } = buildDocument()
+  return { ...listed, excerpt: null, ...overrides }
 }
 
 export function buildGrant(overrides: Partial<Grant> = {}): Grant {

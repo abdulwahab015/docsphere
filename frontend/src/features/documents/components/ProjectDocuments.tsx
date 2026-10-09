@@ -8,6 +8,7 @@ import { SearchInput } from '@/components/SearchInput'
 import { CreateDocumentDialog } from '@/features/documents/components/CreateDocumentDialog'
 import { DocumentsTable } from '@/features/documents/components/DocumentsTable'
 import { useDocuments } from '@/features/documents/hooks'
+import { DOCUMENT_SEARCH_PLACEHOLDER, noDocumentMatches } from '@/features/documents/search'
 import { useListParams } from '@/hooks/use-list-params'
 import { can } from '@/lib/access'
 
@@ -36,7 +37,7 @@ export function ProjectDocuments({ project }: { project: Project }) {
         value={search}
         onSearch={setSearch}
         label="Search this project's documents"
-        placeholder="Search by title"
+        placeholder={DOCUMENT_SEARCH_PLACEHOLDER}
       />
       {documents.isError ? (
         <ErrorState error={documents.error} onRetry={() => void documents.refetch()} />
@@ -46,7 +47,7 @@ export function ProjectDocuments({ project }: { project: Project }) {
           title={search ? 'No matches' : 'No documents you can open'}
           description={
             search
-              ? `No document's title matches "${search}".`
+              ? noDocumentMatches(search)
               : 'Documents in this project appear here once you have access to them.'
           }
         />

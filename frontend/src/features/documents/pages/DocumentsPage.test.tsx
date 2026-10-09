@@ -1,15 +1,15 @@
 import { screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
-import type { Document } from '@/api/types'
-import { buildCurrentUser, buildDocument } from '@/test/factories'
+import type { DocumentListItem } from '@/api/types'
+import { buildCurrentUser, buildDocument, buildDocumentListItem } from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
 const DOCUMENTS_PATH = '/documents/'
 const member = buildCurrentUser({ org_role: 'MEMBER' })
 
-function serveDocuments(documents: Document[]) {
+function serveDocuments(documents: DocumentListItem[]) {
   const list = spyResolver(({ request }) => {
     const search = new URL(request.url).searchParams.get('search') ?? ''
     const results = documents.filter((document) => document.title.includes(search))
@@ -23,8 +23,8 @@ describe('DocumentsPage', () => {
   describe('listing', () => {
     it('shows every document the user can open, marking personal ones', async () => {
       serveDocuments([
-        buildDocument({ id: 1, title: 'Findings', project: 7, access_level: 'EDITOR' }),
-        buildDocument({ id: 2, title: 'Journal', project: null, visibility: 'PUBLIC' }),
+        buildDocumentListItem({ id: 1, title: 'Findings', project: 7, access_level: 'EDITOR' }),
+        buildDocumentListItem({ id: 2, title: 'Journal', project: null, visibility: 'PUBLIC' }),
       ])
       renderRoute('/documents', { signedInAs: member })
 
@@ -38,15 +38,17 @@ describe('DocumentsPage', () => {
       expect(document.title).toBe('Documents · DocSphere')
     })
 
-    it('searches by title', async () => {
+    it('searches titles and content', async () => {
       const list = serveDocuments([
-        buildDocument({ id: 1, title: 'Findings' }),
-        buildDocument({ id: 2, title: 'Journal' }),
+        buildDocumentListItem({ id: 1, title: 'Findings' }),
+        buildDocumentListItem({ id: 2, title: 'Journal' }),
       ])
       const { user } = renderRoute('/documents', { signedInAs: member })
       await screen.findByRole('link', { name: 'Journal' })
 
-      await user.type(screen.getByRole('searchbox', { name: 'Search documents' }), 'Find')
+      const searchbox = screen.getByRole('searchbox', { name: 'Search documents' })
+      expect(searchbox).toHaveAttribute('placeholder', 'Search titles and content')
+      await user.type(searchbox, 'Find')
 
       expect(await screen.findByText('Showing 1–1 of 1')).toBeInTheDocument()
       const lastUrl = new URL(list.mock.calls.at(-1)![0].request.url)
@@ -71,11 +73,46 @@ describe('DocumentsPage', () => {
       expect(await screen.findByRole('heading', { name: 'No documents yet' })).toBeInTheDocument()
     })
 
+    it('shows where in its content a document matched the search', async () => {
+      server.use(
+        http.get(apiUrl(DOCUMENTS_PATH), () =>
+          HttpResponse.json({
+            count: 1,
+            results: [
+              buildDocumentListItem({
+                title: 'Meeting notes',
+                excerpt: [
+                  { text: '…agreed to move the ', match: false },
+                  { text: 'launch', match: true },
+                  { text: ' to March.', match: false },
+                ],
+              }),
+            ],
+          }),
+        ),
+      )
+      renderRoute('/documents?search=launch', { signedInAs: member })
+
+      const row = (await screen.findByRole('link', { name: 'Meeting notes' })).closest('tr')!
+      // The excerpt is split into runs, so match the paragraph's whole text.
+      expect(
+        within(row).getByText(
+          (_text, element) =>
+            element?.tagName === 'P' &&
+            element.textContent === '…agreed to move the launch to March.',
+        ),
+      ).toBeInTheDocument()
+      expect(within(row).getByText('launch').tagName).toBe('MARK')
+    })
+
     it('explains when a search matches nothing', async () => {
-      serveDocuments([buildDocument()])
+      serveDocuments([buildDocumentListItem()])
       renderRoute('/documents?search=zzz', { signedInAs: member })
 
       expect(await screen.findByRole('heading', { name: 'No matches' })).toBeInTheDocument()
+      expect(
+        screen.getByText('No document mentions "zzz" in its title or content.'),
+      ).toBeInTheDocument()
     })
 
     it('offers a retry when loading fails', async () => {
@@ -83,7 +120,7 @@ describe('DocumentsPage', () => {
       const { user } = renderRoute('/documents', { signedInAs: member })
 
       const retry = await screen.findByRole('button', { name: 'Try again' })
-      serveDocuments([buildDocument()])
+      serveDocuments([buildDocumentListItem()])
       await user.click(retry)
 
       expect(await screen.findByRole('link', { name: 'Findings' })).toBeInTheDocument()

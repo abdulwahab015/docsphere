@@ -237,3 +237,30 @@ test('two people editing at once: the later save is refused, then kept on reques
   await expect(writer.getByLabel('Content')).toHaveValue("Admin's agenda.")
   await writer.context().close()
 })
+
+test('search finds documents by what they say, but only ones the reader can open', async ({
+  page,
+  browser,
+}) => {
+  await logIn(page, DOCS_READER)
+  await page.goto('/documents')
+  const search = page.getByRole('searchbox', { name: 'Search documents' })
+
+  // "aboard" is only in the public team guide's text, not its title.
+  await search.fill('aboard')
+  const guide = page.getByRole('row').filter({ hasText: 'Team guide' })
+  await expect(guide.locator('mark')).toHaveText('aboard')
+  await expect(guide).toContainText('Welcome aboard.')
+
+  // The brief says "eyes only", but it's shared with someone else.
+  await search.fill('eyes only')
+  await expect(page.getByRole('heading', { name: 'No matches' })).toBeVisible()
+
+  // The person it's shared with finds it; each search word is marked.
+  const stranger = await logInElsewhere(browser, DOCS_STRANGER)
+  await stranger.goto('/documents?search=eyes%20only')
+  await expect(
+    stranger.getByRole('row').filter({ hasText: 'Shared brief' }).locator('mark'),
+  ).toHaveText(['eyes', 'only'])
+  await stranger.context().close()
+})

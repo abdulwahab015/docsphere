@@ -12,18 +12,22 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * @description Lists the org's documents (``?search=`` matches title, ``?project=``
-         *     narrows to one project); creates one either under a project the caller has
-         *     at least Editor access to, or - with no ``project`` given - as a personal
-         *     document any org member may create. The creator always becomes Owner.
+         * @description Lists the documents the caller can open (``?search=`` matches title and
+         *     content, case-insensitively; ``?project=`` narrows to one project) without
+         *     their content, but with an excerpt of where a search matched it; creates
+         *     one either under a project the caller has at least Editor access to, or -
+         *     with no ``project`` given - as a personal document any org member may
+         *     create. The creator always becomes Owner.
          */
         get: operations["api_v1_documents_list"];
         put?: never;
         /**
-         * @description Lists the org's documents (``?search=`` matches title, ``?project=``
-         *     narrows to one project); creates one either under a project the caller has
-         *     at least Editor access to, or - with no ``project`` given - as a personal
-         *     document any org member may create. The creator always becomes Owner.
+         * @description Lists the documents the caller can open (``?search=`` matches title and
+         *     content, case-insensitively; ``?project=`` narrows to one project) without
+         *     their content, but with an excerpt of where a search matched it; creates
+         *     one either under a project the caller has at least Editor access to, or -
+         *     with no ``project`` given - as a personal document any org member may
+         *     create. The creator always becomes Owner.
          */
         post: operations["api_v1_documents_create"];
         delete?: never;
@@ -1178,6 +1182,30 @@ export interface components {
             /** Format: date-time */
             readonly modified: string;
         };
+        /**
+         * @description A row of the documents list: everything but the content, which only a
+         *     single document's page needs. While searching, ``excerpt`` shows where in
+         *     the content the search matched (null when it matched only the title, or
+         *     without a search). The view puts the search terms in the context.
+         */
+        DocumentList: {
+            readonly id: number;
+            title: string;
+            visibility?: components["schemas"]["VisibilityEnum"];
+            readonly access_level: (components["schemas"]["AccessLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly revision: number;
+            readonly created_by: number;
+            /** Format: email */
+            readonly created_by_email: string;
+            readonly created_by_name: string;
+            readonly organization: number;
+            readonly project: number | null;
+            /** Format: date-time */
+            readonly created: string;
+            /** Format: date-time */
+            readonly modified: string;
+            readonly excerpt: components["schemas"]["ExcerptSegment"][] | null;
+        };
         DocumentPermission: {
             readonly id: number;
             readonly document: number;
@@ -1204,6 +1232,11 @@ export interface components {
         /** @description The token from the link emailed to a new signup. */
         EmailVerification: {
             token: string;
+        };
+        /** @description A run of an excerpt's text; ``match`` marks where a search term is. */
+        ExcerptSegment: {
+            text: string;
+            match: boolean;
         };
         InvitationAccept: {
             token: string;
@@ -1346,6 +1379,21 @@ export interface components {
              */
             previous?: string | null;
             results: components["schemas"]["Document"][];
+        };
+        PaginatedDocumentListList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=4
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=2
+             */
+            previous?: string | null;
+            results: components["schemas"]["DocumentList"][];
         };
         PaginatedDocumentPermissionList: {
             /** @example 123 */
@@ -1685,7 +1733,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PaginatedDocumentList"];
+                    "application/json": components["schemas"]["PaginatedDocumentListList"];
                 };
             };
         };
