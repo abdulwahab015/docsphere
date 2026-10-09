@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "organizations",
     "users",
     "projects",
+    "audit",
     "subscriptions",
     "djstripe",
     "rest_framework",
@@ -205,6 +206,12 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "v1",
     "SERVE_INCLUDE_SCHEMA": False,
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    # Choice sets used under more than one field name keep one schema name.
+    "ENUM_NAME_OVERRIDES": {
+        "AccessLevelEnum": "projects.choices.AccessLevel",
+        "OrgRoleEnum": "users.choices.OrganizationRole",
+        "AuditVerbEnum": "audit.choices.AuditVerb",
+    },
 }
 
 SIMPLE_JWT = {
@@ -254,6 +261,10 @@ CELERY_BEAT_SCHEDULE = {
     "remove-unverified-accounts": {
         "task": "users.tasks.remove_unverified_accounts_task",
         "schedule": crontab(hour=1, minute=0),
+    },
+    "remove-expired-audit-events": {
+        "task": "audit.tasks.remove_expired_audit_events_task",
+        "schedule": crontab(hour=2, minute=0),
     },
 }
 

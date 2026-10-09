@@ -216,6 +216,7 @@ core/            settings/ (base, local, test, production), URLs, Celery, and sh
 users/           User (email login, no username), Invitation, authentication endpoints
 organizations/   Organization, its signup and profile, its subscription properties
 projects/        Project, Document, their permissions, sharing and access requests
+audit/           The organization's activity (audit log) that admins read
 subscriptions/   Plans, checkout, billing portal, renewal reminders
 clients/         Code that calls Stripe over the network (not a Django app)
 frontend/        The React app (frontend/README.md)
@@ -259,6 +260,13 @@ still pass, so a change that touches them needs a test that pins them down.
   can sign up or be invited with it, which removes the old account and its empty
   organization; a daily task removes the rest. Changing an email works the same way: a
   link to the new address, which signs the account out everywhere when opened.
+- **Changes to who can reach what are recorded.** Sharing, access levels and removals,
+  visibility, answered access requests, roles, deactivations, invitations, deletes and
+  restores, and attached files each write an audit event
+  (`AuditEvent.objects.record(...)`) in the same transaction as the change, so a refused
+  or failed action records nothing. Admins read them on the Activity page; a private
+  project or document they can't open is listed without its name. Events are kept for a
+  year (a daily task removes older ones).
 
 ### Subscriptions
 

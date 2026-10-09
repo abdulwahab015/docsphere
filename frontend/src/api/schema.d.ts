@@ -4,6 +4,27 @@
  */
 
 export interface paths {
+    "/api/v1/audit/events/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description The organization's activity, newest first - admins only.
+         *     ``?search=`` matches the name or email of who did it, who it was about,
+         *     or the address an invitation went to.
+         */
+        get: operations["api_v1_audit_events_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/": {
         parameters: {
             query?: never;
@@ -1202,6 +1223,60 @@ export interface components {
             /** Format: uri */
             file: string;
         };
+        /**
+         * @description One event as an admin sees it. A project or document they couldn't
+         *     open goes unnamed - its name and any detail of what's in it (a file name)
+         *     are left out - but the event itself is still listed. Needs a queryset
+         *     annotated by ``with_resource_access``.
+         */
+        AuditEvent: {
+            readonly id: number;
+            /** Format: date-time */
+            readonly created: string;
+            readonly verb: components["schemas"]["AuditVerbEnum"];
+            /** Format: email */
+            readonly actor_email: string | null;
+            readonly actor_name: string | null;
+            /** Format: email */
+            readonly target_user_email: string | null;
+            readonly target_user_name: string | null;
+            readonly resource_kind: (components["schemas"]["ResourceKindEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly resource_name: string | null;
+            readonly details: components["schemas"]["AuditEventDetails"];
+        };
+        /** @description What changed; each verb carries only the details that apply to it. */
+        AuditEventDetails: {
+            access_level?: components["schemas"]["AccessLevelEnum"];
+            previous_access_level?: components["schemas"]["AccessLevelEnum"];
+            visibility?: components["schemas"]["VisibilityEnum"];
+            role?: components["schemas"]["OrgRoleEnum"];
+            previous_role?: components["schemas"]["OrgRoleEnum"];
+            /** Format: email */
+            email?: string;
+            file_name?: string;
+            size?: number;
+        };
+        /**
+         * @description * `ACCESS_GRANTED` - Access granted
+         *     * `ACCESS_CHANGED` - Access changed
+         *     * `ACCESS_REVOKED` - Access removed
+         *     * `VISIBILITY_CHANGED` - Visibility changed
+         *     * `ACCESS_REQUEST_APPROVED` - Access request approved
+         *     * `ACCESS_REQUEST_DENIED` - Access request denied
+         *     * `ROLE_CHANGED` - Role changed
+         *     * `MEMBER_DEACTIVATED` - Member deactivated
+         *     * `MEMBER_REACTIVATED` - Member reactivated
+         *     * `INVITATION_SENT` - Invitation sent
+         *     * `INVITATION_RESENT` - Invitation resent
+         *     * `INVITATION_REVOKED` - Invitation revoked
+         *     * `INVITATION_ACCEPTED` - Invitation accepted
+         *     * `DELETED` - Moved to the trash
+         *     * `RESTORED` - Restored
+         *     * `ATTACHMENT_ADDED` - File attached
+         *     * `ATTACHMENT_DELETED` - File deleted
+         * @enum {string}
+         */
+        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
         BillingPortalSessionResponse: {
             /** Format: uri */
             portal_url: string;
@@ -1518,6 +1593,21 @@ export interface components {
             previous?: string | null;
             results: components["schemas"]["Attachment"][];
         };
+        PaginatedAuditEventList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=4
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=2
+             */
+            previous?: string | null;
+            results: components["schemas"]["AuditEvent"][];
+        };
         PaginatedDocumentAccessRequestList: {
             /** @example 123 */
             count: number;
@@ -1825,6 +1915,12 @@ export interface components {
             readonly user_name: string;
             readonly access_level: components["schemas"]["AccessLevelEnum"];
         };
+        /**
+         * @description * `PROJECT` - Project
+         *     * `DOCUMENT` - Document
+         * @enum {string}
+         */
+        ResourceKindEnum: "PROJECT" | "DOCUMENT";
         RosterUser: components["schemas"]["UserDetail"] | components["schemas"]["User"];
         /**
          * @description Validates a grant/re-share request: a target user (by id) and the
@@ -1893,6 +1989,38 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    api_v1_audit_events_list: {
+        parameters: {
+            query?: {
+                /** @description Only events at or after this time (ISO 8601). */
+                after?: string;
+                /** @description Only events before this time (ISO 8601). */
+                before?: string;
+                /** @description Only this kind. */
+                kind?: "ACCESS" | "ATTACHMENTS" | "MEMBERSHIP" | "TRASH";
+                /** @description A page number within the paginated result set. */
+                page?: number;
+                /** @description Number of results to return per page. */
+                page_size?: number;
+                /** @description A search term. */
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedAuditEventList"];
+                };
+            };
+        };
+    };
     api_v1_documents_list: {
         parameters: {
             query?: {

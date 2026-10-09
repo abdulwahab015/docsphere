@@ -5,6 +5,8 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
@@ -107,7 +109,8 @@ class Command(BaseCommand):
 
     def _seed_project(self, spec, organization, users_by_email):
         """Mirrors project creation through the API: the creator gets an Owner
-        permission row, then each listed share its own row."""
+        permission row, then each listed share its own row, recorded in the
+        organization's activity as the creator sharing it."""
         owner = users_by_email[spec["owner"]]
         project = ProjectFactory(
             organization=organization,
@@ -124,6 +127,9 @@ class Command(BaseCommand):
             ProjectPermissionFactory(
                 project=project, user=users_by_email[email], access_level=access_level
             )
+            self._record_share(
+                owner, users_by_email[email], access_level, project=project
+            )
         return project
 
     def _seed_document(self, spec, organization, users_by_email, projects_by_name):
@@ -131,7 +137,7 @@ class Command(BaseCommand):
         a seeded project by name; the creator gets an Owner permission row and
         the first version of its history, and attaches any listed files (small
         PDFs, by name). Access to the project grants nothing here - only the
-        listed shares do."""
+        listed shares do, each recorded in the activity like a project's."""
         owner = users_by_email[spec["owner"]]
         project_name = spec.get("project")
         document = DocumentFactory(
@@ -153,3 +159,15 @@ class Command(BaseCommand):
             DocumentPermissionFactory(
                 document=document, user=users_by_email[email], access_level=access_level
             )
+            self._record_share(
+                owner, users_by_email[email], access_level, document=document
+            )
+
+    def _record_share(self, owner, user, access_level, **resource):
+        AuditEvent.objects.record(
+            owner,
+            AuditVerb.ACCESS_GRANTED,
+            target_user=user,
+            access_level=access_level,
+            **resource,
+        )

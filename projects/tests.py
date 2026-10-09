@@ -798,7 +798,7 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_can_update(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(6):
             response = self.client.patch(
                 self.url, {"name": "Alpha Prime"}, format="json"
             )
@@ -829,7 +829,7 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_change_visibility(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self.url, {"visibility": Visibility.PUBLIC}, format="json"
             )
@@ -853,7 +853,7 @@ class ProjectDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_soft_delete_and_project_drops_out_of_the_api(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(6):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -887,7 +887,7 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_admin_can_restore_a_soft_deleted_project(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -938,7 +938,7 @@ class ProjectRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_restoring_a_project_brings_its_documents_back(self):
         document = DocumentFactory(project=self.project, visibility=Visibility.PUBLIC)
         self.client.force_authenticate(self.admin)
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             self.client.post(self.url)
 
         self.client.force_authenticate(self.member)
@@ -1546,7 +1546,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
         # Otherwise an editor would be told someone else changed the text.
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self.url, {"visibility": Visibility.PUBLIC}, format="json"
             )
@@ -1580,7 +1580,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_change_visibility(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self.url, {"visibility": Visibility.PUBLIC}, format="json"
             )
@@ -1604,7 +1604,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_soft_delete_and_document_drops_out_of_the_api(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(6):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -1964,7 +1964,7 @@ class AttachmentAPITests(TemporaryMediaRoot, AssumeActiveSubscription, APITestCa
     def test_an_editor_attaches_a_file(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.post(
                 self.list_url,
                 {"file": SimpleUploadedFile("report.pdf", PDF)},
@@ -2146,7 +2146,7 @@ class AttachmentAPITests(TemporaryMediaRoot, AssumeActiveSubscription, APITestCa
         self.client.force_authenticate(self.editor)
 
         with (
-            self.assertNumQueries(3),
+            self.assertNumQueries(6),
             self.captureOnCommitCallbacks(execute=True),
         ):
             response = self.client.delete(self.detail_url(attachment))
@@ -2193,7 +2193,7 @@ class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_restore_a_soft_deleted_document(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             response = self.client.post(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -2319,7 +2319,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.EDITOR},
@@ -2340,7 +2340,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_reshare_updating_existing_level(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(14):
+        with self.assertNumQueries(15):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.OWNER},
@@ -2364,7 +2364,7 @@ class ProjectShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 self.url,
                 {"user": self.viewer.pk, "access_level": AccessLevel.EDITOR},
@@ -2573,7 +2573,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_revoke(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -2599,7 +2599,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, co_owner.pk])
             )
@@ -2631,7 +2631,7 @@ class ProjectShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.delete(
                 reverse("project_share_revoke", args=[self.project.pk, co_owner.pk])
             )
@@ -2695,7 +2695,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_share_with_a_new_user(self, mock_send_mail):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -2719,7 +2719,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(14):
+        with self.assertNumQueries(15):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.OWNER},
@@ -2743,7 +2743,7 @@ class DocumentShareAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(15):
+        with self.assertNumQueries(16):
             response = self.client.post(
                 self.url,
                 {"user": self.target.pk, "access_level": AccessLevel.VIEWER},
@@ -2894,7 +2894,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
     def test_owner_can_revoke_and_access_is_removed_entirely(self):
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -2905,7 +2905,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         self.document.save(update_fields=["visibility"])
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             response = self.client.delete(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -2944,7 +2944,7 @@ class DocumentShareRevokeAPITests(AssumeActiveSubscription, APITestCase):
         )
         self.client.force_authenticate(self.owner)
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.delete(
                 reverse("document_share_revoke", args=[self.document.pk, co_owner.pk])
             )
@@ -3109,7 +3109,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(11):
+        with self.assertNumQueries(12):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3136,7 +3136,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(9):
+        with self.assertNumQueries(10):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3156,7 +3156,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3175,7 +3175,7 @@ class DocumentAccessRequestAPITests(AssumeActiveSubscription, APITestCase):
             args=[self.document.pk, access_request.pk],
         )
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

@@ -1,6 +1,7 @@
 import type {
   AccessRequest,
   Attachment,
+  AuditEvent,
   CurrentUser,
   Document,
   DocumentListItem,
@@ -111,6 +112,22 @@ export function buildAttachment(overrides: Partial<Attachment> = {}): Attachment
     uploaded_by_email: 'ada@example.com',
     uploaded_by_name: 'Ada Lovelace',
     created: '2026-09-02T09:00:00Z',
+    ...overrides,
+  }
+}
+
+export function buildAuditEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
+  return {
+    id: 41,
+    created: '2026-09-03T10:00:00Z',
+    verb: 'ACCESS_GRANTED',
+    actor_email: 'ada@example.com',
+    actor_name: 'Ada Lovelace',
+    target_user_email: 'grace@example.com',
+    target_user_name: 'Grace Hopper',
+    resource_kind: 'DOCUMENT',
+    resource_name: 'Q3 plan',
+    details: { access_level: 'EDITOR' },
     ...overrides,
   }
 }

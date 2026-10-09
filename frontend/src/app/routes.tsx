@@ -193,6 +193,13 @@ export const routes: RouteObject[] = [
                               (module) => module.BillingPage,
                             ),
                           },
+                          {
+                            path: PATHS.activity,
+                            lazy: lazyPage(
+                              () => import('@/features/activity/pages/ActivityPage'),
+                              (module) => module.ActivityPage,
+                            ),
+                          },
                         ],
                       },
                     ],

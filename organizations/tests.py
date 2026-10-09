@@ -591,7 +591,7 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(39):
+        with self.assertNumQueries(41):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
@@ -608,7 +608,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertFalse(User.objects.get(email="new@unpaid.test").email_verified)
 
     def test_seeds_plans_and_billing_emails(self):
-        with self.assertNumQueries(39):
+        with self.assertNumQueries(41):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         prices = Price.objects.order_by("stripe_data__unit_amount")
@@ -627,7 +627,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
 
     def test_seeds_projects_with_their_owner_and_shares(self):
-        with self.assertNumQueries(39):
+        with self.assertNumQueries(41):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         roadmap = Project.objects.get(name="Roadmap")
@@ -637,12 +637,28 @@ class SeedE2ECommandTests(TestCase):
             dict(roadmap.permissions.values_list("user__email", "access_level")),
             {"owner@projects.test": "OWNER", "editor@projects.test": "EDITOR"},
         )
+        # Each share shows in the activity as the owner sharing it.
+        self.assertEqual(
+            list(
+                roadmap.audit_events.values_list(
+                    "actor__email", "verb", "target_user__email", "details"
+                )
+            ),
+            [
+                (
+                    "owner@projects.test",
+                    "ACCESS_GRANTED",
+                    "editor@projects.test",
+                    {"access_level": "EDITOR"},
+                )
+            ],
+        )
         archived = Project.objects.get(name="Archived")
         self.assertFalse(archived.is_active)
         self.assertEqual(archived.visibility, "PUBLIC")
 
     def test_seeds_documents_in_projects_or_personal(self):
-        with self.assertNumQueries(39):
+        with self.assertNumQueries(41):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         spec = Document.objects.get(title="Spec")
@@ -650,6 +666,21 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(
             dict(spec.permissions.values_list("user__email", "access_level")),
             {"owner@projects.test": "OWNER", "editor@projects.test": "VIEWER"},
+        )
+        self.assertEqual(
+            list(
+                spec.audit_events.values_list(
+                    "actor__email", "verb", "target_user__email", "details"
+                )
+            ),
+            [
+                (
+                    "owner@projects.test",
+                    "ACCESS_GRANTED",
+                    "editor@projects.test",
+                    {"access_level": "VIEWER"},
+                )
+            ],
         )
         attachment = spec.attachments.get()
         self.assertEqual(
