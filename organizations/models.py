@@ -6,8 +6,9 @@ from django.db import models
 from djstripe.models import Customer
 
 from core.models import TimeStampedModel
+from organizations.choices import ExportStatus
 from organizations.constants import ORGANIZATION_PURGE_DELAY
-from organizations.managers import OrganizationQuerySet
+from organizations.managers import OrganizationExportQuerySet, OrganizationQuerySet
 from subscriptions.utils import granting_access
 
 
@@ -74,8 +75,13 @@ class OrganizationExport(TimeStampedModel):
         related_name="organization_exports",
     )
 
+    status = models.CharField(
+        max_length=10, choices=ExportStatus.choices, default=ExportStatus.BUILDING
+    )
     # Empty until the background task has built it.
     file = models.FileField(upload_to=export_path, blank=True)
+
+    objects = OrganizationExportQuerySet.as_manager()
 
     def __str__(self):
         return f"{self.organization} export ({self.created:%Y-%m-%d})"

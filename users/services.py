@@ -238,6 +238,32 @@ def sole_owner_message(projects, documents):
     )
 
 
+def _ensure_may_leave(user):
+    """Refuses to let the organization's last active admin, or the only
+    active Owner of anything, delete their account."""
+    if user.org_role == OrganizationRole.ADMIN:
+        other_admins = User.objects.filter(
+            organization_id=user.organization_id,
+            org_role=OrganizationRole.ADMIN,
+            is_active=True,
+        ).exclude(pk=user.pk)
+        if not other_admins.exists():
+            raise DRFValidationError({"detail": LAST_ADMIN_LEAVING_MESSAGE})
+
+    projects = (
+        Project.objects.for_organization(user.organization)
+        .solely_owned_by(user)
+        .count()
+    )
+    documents = (
+        Document.objects.for_organization(user.organization)
+        .solely_owned_by(user)
+        .count()
+    )
+    if projects or documents:
+        raise DRFValidationError({"detail": sole_owner_message(projects, documents)})
+
+
 def delete_account(user):
     """Deletes ``user``'s own account by anonymising it: the row stays, so
     what they wrote keeps an author, but without their name, email address
@@ -247,32 +273,17 @@ def delete_account(user):
 
     Refused for the organization's last active admin and for the only active
     Owner of anything, checked under a lock on the organization so two
-    people leaving at once can't both pass."""
+    people leaving at once can't both pass - unless the organization has been
+    deleted, when nobody can use what they'd leave behind anyway, and leaving
+    is how they free their address before it's purged."""
     with transaction.atomic():
-        type(user.organization).objects.select_for_update().get(pk=user.organization_id)
-        if user.org_role == OrganizationRole.ADMIN:
-            other_admins = User.objects.filter(
-                organization_id=user.organization_id,
-                org_role=OrganizationRole.ADMIN,
-                is_active=True,
-            ).exclude(pk=user.pk)
-            if not other_admins.exists():
-                raise DRFValidationError({"detail": LAST_ADMIN_LEAVING_MESSAGE})
-
-        projects = (
-            Project.objects.for_organization(user.organization)
-            .solely_owned_by(user)
-            .count()
+        organization = (
+            type(user.organization)
+            .objects.select_for_update()
+            .get(pk=user.organization_id)
         )
-        documents = (
-            Document.objects.for_organization(user.organization)
-            .solely_owned_by(user)
-            .count()
-        )
-        if projects or documents:
-            raise DRFValidationError(
-                {"detail": sole_owner_message(projects, documents)}
-            )
+        if not organization.deletion_requested_at:
+            _ensure_may_leave(user)
 
         ProjectPermission.objects.filter(user=user).delete()
         DocumentPermission.objects.filter(user=user).delete()

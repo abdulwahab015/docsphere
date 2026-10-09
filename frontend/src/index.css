@@ -61,11 +61,12 @@
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   /* Darker than shadcn's defaults so text meets WCAG AA (4.5:1): muted text
-     on the muted background, and destructive text on its tinted button. */
+     on the muted background, and destructive text on its tinted button -
+     including while it's hovered, when the tint is darker. */
   --muted-foreground: oklch(0.5 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.505 0.213 27.518);
+  --destructive: oklch(0.47 0.213 27.518);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);

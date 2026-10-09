@@ -38,7 +38,10 @@ test.describe('leaving', () => {
     await admin.context().close()
   })
 
-  test('a lapsed organization deletes itself; its admin restores it', async ({ page, browser }) => {
+  test('a lapsed organization deletes itself; its member leaves, its admin restores it', async ({
+    page,
+    browser,
+  }) => {
     await page.goto('/login')
     await fillLoginForm(page, CLOSING_ADMIN)
     await expect(page.getByRole('heading', { name: 'Subscribe to continue' })).toBeVisible()
@@ -54,6 +57,13 @@ test.describe('leaving', () => {
     await fillLoginForm(member, CLOSING_MEMBER)
     await expect(member.getByText(/Ask an admin if this is a mistake/)).toBeVisible()
     await expect(member.getByRole('button', { name: 'Restore organization' })).toHaveCount(0)
+    // Leaving now frees their address, rather than at the purge.
+    await member.getByRole('button', { name: 'Delete my account' }).click()
+    const leave = member.getByRole('form', { name: 'Delete your account' })
+    await leave.getByLabel('Current password').fill(CLOSING_MEMBER.password)
+    await leave.getByRole('button', { name: 'Delete my account' }).click()
+    await expect(member.getByText('Your account has been deleted.')).toBeVisible()
+    await expect(member).toHaveURL(/\/login$/)
     await member.context().close()
 
     await page.getByRole('button', { name: 'Restore organization' }).click()

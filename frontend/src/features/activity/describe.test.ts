@@ -62,6 +62,14 @@ describe('describeEvent', () => {
       { verb: 'INVITATION_ACCEPTED', ...NO_RESOURCE, details: { email: 'ada@example.com' } },
     ],
     ['Deleted their account', { verb: 'ACCOUNT_DELETED', ...NO_RESOURCE, details: {} }],
+    [
+      "Asked for an export of the organization's data",
+      { verb: 'EXPORT_REQUESTED', ...NO_RESOURCE, details: {} },
+    ],
+    [
+      "Downloaded an export of the organization's data",
+      { verb: 'EXPORT_DOWNLOADED', ...NO_RESOURCE, details: {} },
+    ],
     ['Moved the project "Launch" to the trash', { verb: 'DELETED', ...PROJECT, details: {} }],
     ['Restored the document "Q3 plan" from the trash', { verb: 'RESTORED', details: {} }],
     [

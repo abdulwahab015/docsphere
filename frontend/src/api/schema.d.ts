@@ -539,7 +539,10 @@ export interface paths {
         put?: never;
         /**
          * @description An admin asks for an export of the organization: it's built in the
-         *     background and a download link is emailed to them.
+         *     background and a download link is emailed to them. One at a time per
+         *     organization, checked under a lock on it so two requests at once can't
+         *     both start one, and a few a day (the ``organization_export`` rate, counted
+         *     for the whole organization).
          */
         post: operations["api_v1_organizations_exports_create"];
         delete?: never;
@@ -1455,13 +1458,15 @@ export interface components {
          *     * `INVITATION_REVOKED` - Invitation revoked
          *     * `INVITATION_ACCEPTED` - Invitation accepted
          *     * `ACCOUNT_DELETED` - Account deleted
+         *     * `EXPORT_REQUESTED` - Export requested
+         *     * `EXPORT_DOWNLOADED` - Export downloaded
          *     * `DELETED` - Moved to the trash
          *     * `RESTORED` - Restored
          *     * `ATTACHMENT_ADDED` - File attached
          *     * `ATTACHMENT_DELETED` - File deleted
          * @enum {string}
          */
-        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "ACCOUNT_DELETED" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
+        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "ACCOUNT_DELETED" | "EXPORT_REQUESTED" | "EXPORT_DOWNLOADED" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
         BillingPortalSessionResponse: {
             /** Format: uri */
             portal_url: string;
@@ -2237,7 +2242,7 @@ export interface operations {
                 /** @description Only events before this time (ISO 8601). */
                 before?: string;
                 /** @description Only this kind. */
-                kind?: "ACCESS" | "ATTACHMENTS" | "MEMBERSHIP" | "TRASH";
+                kind?: "ACCESS" | "ATTACHMENTS" | "EXPORTS" | "MEMBERSHIP" | "TRASH";
                 /** @description A page number within the paginated result set. */
                 page?: number;
                 /** @description Number of results to return per page. */
@@ -3000,6 +3005,13 @@ export interface operations {
         responses: {
             /** @description Building; a link will be emailed. */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description One is already being built. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

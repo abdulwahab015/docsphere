@@ -1,8 +1,9 @@
-import { BellIcon, CheckCheckIcon } from 'lucide-react'
+import { BellIcon, CheckCheckIcon, ListIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import type { Notification } from '@/api/types'
+import { PATHS } from '@/app/paths'
+
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -13,16 +14,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { describeNotification, notificationLink } from '@/features/notifications/describe'
+import { describeNotification } from '@/features/notifications/describe'
 import {
   useMarkAllNotificationsRead,
-  useMarkNotificationRead,
   useNotifications,
+  useOpenNotification,
   useUnreadNotificationCount,
 } from '@/features/notifications/hooks'
 import { formatDateTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+const FIRST_PAGE = 1
 // Beyond this the badge just says there are many.
 const MAX_BADGE_COUNT = 9
 
@@ -31,21 +33,11 @@ const MAX_BADGE_COUNT = 9
 export function NotificationBell() {
   const [open, setOpen] = useState(false)
   const unreadCount = useUnreadNotificationCount()
-  const notifications = useNotifications(open)
-  const markRead = useMarkNotificationRead()
+  const notifications = useNotifications({ page: FIRST_PAGE, enabled: open })
   const markAllRead = useMarkAllNotificationsRead()
+  const openNotification = useOpenNotification()
   const navigate = useNavigate()
   const unread = unreadCount.data ?? 0
-
-  const openNotification = (notification: Notification) => {
-    if (!notification.read) {
-      markRead.mutate(notification.id)
-    }
-    const link = notificationLink(notification)
-    if (link) {
-      void navigate(link)
-    }
-  }
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -100,18 +92,17 @@ export function NotificationBell() {
             ))}
           </DropdownMenuGroup>
         )}
+        <DropdownMenuSeparator />
         {unread > 0 && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={markAllRead.isPending}
-              onSelect={() => markAllRead.mutate()}
-            >
-              <CheckCheckIcon aria-hidden />
-              Mark all as read
-            </DropdownMenuItem>
-          </>
+          <DropdownMenuItem disabled={markAllRead.isPending} onSelect={() => markAllRead.mutate()}>
+            <CheckCheckIcon aria-hidden />
+            Mark all as read
+          </DropdownMenuItem>
         )}
+        <DropdownMenuItem onSelect={() => void navigate(PATHS.notifications)}>
+          <ListIcon aria-hidden />
+          See all notifications
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
 import { buildCurrentUser, buildOrganizationSummary } from '@/test/factories'
@@ -42,6 +42,23 @@ describe('OrganizationDeletedScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Restore organization' }))
 
     expect(await screen.findByText("This organization isn't deleted.")).toBeInTheDocument()
+  })
+
+  it('lets anyone delete their account there, to free their address now', async () => {
+    const deleteAccount = spyResolver(() => new HttpResponse(null, { status: 204 }))
+    server.use(http.post(apiUrl('/users/me/delete/'), deleteAccount))
+    const { router, user } = renderRoute('/projects', {
+      signedInAs: buildCurrentUser({ org_role: 'MEMBER', organization: deleted }),
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Delete my account' }))
+    const dialog = within(await screen.findByRole('form', { name: 'Delete your account' }))
+    await user.type(dialog.getByLabelText('Current password'), 'Old-Pass-123!')
+    await user.click(dialog.getByRole('button', { name: 'Delete my account' }))
+
+    expect(await screen.findByText('Your account has been deleted.')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/login')
+    expect(deleteAccount).toHaveBeenCalledTimes(1)
   })
 
   it('tells a member to ask an admin, with no way to restore it', () => {

@@ -199,6 +199,7 @@ REST_FRAMEWORK = {
         "password_change": config("PASSWORD_CHANGE_THROTTLE_RATE"),
         "email_verification": config("EMAIL_VERIFICATION_THROTTLE_RATE"),
         "email_change": config("EMAIL_CHANGE_THROTTLE_RATE"),
+        "organization_export": config("ORGANIZATION_EXPORT_THROTTLE_RATE"),
     },
 }
 

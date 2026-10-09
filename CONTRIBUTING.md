@@ -259,9 +259,13 @@ still pass, so a change that touches them needs a test that pins them down.
   keeps an author; it's refused for the organization's only admin and for the only Owner
   of anything. An admin deleting the organization (typing its name) signs everyone out,
   cancels the subscription at once and blocks the app (`403 organization_deleted`); an
-  admin can restore it for 30 days, then a daily task purges it, files included. An admin's
-  export (a .zip, emailed as a 7-day link) holds only what that admin can open: private
-  things are counted, never exported.
+  admin can restore it for 30 days, then a daily task purges it, files included; its
+  billing email is let go at once, and its people can delete their own accounts from the
+  deleted screen to free their addresses sooner. An admin's export (a .zip, emailed as a
+  7-day link) holds only what that admin can open: private things are counted, never
+  exported. One is built at a time per organization, a few a day (a throttle counted for
+  the whole organization), a failed build is retried and then reported to the admin by
+  email, and asking for and downloading an export both appear in the Activity log.
 - **A new signup verifies its email before anything else.** Until they open the emailed
   link, the API refuses them everywhere with **403** `email_unverified` (checked before the
   subscription), except to verify, ask for a new link, read `/users/me/` and log out.

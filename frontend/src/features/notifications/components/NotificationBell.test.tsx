@@ -127,10 +127,20 @@ describe('NotificationBell', () => {
     const { router, user } = renderRoute('/projects', { signedInAs })
     const menu = await openBell(user, 'Notifications')
 
-    await user.click(await within(menu).findByRole('menuitem'))
+    await user.click(await within(menu).findByRole('menuitem', { name: /can no longer open/ }))
 
     expect(router.state.location.pathname).toBe('/projects')
     expect(markRead).not.toHaveBeenCalled()
+  })
+
+  it('leads to the page with every notification', async () => {
+    const { router, user } = renderRoute('/projects', { signedInAs })
+    const menu = await openBell(user, 'Notifications')
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'See all notifications' }))
+
+    expect(router.state.location.pathname).toBe('/notifications')
+    expect(await screen.findByRole('heading', { name: 'Notifications' })).toBeInTheDocument()
   })
 
   it('marks everything read', async () => {

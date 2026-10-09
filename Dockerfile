@@ -61,6 +61,7 @@ RUN DJANGO_SETTINGS_MODULE=core.settings.production \
     PASSWORD_CHANGE_THROTTLE_RATE=5/hour \
     EMAIL_VERIFICATION_THROTTLE_RATE=10/hour \
     EMAIL_CHANGE_THROTTLE_RATE=5/hour \
+    ORGANIZATION_EXPORT_THROTTLE_RATE=5/day \
     STRIPE_PRODUCT_ID=prod_collectstatic-build-time-placeholder \
     python manage.py collectstatic --noinput
 

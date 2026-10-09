@@ -1,4 +1,6 @@
+import contextlib
 import json
+import threading
 import time
 import zipfile
 from datetime import timedelta
@@ -16,22 +18,33 @@ from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.db import connection
+from django.test import (
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+    skipUnlessDBFeature,
+)
 from django.urls import reverse
 from django.utils import timezone
 from djstripe.models import Price
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from audit.choices import AuditVerb
 from audit.factories import AuditEventFactory
 from audit.models import AuditEvent
-from core.tests import AssumeActiveSubscription
+from core.celery import app as celery_app
+from core.tests import EAGER_PROPAGATES_SETTING, AssumeActiveSubscription
 from notifications.factories import NotificationFactory
 from notifications.models import Notification
 from organizations.admin import OrganizationAdmin
+from organizations.api.v1.views import EXPORT_IN_PROGRESS_MESSAGE
+from organizations.choices import ExportStatus
+from organizations.constants import EXPORT_MAX_RETRIES
 from organizations.exports import (
     INVALID_EXPORT_LINK_MESSAGE,
     build_export,
@@ -45,6 +58,7 @@ from organizations.factories import (
 )
 from organizations.models import Organization, OrganizationExport
 from organizations.tasks import (
+    build_organization_export_task,
     purge_deleted_organizations_task,
     remove_expired_exports_task,
 )
@@ -63,6 +77,7 @@ from subscriptions.api.v1.serializers import ORGANIZATION_DELETED_MESSAGE
 from users.choices import InvitationStatus
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 from users.models import Invitation
+from users.tests import RACE_WAIT_SECONDS
 
 User = get_user_model()
 
@@ -775,7 +790,7 @@ class OrganizationDeletionTests(APITestCase):
 
     def setUp(self):
         super().setUp()
-        self.org = OrganizationFactory(name="Acme")
+        self.org = OrganizationFactory(name="Acme", billing_email="billing@acme.test")
         self.subscription = StripeSubscriptionFactory(customer__subscriber=self.org)
         self.admin = AdminUserFactory(organization=self.org)
         self.member = UserFactory(organization=self.org)
@@ -800,6 +815,8 @@ class OrganizationDeletionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.org.refresh_from_db()
         self.assertTrue(self.org.deletion_requested_at)
+        # Its billing email is free for another organization at once.
+        self.assertIsNone(self.org.billing_email)
         cancel.assert_called_once_with(self.subscription.id)
         self.subscription.refresh_from_db()
         self.assertEqual(self.subscription.stripe_data["status"], "canceled")
@@ -978,9 +995,9 @@ class OrganizationExportTests(
         self.member = UserFactory(organization=self.org, email="mia@acme.test")
         self.client.force_authenticate(self.admin)
 
-    def make_export(self):
+    def make_export(self, status=ExportStatus.READY):
         export = OrganizationExport.objects.create(
-            organization=self.org, requested_by=self.admin
+            organization=self.org, requested_by=self.admin, status=status
         )
         build_export(export)
         return export
@@ -999,14 +1016,19 @@ class OrganizationExportTests(
     @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
     def test_an_admin_asks_for_an_export_and_is_emailed_a_link(self):
         with (
-            self.assertNumQueries(10),
+            self.assertNumQueries(16),
             self.captureOnCommitCallbacks(execute=True),
         ):
             response = self.client.post(self.create_url)
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         export = OrganizationExport.objects.get()
+        self.assertEqual(export.status, ExportStatus.READY)
         self.assertTrue(export.file)
+        self.assertEqual(
+            list(AuditEvent.objects.values_list("actor", "verb")),
+            [(self.admin.pk, AuditVerb.EXPORT_REQUESTED)],
+        )
         self.assertEqual(mail.outbox[0].to, ["ada@acme.test"])
         self.assertIn(
             f"/settings/organization/export?token={make_export_token(export)}",
@@ -1077,12 +1099,16 @@ class OrganizationExportTests(
     def test_an_admin_downloads_it_from_the_link(self):
         export = self.make_export()
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             response = self.client.get(
                 self.download_url, {"token": make_export_token(export)}
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            list(AuditEvent.objects.values_list("actor", "verb")),
+            [(self.admin.pk, AuditVerb.EXPORT_DOWNLOADED)],
+        )
         self.assertEqual(response["Content-Type"], "application/zip")
         self.assertIn("attachment;", response["Content-Disposition"])
         self.assertEqual(response["Cache-Control"], "private, no-store")
@@ -1107,7 +1133,9 @@ class OrganizationExportTests(
     def test_another_organizations_export_is_not_found(self):
         other_admin = AdminUserFactory()
         theirs = OrganizationExport.objects.create(
-            organization=other_admin.organization, requested_by=other_admin
+            organization=other_admin.organization,
+            requested_by=other_admin,
+            status=ExportStatus.READY,
         )
         build_export(theirs)
 
@@ -1117,6 +1145,65 @@ class OrganizationExportTests(
             )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_one_at_a_time_while_an_export_is_being_built(self):
+        self.make_export(status=ExportStatus.BUILDING)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(self.create_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(response.data["detail"]), EXPORT_IN_PROGRESS_MESSAGE)
+        self.assertEqual(OrganizationExport.objects.count(), 1)
+        self.assertFalse(AuditEvent.objects.exists())
+
+    @patch("organizations.api.v1.views.build_organization_export_task.delay")
+    def test_a_finished_failed_or_long_stuck_export_doesnt_block_another(self, _build):
+        self.make_export(status=ExportStatus.READY)
+        self.make_export(status=ExportStatus.FAILED)
+        stuck = self.make_export(status=ExportStatus.BUILDING)
+        OrganizationExport.objects.filter(pk=stuck.pk).update(
+            created=timezone.now() - timedelta(hours=2)
+        )
+
+        with self.assertNumQueries(6), self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self.create_url)
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+
+    @patch("organizations.api.v1.views.build_organization_export_task.delay")
+    def test_the_daily_limit_counts_the_whole_organization(self, _build):
+        other_admin = AdminUserFactory(organization=self.org)
+        cache.clear()
+        statuses = []
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"organization_export": "2/day"}
+        ):
+            for admin in (self.admin, other_admin, other_admin):
+                OrganizationExport.objects.update(status=ExportStatus.READY)
+                self.client.force_authenticate(admin)
+                statuses.append(self.client.post(self.create_url).status_code)
+
+        self.assertEqual(
+            statuses,
+            [
+                status.HTTP_202_ACCEPTED,
+                status.HTTP_202_ACCEPTED,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            ],
+        )
+
+    def test_one_still_building_or_failed_cant_be_downloaded(self):
+        building = self.make_export(status=ExportStatus.BUILDING)
+        failed = self.make_export(status=ExportStatus.FAILED)
+
+        for export in (building, failed):
+            with self.assertNumQueries(1):
+                response = self.client.get(
+                    self.download_url, {"token": make_export_token(export)}
+                )
+            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_members_cant_ask_for_or_download_one(self):
         export = self.make_export()
@@ -1145,3 +1232,88 @@ class OrganizationExportTests(
         self.assertQuerySetEqual(OrganizationExport.objects.all(), [kept])
         self.assertFalse(default_storage.exists(stored))
         self.assertTrue(default_storage.exists(kept.file.name))
+
+
+class ExportBuildRetryTests(TemporaryMediaRoot, TestCase):
+    def setUp(self):
+        super().setUp()
+        admin = AdminUserFactory(email="ada@acme.test")
+        self.export = OrganizationExport.objects.create(
+            organization=admin.organization, requested_by=admin
+        )
+        # Eager, but letting Celery run the retries rather than raise its
+        # internal Retry; the outcome is read from the result.
+        propagates = celery_app.conf[EAGER_PROPAGATES_SETTING]
+        celery_app.conf[EAGER_PROPAGATES_SETTING] = False
+        self.addCleanup(
+            celery_app.conf.__setitem__, EAGER_PROPAGATES_SETTING, propagates
+        )
+
+    @patch("organizations.tasks.build_export")
+    def test_a_failed_build_is_tried_again_until_it_works(self, build):
+        build.side_effect = [OSError("No space left on device"), None]
+
+        with self.assertNumQueries(4):
+            result = build_organization_export_task.delay(self.export.pk)
+
+        self.assertTrue(result.successful())
+        self.assertEqual(build.call_count, 2)
+        self.export.refresh_from_db()
+        self.assertEqual(self.export.status, ExportStatus.READY)
+        self.assertIn("is ready", mail.outbox[0].subject)
+
+    @patch("organizations.tasks.build_export", side_effect=OSError("Disk full"))
+    def test_after_its_retries_it_is_marked_failed_and_the_admin_told(self, build):
+        with self.assertNumQueries(6):
+            result = build_organization_export_task.delay(self.export.pk)
+
+        self.assertIsInstance(result.result, OSError)
+        self.assertEqual(build.call_count, EXPORT_MAX_RETRIES + 1)
+        self.export.refresh_from_db()
+        self.assertEqual(self.export.status, ExportStatus.FAILED)
+        self.assertEqual(mail.outbox[0].to, ["ada@acme.test"])
+        self.assertIn("failed", mail.outbox[0].subject)
+        self.assertIn("/settings/organization", mail.outbox[0].body)
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentExportRequestTests(AssumeActiveSubscription, TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    @patch("organizations.api.v1.views.build_organization_export_task.delay")
+    def test_two_requests_at_once_start_one_export(self, _build):
+        admins = AdminUserFactory.create_batch(2, organization=OrganizationFactory())
+        both_checked = threading.Barrier(2)
+        create_export = OrganizationExport.objects.create
+        responses = []
+
+        def create_after_the_other_checked(**fields):
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return create_export(**fields)
+
+        def ask(admin):
+            client = APIClient()
+            client.force_authenticate(admin)
+            try:
+                responses.append(client.post(reverse("organization_export_create")))
+            finally:
+                connection.close()
+
+        with patch.object(
+            OrganizationExport.objects,
+            "create",
+            side_effect=create_after_the_other_checked,
+        ):
+            requests = [threading.Thread(target=ask, args=(admin,)) for admin in admins]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_202_ACCEPTED, status.HTTP_400_BAD_REQUEST],
+        )
+        self.assertEqual(OrganizationExport.objects.count(), 1)
