@@ -36,6 +36,9 @@ export type DocumentListItem = Omit<Schemas['DocumentList'], 'visibility'> & {
   visibility: Visibility
 }
 export type ExcerptSegment = Schemas['ExcerptSegment']
+// A document's history: one entry per revision, without and with its text.
+export type DocumentVersion = Schemas['DocumentVersion']
+export type DocumentVersionDetail = Schemas['DocumentVersionDetail']
 export type DocumentCreatePayload = Pick<
   Schemas['DocumentCreate'],
   'title' | 'content' | 'visibility' | 'project'

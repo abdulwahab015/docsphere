@@ -1,9 +1,14 @@
 import { fireEvent, screen, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 
-import type { Document } from '@/api/types'
+import type { Document, DocumentVersionDetail } from '@/api/types'
 import { documentKeys } from '@/features/documents/query-keys'
-import { buildCurrentUser, buildDocument, buildProject } from '@/test/factories'
+import {
+  buildCurrentUser,
+  buildDocument,
+  buildDocumentVersion,
+  buildProject,
+} from '@/test/factories'
 import { renderRoute } from '@/test/render'
 import { apiUrl, server, spyResolver } from '@/test/server'
 
@@ -258,6 +263,202 @@ describe('DocumentPage', () => {
     })
   })
 
+  describe('version history (Editor and above)', () => {
+    // Revision 3 is the document as it is now.
+    const current = buildDocument({
+      access_level: 'EDITOR',
+      title: 'Findings v3',
+      content: 'Third draft.',
+      revision: 3,
+    })
+    const versions = [
+      buildDocumentVersion({
+        revision: 3,
+        title: 'Findings v3',
+        content: 'Third draft.',
+        created_by_name: 'Grace Hopper',
+        created: '2026-09-03T09:00:00Z',
+      }),
+      buildDocumentVersion({ revision: 2, title: 'Findings v2', content: 'Second draft.' }),
+      buildDocumentVersion({ revision: 1, title: 'Findings', content: 'First draft.' }),
+    ]
+
+    function serveVersions(served: DocumentVersionDetail[] = versions) {
+      server.use(
+        http.get(apiUrl(`${DOCUMENT_PATH}versions/`), () =>
+          HttpResponse.json({
+            count: served.length,
+            results: served.map(({ content: _content, ...listed }) => listed),
+          }),
+        ),
+        http.get(apiUrl(`${DOCUMENT_PATH}versions/:revision/`), ({ params }) =>
+          HttpResponse.json(served.find((version) => version.revision === Number(params.revision))),
+        ),
+      )
+    }
+
+    async function openHistory(user: ReturnType<typeof renderRoute>['user']) {
+      await user.click(await screen.findByRole('button', { name: 'History' }))
+      return screen.findByRole('dialog', { name: 'Version history' })
+    }
+
+    it('lists the versions newest first, with who saved each and the current one marked', async () => {
+      serveDocument(current)
+      serveVersions()
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+
+      const dialog = await openHistory(user)
+
+      const list = await within(dialog).findByRole('list', { name: 'Versions' })
+      const entries = within(list).getAllByRole('button')
+      expect(entries.map((entry) => entry.textContent)).toEqual([
+        expect.stringMatching(/^Version 3Current.*Findings v3.*Grace Hopper/),
+        expect.stringMatching(/^Version 2Findings v2/),
+        expect.stringMatching(/^Version 1Findings/),
+      ])
+    })
+
+    it('opens an old version to read, and goes back to the list', async () => {
+      serveDocument(current)
+      serveVersions()
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const dialog = await openHistory(user)
+
+      await user.click(await within(dialog).findByRole('button', { name: /^Version 1/ }))
+
+      const version = await screen.findByRole('article', { name: 'Version 1' })
+      expect(within(version).getByRole('heading', { name: 'Findings' })).toBeInTheDocument()
+      expect(within(version).getByText('First draft.')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'All versions' }))
+      expect(await screen.findByRole('list', { name: 'Versions' })).toBeInTheDocument()
+    })
+
+    it('says when a version had no text', async () => {
+      serveDocument(current)
+      serveVersions([versions[0], buildDocumentVersion({ revision: 1, content: '' })])
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const dialog = await openHistory(user)
+
+      await user.click(await within(dialog).findByRole('button', { name: /^Version 1/ }))
+
+      expect(await screen.findByRole('article', { name: 'Version 1' })).toHaveTextContent(
+        'No text.',
+      )
+    })
+
+    it("doesn't offer to restore the current version", async () => {
+      serveDocument(current)
+      serveVersions()
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const dialog = await openHistory(user)
+
+      await user.click(await within(dialog).findByRole('button', { name: /^Version 3/ }))
+
+      expect(await screen.findByText('This is the current version.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Restore this version' })).not.toBeInTheDocument()
+    })
+
+    it('restores an old version, after confirming, as a save based on the current revision', async () => {
+      serveDocument(current)
+      serveVersions()
+      const save = serveSave({
+        ...current,
+        title: 'Findings',
+        content: 'First draft.',
+        revision: 4,
+      })
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const dialog = await openHistory(user)
+      await user.click(await within(dialog).findByRole('button', { name: /^Version 1/ }))
+
+      await user.click(await screen.findByRole('button', { name: 'Restore this version' }))
+      const confirm = await screen.findByRole('alertdialog', { name: 'Restore version 1?' })
+      await user.click(within(confirm).getByRole('button', { name: 'Restore' }))
+
+      expect(await screen.findByText('Restored version 1.')).toBeInTheDocument()
+      expect(await save.mock.calls[0][0].request.json()).toEqual({
+        title: 'Findings',
+        content: 'First draft.',
+        base_revision: 3,
+      })
+      expect(screen.queryByRole('dialog', { name: 'Version history' })).not.toBeInTheDocument()
+      expect(await screen.findByRole('heading', { level: 1, name: 'Findings' })).toBeInTheDocument()
+    })
+
+    it('refuses to restore over a save made since the history was opened', async () => {
+      serveDocument(current)
+      serveVersions()
+      server.use(
+        http.patch(apiUrl(DOCUMENT_PATH), () =>
+          HttpResponse.json(
+            {
+              detail: 'Someone else saved this document.',
+              code: 'edit_conflict',
+              document: { ...current, content: 'Their text.', revision: 4 },
+            },
+            { status: 409 },
+          ),
+        ),
+      )
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const dialog = await openHistory(user)
+      await user.click(await within(dialog).findByRole('button', { name: /^Version 1/ }))
+
+      await user.click(await screen.findByRole('button', { name: 'Restore this version' }))
+      await user.click(await screen.findByRole('button', { name: 'Restore' }))
+
+      expect(
+        await screen.findByText(
+          'Someone saved this document since you opened its history. Check the newest version before restoring.',
+        ),
+      ).toBeInTheDocument()
+    })
+
+    it('offers a retry when the history or a version fails to load', async () => {
+      serveDocument(current)
+      server.use(
+        http.get(apiUrl(`${DOCUMENT_PATH}versions/`), () => HttpResponse.json({}, { status: 500 })),
+        http.get(apiUrl(`${DOCUMENT_PATH}versions/:revision/`), () =>
+          HttpResponse.json({}, { status: 500 }),
+        ),
+      )
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      await openHistory(user)
+
+      const retryList = await screen.findByRole('button', { name: 'Try again' })
+      serveVersions()
+      await user.click(retryList)
+      expect(await screen.findByRole('list', { name: 'Versions' })).toBeInTheDocument()
+
+      server.use(
+        http.get(apiUrl(`${DOCUMENT_PATH}versions/:revision/`), () =>
+          HttpResponse.json({}, { status: 500 }),
+        ),
+      )
+      await user.click(screen.getByRole('button', { name: /^Version 1/ }))
+      const retryVersion = await screen.findByRole('button', { name: 'Try again' })
+      serveVersions()
+      await user.click(retryVersion)
+      expect(await screen.findByRole('article', { name: 'Version 1' })).toBeInTheDocument()
+    })
+
+    it('reports any other failed restore', async () => {
+      serveDocument(current)
+      serveVersions()
+      server.use(http.patch(apiUrl(DOCUMENT_PATH), () => HttpResponse.json({}, { status: 500 })))
+      const { user } = renderRoute(DOCUMENT_URL, { signedInAs })
+      const dialog = await openHistory(user)
+      await user.click(await within(dialog).findByRole('button', { name: /^Version 1/ }))
+
+      await user.click(await screen.findByRole('button', { name: 'Restore this version' }))
+      await user.click(await screen.findByRole('button', { name: 'Restore' }))
+
+      expect(
+        await screen.findByText("Couldn't restore this version. Try again."),
+      ).toBeInTheDocument()
+    })
+  })
+
   describe('reading (Viewer)', () => {
     it('shows the content without editing controls', async () => {
       serveDocument(buildDocument({ access_level: 'VIEWER', visibility: 'PUBLIC' }))
@@ -270,6 +471,8 @@ describe('DocumentPage', () => {
       expect(
         screen.queryByRole('button', { name: /Make (public|private)/ }),
       ).not.toBeInTheDocument()
+      // Past versions may hold text that was removed: Viewers see only the current one.
+      expect(screen.queryByRole('button', { name: 'History' })).not.toBeInTheDocument()
       expect(document.title).toBe('Findings · DocSphere')
     })
 

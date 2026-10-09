@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "09c4bb9c-31a2-448e-9c65-6a213c102b95",
     "name": "DocSphere \u2014 Full Demo Flow",
-    "description": "End-to-end walkthrough of DocSphere: org self-signup (with email verification), invitations (single + bulk), projects, documents (including personal, project-less documents), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
+    "description": "End-to-end walkthrough of DocSphere: org self-signup (with email verification), invitations (single + bulk), projects, documents (including personal, project-less documents, and their version history), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -2132,6 +2132,96 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Document History (versions, newest first)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/versions/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "versions"
+              ]
+            },
+            "description": "Editors and Owners only. One version per revision - creating the document, then every save that changes its title or content - newest first, without content. Restore one by updating the document with that version's title and content (plus base_revision), which saves it as a new version.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('history listed', () => pm.response.to.have.status(200));",
+                  "const results = pm.response.json().results;",
+                  "pm.test('created, then updated: two versions, newest first', () => pm.expect(results.map((version) => version.revision)).to.eql([2, 1]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the First Version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/versions/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "versions",
+                "1"
+              ]
+            },
+            "description": "One version in full, with its content - how the document was when it was created.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('version read', () => pm.response.to.have.status(200));",
+                  "pm.test('has its content', () => pm.expect(pm.response.json()).to.have.property('content'));"
+                ]
+              }
+            }
+          ]
         }
       ],
       "description": ""
@@ -2460,6 +2550,49 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('member can view document', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member/Viewer] Cannot See Document History (expect 403)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/versions/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "versions"
+              ]
+            },
+            "description": "Viewers see only the current document: past versions may hold text that was removed.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('history is for Editors and Owners', () => pm.response.to.have.status(403));"
                 ]
               }
             }

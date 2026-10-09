@@ -10,6 +10,8 @@ from projects.api.v1.views import (
     DocumentShareAPIView,
     DocumentShareRevokeAPIView,
     DocumentTrashListAPIView,
+    DocumentVersionListAPIView,
+    DocumentVersionRetrieveAPIView,
     IncomingDocumentAccessRequestListAPIView,
     MyDocumentAccessRequestListAPIView,
     ProjectListCreateAPIView,
@@ -65,6 +67,16 @@ document_urlpatterns = [
         "<int:pk>/restore/",
         DocumentRestoreAPIView.as_view(),
         name="document_restore",
+    ),
+    path(
+        "<int:pk>/versions/",
+        DocumentVersionListAPIView.as_view(),
+        name="document_version_list",
+    ),
+    path(
+        "<int:pk>/versions/<int:revision>/",
+        DocumentVersionRetrieveAPIView.as_view(),
+        name="document_version_detail",
     ),
     path("<int:pk>/share/", DocumentShareAPIView.as_view(), name="document_share"),
     path(

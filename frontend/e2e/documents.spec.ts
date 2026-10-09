@@ -83,6 +83,8 @@ test.describe('access levels on a document', () => {
     await expect(page.getByText(/Early results look promising/)).toBeVisible()
     await expect(page.getByLabel('Content')).toHaveCount(0)
     await expect(page.getByText('Viewer', { exact: true })).toBeVisible()
+    // Past versions may hold removed text: Viewers see only the current one.
+    await expect(page.getByRole('button', { name: 'History' })).toHaveCount(0)
   })
 
   test('names the project only to readers who can open it', async ({ page }) => {
@@ -263,4 +265,40 @@ test('search finds documents by what they say, but only ones the reader can open
     stranger.getByRole('row').filter({ hasText: 'Shared brief' }).locator('mark'),
   ).toHaveText(['eyes', 'only'])
   await stranger.context().close()
+})
+
+test('every saved change is kept, and an old version can be restored', async ({ page }) => {
+  const title = uniqueName('Itinerary')
+  await logIn(page, DOCS_WRITER)
+  await page.goto('/documents')
+  await createDocument(page, title)
+
+  const content = page.getByLabel('Content')
+  for (const text of ['Day one: museum.', 'Day one: beach.']) {
+    await content.fill(text)
+    // Each save done before the next: the toast from the first stays a while.
+    await Promise.all([
+      page.waitForResponse((response) => response.request().method() === 'PATCH' && response.ok()),
+      page.getByRole('button', { name: 'Save' }).click(),
+    ])
+  }
+
+  // Creating it, then two saves: three versions, newest first.
+  await page.getByRole('button', { name: 'History' }).click()
+  const history = page.getByRole('dialog', { name: 'Version history' })
+  const versions = history.getByRole('list', { name: 'Versions' }).getByRole('button')
+  await expect(versions).toHaveCount(3)
+  await expect(versions.first()).toContainText('Version 3Current')
+
+  await versions.filter({ hasText: 'Version 2' }).click()
+  await expect(page.getByRole('article', { name: 'Version 2' })).toContainText('Day one: museum.')
+  await page.getByRole('button', { name: 'Restore this version' }).click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Restore' }).click()
+  await expect(page.getByText('Restored version 2.')).toBeVisible()
+
+  // The restore is itself a new version; nothing was lost.
+  await expect(content).toHaveValue('Day one: museum.')
+  await page.getByRole('button', { name: 'History' }).click()
+  await expect(versions).toHaveCount(4)
+  await expect(versions.first()).toContainText('Version 4Current')
 })

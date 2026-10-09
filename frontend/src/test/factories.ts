@@ -3,6 +3,7 @@ import type {
   CurrentUser,
   Document,
   DocumentListItem,
+  DocumentVersionDetail,
   Grant,
   Invitation,
   Organization,
@@ -82,6 +83,21 @@ export function buildDocument(overrides: Partial<Document> = {}): Document {
 export function buildDocumentListItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
   const { content: _content, ...listed } = buildDocument()
   return { ...listed, excerpt: null, ...overrides }
+}
+
+export function buildDocumentVersion(
+  overrides: Partial<DocumentVersionDetail> = {},
+): DocumentVersionDetail {
+  return {
+    revision: 1,
+    title: 'Findings',
+    content: 'First draft.',
+    created_by: 1,
+    created_by_email: 'ada@example.com',
+    created_by_name: '',
+    created: '2026-09-01T09:00:00Z',
+    ...overrides,
+  }
 }
 
 export function buildGrant(overrides: Partial<Grant> = {}): Grant {

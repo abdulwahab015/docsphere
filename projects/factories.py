@@ -6,6 +6,7 @@ from projects.models import (
     Document,
     DocumentAccessRequest,
     DocumentPermission,
+    DocumentVersion,
     Project,
     ProjectPermission,
 )
@@ -35,6 +36,19 @@ class DocumentFactory(factory.django.DjangoModelFactory):
         UserFactory, organization=factory.SelfAttribute("..organization")
     )
     title = factory.Sequence(lambda n: f"Document {n}")
+
+
+class DocumentVersionFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = DocumentVersion
+
+    document = factory.SubFactory(DocumentFactory)
+    created_by = factory.SubFactory(
+        UserFactory, organization=factory.SelfAttribute("..document.organization")
+    )
+    revision = 1
+    title = factory.LazyAttribute(lambda version: version.document.title)
+    content = factory.LazyAttribute(lambda version: version.document.content)
 
 
 class ProjectPermissionFactory(factory.django.DjangoModelFactory):

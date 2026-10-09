@@ -586,7 +586,7 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(36):
+        with self.assertNumQueries(38):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
@@ -603,7 +603,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertFalse(User.objects.get(email="new@unpaid.test").email_verified)
 
     def test_seeds_plans_and_billing_emails(self):
-        with self.assertNumQueries(36):
+        with self.assertNumQueries(38):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         prices = Price.objects.order_by("stripe_data__unit_amount")
@@ -622,7 +622,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
 
     def test_seeds_projects_with_their_owner_and_shares(self):
-        with self.assertNumQueries(36):
+        with self.assertNumQueries(38):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         roadmap = Project.objects.get(name="Roadmap")
@@ -637,7 +637,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(archived.visibility, "PUBLIC")
 
     def test_seeds_documents_in_projects_or_personal(self):
-        with self.assertNumQueries(36):
+        with self.assertNumQueries(38):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         spec = Document.objects.get(title="Spec")
@@ -651,6 +651,12 @@ class SeedE2ECommandTests(TestCase):
         self.assertFalse(diary.is_active)
         self.assertEqual(diary.content, "Personal notes.")
         self.assertEqual(diary.organization, spec.organization)
+        # Each starts its history the way a document created in the app does.
+        first_version = diary.versions.get()
+        self.assertEqual(
+            (first_version.revision, first_version.content, first_version.created_by),
+            (1, "Personal notes.", diary.created_by),
+        )
 
     @override_settings(E2E_SEEDING_ENABLED=False)
     def test_refuses_to_run_where_seeding_is_disabled(self):

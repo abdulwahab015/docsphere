@@ -7,6 +7,7 @@ from projects.models import (
     Document,
     DocumentAccessRequest,
     DocumentPermission,
+    DocumentVersion,
     Project,
     ProjectPermission,
 )
@@ -172,6 +173,34 @@ class DocumentListSerializer(DocumentSerializer):
         if not segments:
             return None
         return [{"text": text, "match": match} for text, match in segments]
+
+
+class DocumentVersionSerializer(serializers.ModelSerializer):
+    """An entry in a document's history: which revision, its title, and who
+    saved it when."""
+
+    created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+    created_by_name = serializers.CharField(source="created_by.name", read_only=True)
+
+    class Meta:
+        model = DocumentVersion
+        fields = [
+            "revision",
+            "title",
+            "created_by",
+            "created_by_email",
+            "created_by_name",
+            "created",
+        ]
+        read_only_fields = fields
+
+
+class DocumentVersionDetailSerializer(DocumentVersionSerializer):
+    """One version in full, to read or restore."""
+
+    class Meta(DocumentVersionSerializer.Meta):
+        fields = [*DocumentVersionSerializer.Meta.fields, "content"]
+        read_only_fields = fields
 
 
 class DocumentCreateSerializer(DocumentSerializer):
