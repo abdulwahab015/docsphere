@@ -74,8 +74,9 @@ export function renderRoute(
  * slower than the rest (measured: ~2.2s against ~0.5s under the full suite's
  * load) while React, the router and the shell are first compiled and run. Paid
  * inside a test, that comes out of the test's own wait for the page, which
- * then times out whenever the machine is busy. The account page needs no
- * requests, so this runs before any test sets up a server response.
+ * then times out whenever the machine is busy. The account page needs only
+ * what the test server answers by default, so this runs before any test sets
+ * up a server response.
  */
 async function warmUp() {
   renderRoute(PATHS.account, { signedInAs: buildCurrentUser() })

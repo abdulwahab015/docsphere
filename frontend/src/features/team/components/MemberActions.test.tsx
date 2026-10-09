@@ -33,14 +33,17 @@ async function chooseAction(user: UserEvent, email: string, action: string) {
 }
 
 describe('MemberActions', () => {
-  it("shows admins each member's role and join date, with no actions on their own row", async () => {
-    serveRoster([ADA, GRACE])
+  it("shows admins each member's role, join date and two-factor sign-in, with no actions on their own row", async () => {
+    serveRoster([ADA, { ...GRACE, two_factor_enabled: true }])
     renderRoute('/people', { signedInAs: admin })
 
     await screen.findByText('grace@example.com')
     expect(screen.getByRole('tab', { name: 'Members' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('columnheader', { name: 'Two-factor' })).toBeInTheDocument()
     expect(rowFor('grace@example.com').getByText('Member')).toBeInTheDocument()
     expect(rowFor('grace@example.com').getByText(formatDate(GRACE.created))).toBeInTheDocument()
+    expect(rowFor('grace@example.com').getByText('On')).toBeInTheDocument()
+    expect(rowFor('ada@example.com').getByText('Off')).toBeInTheDocument()
     expect(rowFor('ada@example.com').getByText('Admin')).toBeInTheDocument()
     expect(rowFor('ada@example.com').getByText('You')).toBeInTheDocument()
     expect(
@@ -192,5 +195,50 @@ describe('MemberActions', () => {
     await user.click(within(confirm).getByRole('button', { name: 'Deactivate' }))
 
     expect(await screen.findByText("Couldn't deactivate grace@example.com.")).toBeInTheDocument()
+  })
+
+  it("resets a member's two-factor sign-in after confirming", async () => {
+    const list = serveRoster([ADA, { ...GRACE, two_factor_enabled: true }])
+    const reset = spyResolver(() => new HttpResponse(null, { status: 204 }))
+    server.use(http.post(apiUrl('/users/2/two-factor/reset/'), reset))
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    const confirm = await chooseAction(user, 'grace@example.com', 'Reset two-factor sign-in')
+    expect(confirm).toHaveAccessibleName("Reset grace@example.com's two-factor sign-in?")
+    await user.click(within(confirm).getByRole('button', { name: 'Reset' }))
+
+    expect(
+      await screen.findByText("Reset grace@example.com's two-factor sign-in."),
+    ).toBeInTheDocument()
+    expect(reset).toHaveBeenCalledOnce()
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+  })
+
+  it('offers no reset for a member without two-factor sign-in', async () => {
+    serveRoster([ADA, GRACE])
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    await user.click(await screen.findByRole('button', { name: 'Actions for grace@example.com' }))
+
+    expect(await screen.findByRole('menuitem', { name: 'Deactivate' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('menuitem', { name: 'Reset two-factor sign-in' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("says why a reset didn't happen", async () => {
+    serveRoster([ADA, { ...GRACE, two_factor_enabled: true }])
+    server.use(
+      http.post(apiUrl('/users/2/two-factor/reset/'), () =>
+        HttpResponse.json({ detail: "Two-factor sign-in isn't on." }, { status: 400 }),
+      ),
+    )
+    const { user } = renderRoute('/people', { signedInAs: admin })
+
+    const confirm = await chooseAction(user, 'grace@example.com', 'Reset two-factor sign-in')
+    await user.click(within(confirm).getByRole('button', { name: 'Reset' }))
+
+    expect(await screen.findByText("Two-factor sign-in isn't on.")).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   })
 })

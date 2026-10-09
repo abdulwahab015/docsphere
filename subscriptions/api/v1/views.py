@@ -16,7 +16,11 @@ from subscriptions.services import (
     create_checkout_session,
 )
 from subscriptions.utils import active_recurring_prices
-from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
+from users.permissions import (
+    HasVerifiedEmail,
+    IsOrganizationAdmin,
+    MeetsTwoFactorRequirement,
+)
 
 
 class PriceListAPIView(generics.ListAPIView):
@@ -25,7 +29,11 @@ class PriceListAPIView(generics.ListAPIView):
     subscription."""
 
     serializer_class = PriceSerializer
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+    ]
 
     def get_queryset(self):
         return (
@@ -44,7 +52,11 @@ class CheckoutSessionCreateAPIView(APIView):
     already has one is refused rather than sold a second.
     """
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+    ]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "billing_checkout"
 
@@ -79,7 +91,11 @@ class BillingPortalSessionCreateAPIView(APIView):
     its URL for the frontend to redirect to. Reachable without an active
     subscription, so a lapsed organization can fix its payment method."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+    ]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "billing_portal"
 

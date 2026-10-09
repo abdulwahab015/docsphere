@@ -28,6 +28,11 @@ export const loginSchema = z.object({
   password: z.string().min(1, { error: 'Enter your password.' }),
 })
 
+// A code from the authenticator app or a recovery code; the API tells which.
+export const twoFactorLoginSchema = z.object({
+  otp: z.string().trim().min(1, { error: 'Enter the code.' }),
+})
+
 export const signupSchema = z
   .object({
     name: organizationNameSchema,

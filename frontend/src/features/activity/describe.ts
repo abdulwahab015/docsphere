@@ -9,6 +9,7 @@ export const ACTIVITY_KINDS: readonly AuditKind[] = [
   'TRASH',
   'ATTACHMENTS',
   'EXPORTS',
+  'TWO_FACTOR',
 ]
 
 export const ACTIVITY_KIND_LABELS: Record<AuditKind, string> = {
@@ -17,6 +18,7 @@ export const ACTIVITY_KIND_LABELS: Record<AuditKind, string> = {
   TRASH: 'Deletes and restores',
   ATTACHMENTS: 'Attachments',
   EXPORTS: 'Data exports',
+  TWO_FACTOR: 'Two-factor sign-in',
 }
 
 /** Who did it: a person, or - once their account is gone - nobody to name. */
@@ -74,6 +76,9 @@ const DESCRIPTIONS: Record<AuditVerb, (event: AuditEvent) => string> = {
   ACCOUNT_DELETED: () => 'Deleted their account',
   EXPORT_REQUESTED: () => "Asked for an export of the organization's data",
   EXPORT_DOWNLOADED: () => "Downloaded an export of the organization's data",
+  TWO_FACTOR_ENABLED: () => 'Turned on two-factor sign-in',
+  TWO_FACTOR_DISABLED: () => 'Turned off two-factor sign-in',
+  TWO_FACTOR_RESET: (event) => `Reset ${targetName(event)}'s two-factor sign-in`,
   DELETED: (event) => `Moved ${resourceName(event)} to the trash`,
   RESTORED: (event) => `Restored ${resourceName(event)} from the trash`,
   ATTACHMENT_ADDED: (event) => `Attached ${attachmentName(event)} to ${resourceName(event)}`,

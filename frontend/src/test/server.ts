@@ -45,6 +45,10 @@ export const server = setupServer(
   http.get(apiUrl('/documents/:documentId/attachments/'), () =>
     HttpResponse.json({ count: 0, results: [] }),
   ),
+  // The account page shows whether two-factor sign-in is on; by default it's off.
+  http.get(apiUrl('/users/me/two-factor/'), () =>
+    HttpResponse.json({ enabled: false, recovery_codes_left: 0 }),
+  ),
   // The top bar's bell asks for unread notifications on every signed-in page.
   http.get(apiUrl('/notifications/unread-count/'), () => HttpResponse.json({ count: 0 })),
   http.get(apiUrl('/notifications/'), () => HttpResponse.json({ count: 0, results: [] })),

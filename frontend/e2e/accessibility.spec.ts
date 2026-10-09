@@ -6,12 +6,16 @@ import {
   DOCS_ADMIN,
   DOCS_READER,
   fillLoginForm,
+  HELD_ADMIN,
+  HELD_MEMBER,
   LAPSED_ADMIN,
   LAPSED_MEMBER,
   logIn,
+  logInWithCode,
   openDocument,
   openProject,
   OVERDUE_ADMIN,
+  TWO_FACTOR_CODES,
   VERIFY_ADMIN,
 } from './fixtures'
 
@@ -104,6 +108,48 @@ test.describe("the app's pages", () => {
       await expectAccessible(page)
     })
   }
+})
+
+test('two-factor sign-in: the code step, and the setup an organization requires', async ({
+  page,
+}) => {
+  await page.goto('/login')
+  await fillLoginForm(page, HELD_ADMIN)
+  await expect(page.getByRole('heading', { level: 1, name: 'Two-factor sign-in' })).toBeVisible()
+  await expectAccessible(page)
+
+  await page.getByRole('button', { name: 'Log in as someone else' }).click()
+  await fillLoginForm(page, HELD_MEMBER)
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Set up two-factor sign-in' }),
+  ).toBeVisible()
+  await expectAccessible(page)
+  await page.getByRole('button', { name: 'Get started' }).click()
+  await expect(page.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()
+  await expectAccessible(page)
+})
+
+test('two-factor sign-in on the account page: setting it up, and new recovery codes', async ({
+  page,
+}, testInfo) => {
+  await logIn(page, DOCS_ADMIN)
+  await visit(page, '/settings/account')
+  await page.getByRole('button', { name: 'Turn on two-factor sign-in' }).click()
+  const setup = page.getByRole('dialog', { name: 'Turn on two-factor sign-in' })
+  await setup.getByRole('button', { name: 'Get started' }).click()
+  await expect(setup.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()
+  await expectAccessible(page)
+  await page.keyboard.press('Escape')
+
+  await page.context().clearCookies()
+  await logInWithCode(page, TWO_FACTOR_CODES, testInfo.retry)
+  await visit(page, '/settings/account')
+  await page.getByRole('button', { name: 'New recovery codes' }).click()
+  const codes = page.getByRole('dialog', { name: 'New recovery codes' })
+  await codes.getByLabel('Current password').fill(TWO_FACTOR_CODES.password)
+  await codes.getByRole('button', { name: 'Make new codes' }).click()
+  await expect(codes.getByRole('list', { name: 'Recovery codes' })).toBeVisible()
+  await expectAccessible(page)
 })
 
 test('document search results, showing where each matched', async ({ page }) => {

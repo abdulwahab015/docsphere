@@ -156,6 +156,8 @@ Every account's password is `E2e-Pass-123!`. Some useful ones:
 | `admin@team.e2e.test` | People management: invitations, roles, deactivated members |
 | `admin@lapsed.e2e.test` / `member@lapsed.e2e.test` | An organization without a subscription (the subscribe screen / "ask your admin") |
 | `admin@overdue.e2e.test` | A failed renewal payment (the payment warning banner) |
+| `admin@twofactor.e2e.test` | Two-factor sign-in: add its `two_factor_secret` from `seed.json` to an authenticator app for the codes |
+| `member@held.e2e.test` | An organization that requires two-factor sign-in, before it's set up |
 
 The command refuses to run outside local and test settings, so it can never seed production.
 For the Django admin, `python manage.py createsuperuser` (a superuser belongs to no
@@ -274,9 +276,17 @@ still pass, so a change that touches them needs a test that pins them down.
   can sign up or be invited with it, which removes the old account and its empty
   organization; a daily task removes the rest. Changing an email works the same way: a
   link to the new address, which signs the account out everywhere when opened.
+- **Two-factor sign-in** uses an authenticator app (TOTP codes, `users/two_factor.py`).
+  With it on, the password alone signs nobody in: login answers with a short-lived token,
+  and `auth/login/two-factor/` takes it back with a code from the app or one of ten
+  one-time recovery codes (kept hashed, shown once). Each code works only once. It's
+  optional, unless an admin requires it for the organization: then anyone without it gets
+  **403** `two_factor_required` everywhere (checked right after the email gate) except to
+  set it up, read `/users/me/` and log out, and can't turn it off. An admin can reset a
+  member's two-factor when they've lost their phone and codes; the member is emailed.
 - **Changes to who can reach what are recorded.** Sharing, access levels and removals,
   visibility, answered access requests, roles, deactivations, invitations, deletes and
-  restores, and attached files each write an audit event
+  restores, attached files and two-factor sign-in (on, off, reset) each write an audit event
   (`AuditEvent.objects.record(...)`) in the same transaction as the change, so a refused
   or failed action records nothing. Admins read them on the Activity page; a private
   project or document they can't open is listed without its name. Events are kept for a
@@ -352,10 +362,12 @@ still pass, so a change that touches them needs a test that pins them down.
    underscores). Scope the queryset to the organization, and check access with the existing
    helpers (`projects/permissions.py`).
 2. Leave the default permissions where you can. A view that sets its own
-   `permission_classes` lists `HasVerifiedEmail` after the authentication check, and
-   `HasActiveSubscription` unless it must work without a subscription.
-   `users.tests.EmailVerificationGateTests` checks every endpoint, and fails for one that
-   lets an unverified signup through.
+   `permission_classes` lists `HasVerifiedEmail` and `MeetsTwoFactorRequirement` after the
+   authentication check, and `HasActiveSubscription` unless it must work without a
+   subscription. `users.tests.EmailVerificationGateTests` and
+   `TwoFactorRequirementTests` check every endpoint, and fail for one that lets an
+   unverified signup, or someone their organization holds until they set up two-factor,
+   through.
 3. A bare `APIView` needs `@extend_schema(...)`, or the schema can't describe it.
 4. Tests: the happy path, each refusal (404 for things the caller can't see), another
    organization's data, all with `assertNumQueries`.

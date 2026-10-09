@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useContext, useEffect } from 'react'
 
-import type { TokenPair } from '@/api/types'
+import type { LoginPayload, TokenPair } from '@/api/types'
 import {
   acceptInvitation,
   confirmEmailChange,
   confirmPasswordReset,
   login,
+  loginWithTwoFactor,
   logout,
   requestPasswordReset,
   resendVerificationEmail,
@@ -57,8 +58,31 @@ function useSessionStartingMutation<TPayload>(
   })
 }
 
+/** Checks the email and password. Signs the user in - unless their account
+ * has two-factor sign-in on: then nobody is signed in yet, and the result is
+ * the token `useLoginWithTwoFactor` sends back with a code. */
 export function useLogin() {
-  return useSessionStartingMutation(login)
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: LoginPayload) => {
+      const result = await login(payload)
+      if ('two_factor_token' in result) {
+        return result
+      }
+      await startSession(queryClient, result)
+      return null
+    },
+    onSuccess: (challenge) => {
+      if (!challenge) {
+        announceSessionChange()
+      }
+    },
+  })
+}
+
+/** The code step of logging in to an account with two-factor sign-in on. */
+export function useLoginWithTwoFactor() {
+  return useSessionStartingMutation(loginWithTwoFactor)
 }
 
 export function useSignup() {

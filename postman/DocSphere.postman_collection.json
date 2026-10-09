@@ -6570,7 +6570,262 @@
       ]
     },
     {
-      "name": "16. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
+      "name": "16. Two-factor sign-in",
+      "description": "Optional per person, or required for the whole organization by an admin (PATCH /api/v1/organizations/profile/ with require_two_factor, once the admin has it on). Turning it on: POST /api/v1/users/me/two-factor/setup/ (a key and an otpauth:// address for the authenticator app), then POST .../confirm/ with a code from the app (otp) -> 10 recovery codes, shown once. From then on POST /api/v1/users/auth/login/ answers {two_factor_token} instead of tokens, and POST /api/v1/users/auth/login/two-factor/ with that token and a code (or a recovery code) signs in. These requests change nothing that sticks: setup only starts (nothing is on until confirmed), and the rest are refused on purpose.",
+      "item": [
+        {
+          "name": "Two-factor Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/two-factor/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "two-factor",
+                ""
+              ]
+            },
+            "description": "Whether it's on, and how many recovery codes are left.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('read', () => pm.response.to.have.status(200));",
+                  "pm.test('says whether it is on', () => pm.expect(pm.response.json()).to.have.property('enabled'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Start Setting Up Two-factor",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/two-factor/setup/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "two-factor",
+                "setup",
+                ""
+              ]
+            },
+            "description": "A new key for the authenticator app (the app reads otpauth_uri from a QR code). Nothing changes at sign-in until a code confirms it; starting again replaces an unconfirmed key. 400 if it's already on.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a key for the app', () => pm.response.to.have.status(200));",
+                  "pm.test('as an otpauth address', () => pm.expect(pm.response.json().otpauth_uri).to.match(/^otpauth:\\/\\/totp\\//));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm With a Wrong Code (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/two-factor/confirm/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "two-factor",
+                "confirm",
+                ""
+              ]
+            },
+            "description": "With the code the app shows, this turns it on and returns the recovery codes.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"otp\": \"000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('under the code', () => pm.expect(pm.response.json()).to.have.property('otp'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Code Step With a Made-up Sign-in (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/auth/login/two-factor/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "login",
+                "two-factor",
+                ""
+              ]
+            },
+            "description": "two_factor_token comes from the password step and lasts 5 minutes. Rate limited per account (TWO_FACTOR_LOGIN_THROTTLE_RATE).",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"two_factor_token\": \"not-a-real-token\",\n  \"otp\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('the sign-in is the problem', () => pm.expect(pm.response.json()).to.have.property('two_factor_token'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reset a Member Without Two-factor (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/{{member_user_id}}/two-factor/reset/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{member_user_id}}",
+                "two-factor",
+                "reset",
+                ""
+              ]
+            },
+            "description": "Admins only. For a member who lost their phone and recovery codes: turns it off, emails them and records it in the Activity log.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused: it is not on', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "17. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
       "item": [
         {
           "name": "Repeated Login Attempt (expect 429 partway through)",

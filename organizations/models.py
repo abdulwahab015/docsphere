@@ -22,6 +22,9 @@ class Organization(TimeStampedModel):
     # use the app; its admins can restore it until ``purge_after``, when it
     # and everything in it are removed for good.
     deletion_requested_at = models.DateTimeField(null=True, blank=True)
+    # Everyone must sign in with an authenticator app code as well as their
+    # password; anyone who hasn't set one up may do nothing else until they do.
+    require_two_factor = models.BooleanField(default=False)
 
     objects = OrganizationQuerySet.as_manager()
 

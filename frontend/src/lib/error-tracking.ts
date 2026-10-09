@@ -64,7 +64,18 @@ export const errorTracking = {
         dsn,
         environment,
         release,
-        sendDefaultPii: false,
+        // Nothing the SDK would collect on its own: reports carry only the
+        // ids `identify` sets, and `scrubEvent` keeps the address without its
+        // query. (Sentry 11's defaults collect user details, cookies,
+        // headers, bodies and query strings.)
+        dataCollection: {
+          userInfo: false,
+          cookies: false,
+          httpHeaders: false,
+          httpBodies: [],
+          urlQueryParams: false,
+          stackFrameVariables: false,
+        },
         beforeSend: scrubEvent,
         beforeBreadcrumb: scrubBreadcrumb,
         ...(transport && { transport }),

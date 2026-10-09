@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +9,7 @@ interface SeedFile {
   password: string
   organizations: {
     name: string
-    users: { email: string; role: 'ADMIN' | 'MEMBER' }[]
+    users: { email: string; role: 'ADMIN' | 'MEMBER'; two_factor_secret?: string }[]
     extra_members?: number
     projects?: { name: string }[]
     documents?: { title: string }[]
@@ -23,16 +24,23 @@ export interface Account {
   email: string
   password: string
   organization: string
+  /** The key in their authenticator app, when they sign in with two-factor. */
+  twoFactorSecret?: string
 }
 
 function seededAccount(email: string): Account {
-  const organization = seed.organizations.find((candidate) =>
-    candidate.users.some((user) => user.email === email),
-  )
-  if (!organization) {
-    throw new Error(`e2e/seed.json has no user "${email}".`)
+  for (const organization of seed.organizations) {
+    const user = organization.users.find((candidate) => candidate.email === email)
+    if (user) {
+      return {
+        email,
+        password: seed.password,
+        organization: organization.name,
+        twoFactorSecret: user.two_factor_secret,
+      }
+    }
   }
-  return { email, password: seed.password, organization: organization.name }
+  throw new Error(`e2e/seed.json has no user "${email}".`)
 }
 
 export const ACME_ADMIN = seededAccount('admin@acme.e2e.test')
@@ -75,6 +83,17 @@ export const EXPORT_ADMIN = seededAccount('admin@export.e2e.test')
 export const DELETED_ADMIN = seededAccount('admin@deleted.e2e.test')
 // Signed up, but hasn't followed the verification link yet.
 export const VERIFY_ADMIN = seededAccount('admin@verify.e2e.test')
+// Two-factor sign-in: on for the admin and two members, off for `setup`.
+export const TWO_FACTOR_ADMIN = seededAccount('admin@twofactor.e2e.test')
+export const TWO_FACTOR_PHONE = seededAccount('phone@twofactor.e2e.test')
+export const TWO_FACTOR_SETUP = seededAccount('setup@twofactor.e2e.test')
+export const TWO_FACTOR_CODES = seededAccount('codes@twofactor.e2e.test')
+// An organization whose admin starts requiring two-factor sign-in...
+export const REQUIRED_ADMIN = seededAccount('admin@required.e2e.test')
+export const REQUIRED_MEMBER = seededAccount('member@required.e2e.test')
+// ...and one that already does, with a member who hasn't set it up.
+export const HELD_ADMIN = seededAccount('admin@held.e2e.test')
+export const HELD_MEMBER = seededAccount('member@held.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -94,6 +113,50 @@ export async function logIn(page: Page, account: Account) {
   await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
 }
 
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+const TOTP_STEP_SECONDS = 30
+const TOTP_DIGITS = 6
+
+function base32Bytes(text: string) {
+  const bits = [...text]
+    .map((character) => BASE32_ALPHABET.indexOf(character).toString(2).padStart(5, '0'))
+    .join('')
+  return Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)))
+}
+
+/**
+ * The code an authenticator app holding `secret` shows (RFC 6238: SHA-1, 30
+ * second steps, 6 digits) - or the one it will show `stepsAhead` steps from
+ * now, which the API also accepts. Each code works only once, so a retried
+ * test passes its retry count to get one not used yet.
+ */
+export function appCode(secret: string, stepsAhead = 0) {
+  const step = Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS) + stepsAhead
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(step))
+  const digest = createHmac('sha1', base32Bytes(secret)).update(counter).digest()
+  const offset = digest[digest.length - 1] & 0xf
+  const code = (digest.readUInt32BE(offset) & 0x7fffffff) % 10 ** TOTP_DIGITS
+  return code.toString().padStart(TOTP_DIGITS, '0')
+}
+
+function twoFactorSecretOf(account: Account) {
+  if (!account.twoFactorSecret) {
+    throw new Error(`${account.email} doesn't sign in with two-factor in e2e/seed.json.`)
+  }
+  return account.twoFactorSecret
+}
+
+/** Signs in an account with two-factor sign-in on: password, then a code
+ * from its app (`stepsAhead` as in `appCode`). */
+export async function logInWithCode(page: Page, account: Account, stepsAhead = 0) {
+  await page.goto('/login')
+  await fillLoginForm(page, account)
+  await page.getByLabel('Code from your app').fill(appCode(twoFactorSecretOf(account), stepsAhead))
+  await page.getByRole('button', { name: 'Verify' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
+}
+
 /** A second browser session, with its own cookies, signed in as `account` -
  * for flows where two people take turns. Close it with `page.context().close()`. */
 export async function logInElsewhere(browser: Browser, account: Account) {
@@ -106,6 +169,8 @@ export async function openAccountSettings(page: Page) {
   await page.getByRole('button', { name: 'Account menu' }).click()
   await page.getByRole('menuitem', { name: 'Account settings' }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible()
+  // The menu is still closing: a click on its button now would be lost.
+  await expect(page.getByRole('menu')).toHaveCount(0)
 }
 
 export async function logOut(page: Page) {

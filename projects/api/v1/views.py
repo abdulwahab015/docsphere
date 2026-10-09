@@ -68,7 +68,11 @@ from projects.tasks import (
     send_project_shared_email_task,
 )
 from projects.validators import ensure_not_last_owner
-from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
+from users.permissions import (
+    HasVerifiedEmail,
+    IsOrganizationAdmin,
+    MeetsTwoFactorRequirement,
+)
 
 User = get_user_model()
 
@@ -226,8 +230,18 @@ class ProjectListCreateAPIView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsOrganizationAdmin(), HasVerifiedEmail(), HasActiveSubscription()]
-        return [IsAuthenticated(), HasVerifiedEmail(), HasActiveSubscription()]
+            return [
+                IsOrganizationAdmin(),
+                HasVerifiedEmail(),
+                MeetsTwoFactorRequirement(),
+                HasActiveSubscription(),
+            ]
+        return [
+            IsAuthenticated(),
+            HasVerifiedEmail(),
+            MeetsTwoFactorRequirement(),
+            HasActiveSubscription(),
+        ]
 
     def get_queryset(self):
         return (
@@ -265,6 +279,7 @@ class ProjectRetrieveUpdateDestroyAPIView(
     permission_classes = (
         IsAuthenticated,
         HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
         HasProjectAccess,
         HasActiveSubscription,
     )
@@ -295,7 +310,12 @@ class ProjectRestoreAPIView(APIView):
     on the project's own ProjectPermission rows. Cross-organization and
     already-active projects are both a 404."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(request=None, responses={200: ProjectSerializer})
     def post(self, request, pk):
@@ -406,6 +426,7 @@ class DocumentRetrieveUpdateDestroyAPIView(
     permission_classes = (
         IsAuthenticated,
         HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
         HasDocumentAccess,
         HasActiveSubscription,
     )
@@ -940,7 +961,12 @@ class ProjectTrashListAPIView(generics.ListAPIView):
     admin-only for the same reason."""
 
     serializer_class = ProjectSerializer
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     def get_queryset(self):
         user = self.request.user
@@ -1030,7 +1056,12 @@ class SoleOwnershipAPIView(APIView):
     Owner of. Someone outside the organization is indistinguishable from a
     missing user."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(responses=SoleOwnershipSerializer)
     def get(self, request, user_id):

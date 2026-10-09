@@ -15,7 +15,10 @@ import type {
   Project,
   RosterUser,
   SoleOwnership,
+  RecoveryCodes,
   TokenPair,
+  TwoFactorSetup,
+  TwoFactorStatus,
   UserDetail,
 } from '@/api/types'
 
@@ -28,6 +31,7 @@ export function buildOrganizationSummary(
     has_active_subscription: true,
     payment_failed: false,
     deletion_scheduled_for: null,
+    require_two_factor: false,
     ...overrides,
   }
 }
@@ -37,6 +41,7 @@ export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentU
     id: 1,
     email: 'ada@example.com',
     email_verified: true,
+    two_factor_enabled: false,
     name: '',
     org_role: 'MEMBER',
     organization: buildOrganizationSummary(),
@@ -187,6 +192,7 @@ export function buildUserDetail(overrides: Partial<UserDetail> = {}): UserDetail
     name: '',
     org_role: 'MEMBER',
     created: '2026-08-01T09:00:00Z',
+    two_factor_enabled: false,
     ...overrides,
   }
 }
@@ -222,6 +228,7 @@ export function buildOrganization(overrides: Partial<Organization> = {}): Organi
     id: 1,
     name: 'Acme',
     billing_email: 'billing@acme.test',
+    require_two_factor: false,
     active_subscription: {
       id: 'sub_1',
       status: 'active',
@@ -244,5 +251,25 @@ export function buildPrice(overrides: Partial<Price> = {}): Price {
     currency: 'usd',
     interval: 'month',
     ...overrides,
+  }
+}
+
+/** Off, by default. */
+export function buildTwoFactorStatus(overrides: Partial<TwoFactorStatus> = {}): TwoFactorStatus {
+  return { enabled: false, recovery_codes_left: 0, ...overrides }
+}
+
+export function buildTwoFactorSetup(overrides: Partial<TwoFactorSetup> = {}): TwoFactorSetup {
+  return {
+    secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+    otpauth_uri:
+      'otpauth://totp/DocSphere:ada%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=DocSphere',
+    ...overrides,
+  }
+}
+
+export function buildRecoveryCodes(): RecoveryCodes {
+  return {
+    recovery_codes: Array.from({ length: 10 }, (_unused, index) => `code${index}-abcde`),
   }
 }
