@@ -64,6 +64,8 @@ export type PasswordResetConfirmPayload = Schemas['PasswordResetConfirm']
 export type PasswordChangePayload = Schemas['PasswordChange']
 export type EmailVerificationPayload = Schemas['EmailVerification']
 export type EmailChangeRequestPayload = Schemas['EmailChangeRequest']
+export type AccountDeletionPayload = Schemas['AccountDeletion']
+export type OrganizationDeletionPayload = Schemas['OrganizationDeletion']
 export type EmailChangeConfirmPayload = Schemas['EmailChangeConfirm']
 export type InvitationAcceptPayload = Schemas['InvitationAccept']
 // The invitation serializer is named for creating, but also lists and resends.

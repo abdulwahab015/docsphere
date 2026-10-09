@@ -35,6 +35,10 @@ class User(AbstractUser, TimeStampedModel):
     # it; empty for a signup that hasn't yet. An invitation's link proves it
     # too, so invited members start verified.
     email_verified_at = models.DateTimeField(null=True, blank=True)
+    # When the person deleted their own account. It's kept, inactive and
+    # without their name, email or password, so what they wrote keeps an
+    # author; unlike a deactivated account it can never be reactivated.
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
     username = None
     USERNAME_FIELD = "email"

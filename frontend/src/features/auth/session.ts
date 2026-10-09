@@ -14,6 +14,7 @@ import { authKeys } from '@/features/auth/query-keys'
 
 // The API's refusal to a signed-in user who hasn't verified their email yet.
 const EMAIL_UNVERIFIED_CODE = 'email_unverified'
+const ORGANIZATION_DELETED_CODE = 'organization_deleted'
 
 // The refresh endpoint's answers when there is no usable session: 400 when no
 // refresh cookie was sent at all, 401 when it's expired or blacklisted.
@@ -96,9 +97,10 @@ export function resyncSession(queryClient: QueryClient) {
 /**
  * Reacts to errors from any query or mutation: a 401 that survived the
  * client's refresh attempt means the session is over; a 402 means the
- * organization's subscription lapsed, and a 403 `email_unverified` that the
- * account's email isn't verified, so the session is re-read to pick up its
- * new state.
+ * organization's subscription lapsed, a 403 `email_unverified` that the
+ * account's email isn't verified and a 403 `organization_deleted` that the
+ * organization was deleted, so the session is re-read to pick up its new
+ * state.
  */
 export function handleSessionError(queryClient: QueryClient, error: unknown) {
   const status = getErrorStatus(error)
@@ -108,7 +110,8 @@ export function handleSessionError(queryClient: QueryClient, error: unknown) {
     clearSession(queryClient)
   } else if (
     status === HTTP_STATUS.paymentRequired ||
-    getErrorCode(error) === EMAIL_UNVERIFIED_CODE
+    getErrorCode(error) === EMAIL_UNVERIFIED_CODE ||
+    getErrorCode(error) === ORGANIZATION_DELETED_CODE
   ) {
     void queryClient.invalidateQueries({ queryKey: authKeys.currentUser })
   }

@@ -23,6 +23,20 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
+/** A download asks for an `arraybuffer`, so an error's body - the API's
+ * reason, as JSON - arrives as bytes too. Decoded here, a failed download
+ * reads like any other failed request. */
+apiClient.interceptors.response.use(undefined, (error: unknown) => {
+  if (isAxiosError(error) && error.response && error.config?.responseType === 'arraybuffer') {
+    try {
+      error.response.data = JSON.parse(new TextDecoder().decode(error.response.data))
+    } catch {
+      // Not JSON (a proxy's error page, say): left as it came.
+    }
+  }
+  throw error
+})
+
 apiClient.interceptors.response.use(undefined, async (error: unknown) => {
   if (!isAxiosError(error) || !error.config) {
     throw error

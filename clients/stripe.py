@@ -43,6 +43,14 @@ def update_customer_email(*, customer_id, email):
     )
 
 
+def cancel_subscription(subscription_id):
+    """Cancels a subscription at once - no further charges - and returns the
+    cancelled subscription as Stripe now has it."""
+    return stripe.Subscription.cancel(
+        subscription_id, api_key=djstripe_settings.STRIPE_SECRET_KEY
+    )
+
+
 def create_billing_portal_session(*, customer_id, return_url):
     """Thin wrapper around the Stripe SDK's Customer Portal session creation,
     where a customer manages or cancels their own subscription."""

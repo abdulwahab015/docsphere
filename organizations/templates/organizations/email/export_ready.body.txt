@@ -1,0 +1,5 @@
+The export you asked for of {{ organization_name }} is ready. Download it from this page within {{ days }} days:
+
+{{ download_url }}
+
+It holds the organization's members and the projects and documents you can open, with their text, sharing and attached files. Private projects and documents you can't open aren't in it.

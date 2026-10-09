@@ -64,6 +64,7 @@ const DESCRIPTIONS: Record<AuditVerb, (event: AuditEvent) => string> = {
   INVITATION_RESENT: (event) => `Resent the invitation to ${event.details.email}`,
   INVITATION_REVOKED: (event) => `Revoked the invitation to ${event.details.email}`,
   INVITATION_ACCEPTED: () => 'Joined from an invitation',
+  ACCOUNT_DELETED: () => 'Deleted their account',
   DELETED: (event) => `Moved ${resourceName(event)} to the trash`,
   RESTORED: (event) => `Restored ${resourceName(event)} from the trash`,
   ATTACHMENT_ADDED: (event) => `Attached ${attachmentName(event)} to ${resourceName(event)}`,

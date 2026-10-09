@@ -6,6 +6,7 @@ import { AuthCard } from '@/features/auth/components/AuthCard'
 import { LogoutButton } from '@/features/auth/components/LogoutButton'
 import { useSignedInUser } from '@/features/auth/hooks'
 import { OrganizationMemberContext } from '@/features/auth/session-context'
+import { OrganizationDeletedScreen } from '@/features/organization/components/OrganizationDeletedScreen'
 
 // Only a lapsed organization's admin ever sees it, so its code (the plans and
 // the billing email form) isn't part of what everyone downloads first.
@@ -20,6 +21,7 @@ const MEMBER_MESSAGE =
 
 /** Mirrors the API's subscription gate, so an unpaid organization sees why
  * instead of a wall of 402 errors - and its admin can subscribe right there.
+ * A deleted organization sees that instead, and its admins can restore it.
  * Also turns away accounts that belong to no organization (platform
  * superusers), which the app has nothing to show. Must sit inside
  * `RequireAuth`. */
@@ -29,6 +31,17 @@ export function RequireActiveSubscription() {
 
   if (!organization) {
     return <BlockedScreen title="No organization" message={NO_ORGANIZATION_MESSAGE} />
+  }
+  if (organization.deletion_scheduled_for) {
+    return (
+      <OrganizationDeletedScreen
+        organization={{
+          ...organization,
+          deletion_scheduled_for: organization.deletion_scheduled_for,
+        }}
+        isAdmin={user.org_role === 'ADMIN'}
+      />
+    )
   }
   if (!organization.has_active_subscription) {
     return user.org_role === 'ADMIN' ? (

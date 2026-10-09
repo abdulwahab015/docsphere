@@ -38,10 +38,20 @@ class OrganizationSummarySerializer(serializers.ModelSerializer):
 
     has_active_subscription = serializers.SerializerMethodField()
     payment_failed = serializers.SerializerMethodField()
+    # When a deleted organization is purged for good; null unless deleted.
+    deletion_scheduled_for = serializers.DateTimeField(
+        source="purge_after", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Organization
-        fields = ["id", "name", "has_active_subscription", "payment_failed"]
+        fields = [
+            "id",
+            "name",
+            "has_active_subscription",
+            "payment_failed",
+            "deletion_scheduled_for",
+        ]
         read_only_fields = fields
 
     def get_has_active_subscription(self, organization) -> bool:
@@ -101,3 +111,22 @@ class OrganizationSignupSerializer(serializers.Serializer):
     def validate(self, attrs):
         validate_password_for_field("admin_password", attrs["admin_password"])
         return attrs
+
+
+class OrganizationDeletionSerializer(serializers.Serializer):
+    """Deleting the organization is confirmed by typing its name."""
+
+    name = serializers.CharField()
+
+    def validate_name(self, value):
+        if value.strip() != self.context["organization"].name:
+            raise serializers.ValidationError(
+                "Type the organization's name exactly as it's shown to confirm."
+            )
+        return value
+
+
+class ExportDownloadSerializer(serializers.Serializer):
+    """The token from the emailed download link."""
+
+    token = serializers.CharField()

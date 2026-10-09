@@ -171,6 +171,21 @@ describe('handleSessionError', () => {
     expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(true)
   })
 
+  it('re-reads the session when the organization was deleted', async () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
+
+    handleSessionError(
+      queryClient,
+      await errorWithStatus(403, {
+        detail: 'Your organization has been deleted.',
+        code: 'organization_deleted',
+      }),
+    )
+
+    expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(true)
+  })
+
   it('leaves the session alone for other errors', async () => {
     const queryClient = createTestQueryClient()
     queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())

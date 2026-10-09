@@ -2,6 +2,7 @@ import { AxeBuilder } from '@axe-core/playwright'
 import { expect, type Page, test } from '@playwright/test'
 
 import {
+  DELETED_ADMIN,
   DOCS_ADMIN,
   DOCS_READER,
   fillLoginForm,
@@ -196,6 +197,31 @@ test("a lapsed organization's screens", async ({ page, browser }) => {
   await expect(memberPage.getByRole('heading', { name: 'Subscription inactive' })).toBeVisible()
   await expectAccessible(memberPage)
   await memberPage.context().close()
+})
+
+test('the dialogs for deleting an account and an organization', async ({ page }) => {
+  await logIn(page, DOCS_ADMIN)
+  await visit(page, '/settings/account')
+  await page.getByRole('button', { name: 'Delete my account' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expectAccessible(page)
+  await page.keyboard.press('Escape')
+
+  await visit(page, '/settings/organization')
+  await page.getByRole('button', { name: 'Delete organization' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expectAccessible(page)
+  await page.keyboard.press('Escape')
+
+  await visit(page, '/settings/organization/export?token=from-the-email')
+  await expectAccessible(page)
+})
+
+test("a deleted organization's screen", async ({ page }) => {
+  await page.goto('/login')
+  await fillLoginForm(page, DELETED_ADMIN)
+  await expect(page.getByRole('heading', { name: 'Organization deleted' })).toBeVisible()
+  await expectAccessible(page)
 })
 
 test('the screen a new signup sees until they verify their email', async ({ page }) => {

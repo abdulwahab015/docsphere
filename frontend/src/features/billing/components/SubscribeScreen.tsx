@@ -1,9 +1,10 @@
 import { LogoutButton } from '@/features/auth/components/LogoutButton'
 import { BillingOverview } from '@/features/billing/components/BillingOverview'
+import { DeleteOrganizationCard } from '@/features/organization/components/DeleteOrganizationCard'
 
 /** What a lapsed organization's admin sees in place of the app: the plans to
  * choose from and the billing email, since everything else is locked until
- * the organization subscribes. */
+ * the organization subscribes - or, if it's leaving, deleting it. */
 export function SubscribeScreen({ organizationName }: { organizationName: string }) {
   return (
     <main className="min-h-svh bg-muted px-4 py-10">
@@ -20,6 +21,7 @@ export function SubscribeScreen({ organizationName }: { organizationName: string
           </p>
         </div>
         <BillingOverview />
+        <DeleteOrganizationCard organizationName={organizationName} />
       </div>
     </main>
   )
