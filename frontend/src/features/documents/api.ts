@@ -6,6 +6,8 @@ import type {
   Document,
   DocumentCreatePayload,
   DocumentListItem,
+  DocumentVersion,
+  DocumentVersionDetail,
   DocumentUpdatePayload,
   ListParams,
   Paginated,
@@ -76,5 +78,20 @@ export async function listDocumentTrash({ page }: Pick<ListParams, 'page'>) {
 
 export async function restoreDocument(documentId: number) {
   const { data } = await apiClient.post<Document>(`${documentPath(documentId)}restore/`)
+  return data
+}
+
+export async function listDocumentVersions(documentId: number, page: number) {
+  const { data } = await apiClient.get<Paginated<DocumentVersion>>(
+    `${documentPath(documentId)}versions/`,
+    { params: { page } },
+  )
+  return data
+}
+
+export async function fetchDocumentVersion(documentId: number, revision: number) {
+  const { data } = await apiClient.get<DocumentVersionDetail>(
+    `${documentPath(documentId)}versions/${revision}/`,
+  )
   return data
 }

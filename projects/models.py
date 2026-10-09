@@ -3,7 +3,11 @@ from django.db import models
 
 from core.models import TimeStampedModel
 from projects.choices import AccessLevel, AccessRequestStatus, Visibility
-from projects.managers import DocumentQuerySet, VisibilityScopedQuerySet
+from projects.managers import (
+    DocumentQuerySet,
+    DocumentVersionManager,
+    VisibilityScopedQuerySet,
+)
 
 
 class Project(TimeStampedModel):
@@ -73,6 +77,41 @@ class Document(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+
+class DocumentVersion(TimeStampedModel):
+    """A document's title and content as one save left them - one per
+    revision, the latest matching the document itself. Every version is kept.
+    Restoring an old one saves its text as a new revision, so history only
+    ever grows."""
+
+    document = models.ForeignKey(
+        "projects.Document", on_delete=models.CASCADE, related_name="versions"
+    )
+    # Who made this revision. PROTECT, like a document's creator: the history
+    # never loses who wrote what.
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="document_versions",
+    )
+
+    revision = models.PositiveIntegerField()
+    title = models.CharField(max_length=100)
+    content = models.TextField(null=True, blank=True)
+
+    objects = DocumentVersionManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "revision"],
+                name="unique_document_revision_version",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.document} (revision {self.revision})"
 
 
 class ProjectPermission(models.Model):

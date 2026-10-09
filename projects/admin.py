@@ -4,6 +4,7 @@ from .models import (
     Document,
     DocumentAccessRequest,
     DocumentPermission,
+    DocumentVersion,
     Project,
     ProjectPermission,
 )
@@ -55,3 +56,10 @@ class DocumentPermissionAdmin(admin.ModelAdmin):
 class DocumentAccessRequestAdmin(admin.ModelAdmin):
     list_display = ("document", "requested_by", "status", "reviewed_by", "created")
     list_filter = ("status",)
+
+
+@admin.register(DocumentVersion)
+class DocumentVersionAdmin(admin.ModelAdmin):
+    list_display = ("document", "revision", "title", "created_by", "created")
+    list_filter = ("document__organization",)
+    search_fields = ("title", "document__title")

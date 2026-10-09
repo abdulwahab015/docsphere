@@ -121,6 +121,15 @@ test('project and document pages, and their dialogs', async ({ page }) => {
   await expectAccessible(page)
   await page.keyboard.press('Escape')
 
+  await page.getByRole('button', { name: 'History' }).click()
+  const history = page.getByRole('dialog', { name: 'Version history' })
+  await expect(history.getByRole('list', { name: 'Versions' })).toBeVisible()
+  await expectAccessible(page)
+  await history.getByRole('button', { name: /^Version 1/ }).click()
+  await expect(page.getByRole('article', { name: 'Version 1' })).toBeVisible()
+  await expectAccessible(page)
+  await page.keyboard.press('Escape')
+
   await page.getByRole('button', { name: 'Delete' }).click()
   await expect(page.getByRole('alertdialog')).toBeVisible()
   await expectAccessible(page)

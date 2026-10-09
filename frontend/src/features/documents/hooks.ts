@@ -7,7 +7,9 @@ import {
   type DocumentListParams,
   editConflictDocument,
   fetchDocument,
+  fetchDocumentVersion,
   listDocuments,
+  listDocumentVersions,
   listDocumentTrash,
   restoreDocument,
   updateDocument,
@@ -29,6 +31,22 @@ export function useDocument(documentId: number) {
   })
 }
 
+/** A document's history, newest first. Editors and Owners only. */
+export function useDocumentVersions(documentId: number, page: number) {
+  return useQuery({
+    queryKey: documentKeys.versionList(documentId, page),
+    queryFn: () => listDocumentVersions(documentId, page),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useDocumentVersion(documentId: number, revision: number) {
+  return useQuery({
+    queryKey: documentKeys.version(documentId, revision),
+    queryFn: () => fetchDocumentVersion(documentId, revision),
+  })
+}
+
 export function useDocumentTrash(page: number) {
   return useQuery({
     queryKey: documentKeys.trash(page),
@@ -37,12 +55,14 @@ export function useDocumentTrash(page: number) {
   })
 }
 
-/** Caches a document the API just returned, and marks every list stale. */
+/** Caches a document the API just returned, and marks every list - and its
+ * history, which a save may have added to - stale. */
 function useStoreDocument() {
   const queryClient = useQueryClient()
   return (document: Document) => {
     queryClient.setQueryData(documentKeys.detail(document.id), document)
     void queryClient.invalidateQueries({ queryKey: documentKeys.lists() })
+    void queryClient.invalidateQueries({ queryKey: documentKeys.versions(document.id) })
   }
 }
 

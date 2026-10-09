@@ -14,6 +14,7 @@ import { DeleteDocumentButton } from '@/features/documents/components/DeleteDocu
 import { DocumentEditor } from '@/features/documents/components/DocumentEditor'
 import { DocumentProjectLink } from '@/features/documents/components/DocumentProjectLink'
 import { DocumentReader } from '@/features/documents/components/DocumentReader'
+import { VersionHistoryDialog } from '@/features/documents/components/VersionHistoryDialog'
 import { useDocument, useUpdateDocument } from '@/features/documents/hooks'
 import { RequestEditAccessCard } from '@/features/sharing/components/RequestEditAccessCard'
 import { ShareDialog } from '@/features/sharing/components/ShareDialog'
@@ -59,6 +60,8 @@ function DocumentView({ document }: { document: Document }) {
         title={document.title}
         actions={
           <>
+            {/* History is for the people who can edit: Viewers see only the current text. */}
+            {can(document.access_level, 'WRITE') && <VersionHistoryDialog document={document} />}
             {can(document.access_level, 'RESHARE') && (
               <ShareDialog
                 resource={{ kind: 'document', id: document.id }}

@@ -94,3 +94,18 @@ class DocumentQuerySet(VisibilityScopedQuerySet):
     def for_project(self, project):
         """Convenience narrowing to a single project's active documents."""
         return self.filter(project=project, is_active=True)
+
+
+class DocumentVersionManager(models.Manager):
+    def record(self, document, user):
+        """Keeps ``document``'s title and content as they are now, as the
+        version at its current revision, saved by ``user``. Called in the same
+        transaction as the save that made that revision, so a document always
+        has exactly one version per revision."""
+        return self.create(
+            document=document,
+            revision=document.revision,
+            title=document.title,
+            content=document.content,
+            created_by=user,
+        )

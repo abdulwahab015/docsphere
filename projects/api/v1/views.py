@@ -22,6 +22,8 @@ from projects.api.v1.serializers import (
     DocumentListSerializer,
     DocumentPermissionSerializer,
     DocumentSerializer,
+    DocumentVersionDetailSerializer,
+    DocumentVersionSerializer,
     ProjectPermissionSerializer,
     ProjectSerializer,
     ShareSerializer,
@@ -34,6 +36,7 @@ from projects.models import (
     Document,
     DocumentAccessRequest,
     DocumentPermission,
+    DocumentVersion,
     Project,
     ProjectPermission,
 )
@@ -60,6 +63,10 @@ User = get_user_model()
 # The fields whose change makes a new revision of a document.
 DOCUMENT_TEXT_FIELDS = ("title", "content")
 
+HISTORY_NEEDS_EDITOR_MESSAGE = (
+    "You must have Editor access to this document to see its history."
+)
+
 DOCUMENT_IN_TRASHED_PROJECT_MESSAGE = (
     "This document's project is in the trash. Ask an organization admin to "
     "restore the project first."
@@ -75,6 +82,13 @@ def _grant_creator_ownership(permission_model, resource_field, resource, user):
         **{resource_field: resource, "user": user, "access_level": AccessLevel.OWNER}
     )
     resource.user_access_level = AccessLevel.OWNER
+
+
+def _visible_document(request, pk):
+    """The document ``pk`` if the caller can open it, annotated with their
+    access level; otherwise - another organization's, private to others,
+    deleted, in a trashed project - a 404, never revealing it exists."""
+    return get_object_or_404(Document.objects.visible_to(request.user), pk=pk)
 
 
 def _lock_access(resource):
@@ -284,6 +298,7 @@ class DocumentListCreateAPIView(generics.ListCreateAPIView):
                 created_by=user, organization=organization, project=project
             )
             _grant_creator_ownership(DocumentPermission, "document", document, user)
+            DocumentVersion.objects.record(document, user)
 
 
 _EDIT_CONFLICT = OpenApiResponse(
@@ -355,9 +370,48 @@ class DocumentRetrieveUpdateDestroyAPIView(
                 )
             serializer.instance = current
             if changes_text:
-                serializer.save(revision=current.revision + 1)
+                document = serializer.save(revision=current.revision + 1)
+                DocumentVersion.objects.record(document, self.request.user)
             else:
                 serializer.save()
+
+
+def _document_for_history(request, pk):
+    """The document ``pk`` if the caller may see its history: Editors and
+    Owners. Viewers see only the current text - anything removed from it
+    stays removed for them - so for them it's a 403; a document they can't
+    open at all is a 404 as everywhere else."""
+    document = _visible_document(request, pk)
+    if not access_permits(document.user_access_level, Action.WRITE):
+        raise PermissionDenied(HISTORY_NEEDS_EDITOR_MESSAGE)
+    return document
+
+
+class DocumentVersionListAPIView(generics.ListAPIView):
+    """A document's versions, newest first - one per revision, the first
+    being how it was created and the latest matching it now. Without their
+    content; read one with ``DocumentVersionRetrieveAPIView``. Restoring one
+    is an ordinary update with its title and content, which makes a new
+    version."""
+
+    serializer_class = DocumentVersionSerializer
+
+    def get_queryset(self):
+        document = _document_for_history(self.request, self.kwargs["pk"])
+        return document.versions.select_related("created_by").order_by("-revision")
+
+
+class DocumentVersionRetrieveAPIView(generics.RetrieveAPIView):
+    """One version of a document, with its content."""
+
+    serializer_class = DocumentVersionDetailSerializer
+
+    def get_object(self):
+        document = _document_for_history(self.request, self.kwargs["pk"])
+        return get_object_or_404(
+            document.versions.select_related("created_by"),
+            revision=self.kwargs["revision"],
+        )
 
 
 class DocumentRestoreAPIView(APIView):
@@ -467,10 +521,7 @@ class DocumentShareAPIView(mixins.ListModelMixin, generics.GenericAPIView):
     serializer_class = DocumentPermissionSerializer
 
     def _get_document(self):
-        return get_object_or_404(
-            Document.objects.visible_to(self.request.user),
-            pk=self.kwargs["pk"],
-        )
+        return _visible_document(self.request, self.kwargs["pk"])
 
     def get_queryset(self):
         document = self._get_document()
@@ -532,10 +583,7 @@ class DocumentAccessRequestListCreateAPIView(generics.ListCreateAPIView):
     serializer_class = DocumentAccessRequestSerializer
 
     def _get_document(self):
-        return get_object_or_404(
-            Document.objects.visible_to(self.request.user),
-            pk=self.kwargs["pk"],
-        )
+        return _visible_document(self.request, self.kwargs["pk"])
 
     def get_queryset(self):
         document = self._get_document()

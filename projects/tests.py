@@ -25,6 +25,7 @@ from projects.factories import (
     DocumentAccessRequestFactory,
     DocumentFactory,
     DocumentPermissionFactory,
+    DocumentVersionFactory,
     ProjectFactory,
     ProjectPermissionFactory,
 )
@@ -32,6 +33,7 @@ from projects.models import (
     Document,
     DocumentAccessRequest,
     DocumentPermission,
+    DocumentVersion,
     Project,
     ProjectPermission,
 )
@@ -57,6 +59,11 @@ class ModelStrTests(TestCase):
         document = DocumentFactory(title="Q3 Plan")
 
         self.assertEqual(str(document), "Q3 Plan")
+
+    def test_document_version_str_names_the_document_and_revision(self):
+        version = DocumentVersionFactory(document__title="Q3 Plan", revision=4)
+
+        self.assertEqual(str(version), "Q3 Plan (revision 4)")
 
     def test_project_permission_str_names_user_project_and_level(self):
         perm = ProjectPermissionFactory(access_level=AccessLevel.EDITOR)
@@ -988,7 +995,7 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_creates_document_in_project_and_becomes_owner(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.post(
                 self.url,
                 {"title": "Spec", "project": self.project.pk},
@@ -1011,7 +1018,7 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
     def test_creator_can_set_visibility_to_public_at_creation(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.post(
                 self.url,
                 {
@@ -1029,7 +1036,7 @@ class DocumentCreateAPITests(AssumeActiveSubscription, APITestCase):
     def test_any_org_member_can_create_a_personal_document_with_no_project(self):
         self.client.force_authenticate(self.viewer)
 
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(5):
             response = self.client.post(self.url, {"title": "Notes"}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -1472,7 +1479,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_editor_can_update(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self.url, {"title": "Doc1 Prime"}, format="json"
             )
@@ -1487,7 +1494,7 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
     def test_a_save_based_on_the_latest_revision_makes_the_next_one(self):
         self.client.force_authenticate(self.editor)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self.url,
                 {"title": "Doc1", "content": "New text", "base_revision": 1},
@@ -1613,6 +1620,244 @@ class DocumentDetailAPITests(AssumeActiveSubscription, APITestCase):
             response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentVersionRecordingTests(AssumeActiveSubscription, APITestCase):
+    """Every revision of a document's text is kept as a version, written in
+    the same transaction as the save that made it."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = ProjectFactory()
+        self.org = self.project.organization
+        self.owner = UserFactory(organization=self.org)
+        self.editor = UserFactory(organization=self.org)
+        ProjectPermissionFactory(
+            project=self.project, user=self.owner, access_level=AccessLevel.EDITOR
+        )
+
+    def create_document(self):
+        self.client.force_authenticate(self.owner)
+        response = self.client.post(
+            reverse("document_list_create"),
+            {"title": "Plan", "content": "First draft.", "project": self.project.pk},
+            format="json",
+        )
+        document = Document.objects.get(pk=response.data["id"])
+        DocumentPermissionFactory(
+            document=document, user=self.editor, access_level=AccessLevel.EDITOR
+        )
+        return document
+
+    def test_creating_a_document_records_its_first_version(self):
+        document = self.create_document()
+
+        version = DocumentVersion.objects.get(document=document)
+        self.assertEqual(
+            (version.revision, version.title, version.content, version.created_by),
+            (1, "Plan", "First draft.", self.owner),
+        )
+
+    def test_each_text_change_records_the_next_version_by_whoever_saved_it(self):
+        document = self.create_document()
+        self.client.force_authenticate(self.editor)
+
+        self.client.patch(
+            reverse("document_detail", args=[document.pk]),
+            {"content": "Second draft.", "base_revision": 1},
+            format="json",
+        )
+
+        latest = DocumentVersion.objects.get(document=document, revision=2)
+        self.assertEqual(
+            (latest.title, latest.content, latest.created_by),
+            ("Plan", "Second draft.", self.editor),
+        )
+
+    def test_saves_that_change_no_text_record_nothing(self):
+        document = self.create_document()
+        self.client.force_authenticate(self.owner)
+        url = reverse("document_detail", args=[document.pk])
+
+        self.client.patch(url, {"visibility": "PUBLIC"}, format="json")
+        self.client.patch(
+            url, {"content": "First draft.", "base_revision": 1}, format="json"
+        )
+
+        self.assertEqual(DocumentVersion.objects.filter(document=document).count(), 1)
+
+    def test_a_refused_stale_save_records_nothing(self):
+        document = self.create_document()
+        self.client.force_authenticate(self.editor)
+        url = reverse("document_detail", args=[document.pk])
+        self.client.patch(url, {"content": "Mine.", "base_revision": 1}, format="json")
+
+        response = self.client.patch(
+            url, {"content": "Stale.", "base_revision": 1}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(DocumentVersion.objects.filter(document=document).count(), 2)
+
+    def test_restoring_an_old_version_saves_it_as_a_new_one(self):
+        """The app restores by saving a version's title and content, based on
+        the document's current revision - so a restore is an ordinary save:
+        checked for conflicts, and kept in the history like any other."""
+        document = self.create_document()
+        self.client.force_authenticate(self.editor)
+        url = reverse("document_detail", args=[document.pk])
+        self.client.patch(
+            url, {"title": "Plan B", "content": "Rewritten.", "base_revision": 1}
+        )
+        first = DocumentVersion.objects.get(document=document, revision=1)
+
+        response = self.client.patch(
+            url,
+            {"title": first.title, "content": first.content, "base_revision": 2},
+            format="json",
+        )
+
+        self.assertEqual(response.data["revision"], 3)
+        restored = DocumentVersion.objects.get(document=document, revision=3)
+        self.assertEqual((restored.title, restored.content), ("Plan", "First draft."))
+
+
+class DocumentVersionAPITests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.document = DocumentFactory(title="Plan B", content="Rewritten.")
+        self.org = self.document.organization
+        self.owner = self.document.created_by
+        self.editor = UserFactory(organization=self.org)
+        self.viewer = UserFactory(organization=self.org)
+        for user, level in (
+            (self.owner, AccessLevel.OWNER),
+            (self.editor, AccessLevel.EDITOR),
+            (self.viewer, AccessLevel.VIEWER),
+        ):
+            DocumentPermissionFactory(
+                document=self.document, user=user, access_level=level
+            )
+        Document.objects.filter(pk=self.document.pk).update(revision=2)
+        DocumentVersionFactory(
+            document=self.document,
+            revision=1,
+            title="Plan",
+            content="First draft.",
+            created_by=self.owner,
+        )
+        DocumentVersionFactory(
+            document=self.document,
+            revision=2,
+            title="Plan B",
+            content="Rewritten.",
+            created_by=self.editor,
+        )
+        self.list_url = reverse("document_version_list", args=[self.document.pk])
+
+    def detail_url(self, revision, document=None):
+        return reverse(
+            "document_version_detail",
+            args=[(document or self.document).pk, revision],
+        )
+
+    def test_an_editor_sees_the_versions_newest_first_without_their_content(self):
+        self.client.force_authenticate(self.editor)
+
+        with self.assertNumQueries(3):
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [(row["revision"], row["title"]) for row in response.data["results"]],
+            [(2, "Plan B"), (1, "Plan")],
+        )
+        latest = response.data["results"][0]
+        self.assertEqual(latest["created_by"], self.editor.pk)
+        self.assertEqual(latest["created_by_email"], self.editor.email)
+        self.assertNotIn("content", latest)
+
+    def test_an_owner_reads_one_version_in_full(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.detail_url(1))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["revision"], 1)
+        self.assertEqual(response.data["content"], "First draft.")
+        self.assertEqual(response.data["created_by"], self.owner.pk)
+
+    def test_a_viewer_sees_only_the_current_document(self):
+        self.client.force_authenticate(self.viewer)
+
+        with self.assertNumQueries(1):
+            listed = self.client.get(self.list_url)
+        with self.assertNumQueries(1):
+            read = self.client.get(self.detail_url(1))
+
+        self.assertEqual(listed.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(read.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_a_public_documents_readers_see_no_history_either(self):
+        Document.objects.filter(pk=self.document.pk).update(visibility="PUBLIC")
+        member = UserFactory(organization=self.org)
+        self.client.force_authenticate(member)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_a_document_the_caller_cant_open_is_not_found(self):
+        outsider = UserFactory(organization=self.org)
+        foreign_admin = AdminUserFactory()
+        responses = []
+
+        for user in (outsider, foreign_admin):
+            self.client.force_authenticate(user)
+            with self.assertNumQueries(1):
+                responses.append(self.client.get(self.list_url).status_code)
+            with self.assertNumQueries(1):
+                responses.append(self.client.get(self.detail_url(1)).status_code)
+
+        self.assertEqual(responses, [status.HTTP_404_NOT_FOUND] * 4)
+
+    def test_a_deleted_documents_history_is_not_found(self):
+        Document.objects.filter(pk=self.document.pk).update(is_active=False)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_a_revision_the_document_never_had_is_not_found(self):
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.detail_url(9))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_another_documents_version_is_never_served_through_this_one(self):
+        other = DocumentFactory(project=None, organization=self.org)
+        DocumentPermissionFactory(
+            document=other, user=self.owner, access_level=AccessLevel.OWNER
+        )
+        DocumentVersionFactory(document=other, revision=3, created_by=self.owner)
+        self.client.force_authenticate(self.owner)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.detail_url(3))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_anonymous_request_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class DocumentRestoreAPITests(AssumeActiveSubscription, APITestCase):
