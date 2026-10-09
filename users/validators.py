@@ -2,6 +2,16 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError
 
+from users.constants import MAX_PASSWORD_LENGTH
+
+
+def validate_current_password(user, password):
+    """Proves a signed-in user is really them before a sensitive change.
+    An over-long password is refused before it reaches the hasher."""
+    if len(password) > MAX_PASSWORD_LENGTH or not user.check_password(password):
+        raise ValidationError("Current password is incorrect.")
+    return password
+
 
 def validate_password_for_field(field_name, password, user=None):
     """Runs the password policy and reports any failure against

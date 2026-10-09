@@ -123,8 +123,8 @@ describe('endSessionDeliberately', () => {
 })
 
 describe('handleSessionError', () => {
-  async function errorWithStatus(status: number) {
-    server.use(http.get(apiUrl('/probe/'), () => HttpResponse.json({}, { status })))
+  async function errorWithStatus(status: number, body = {}) {
+    server.use(http.get(apiUrl('/probe/'), () => HttpResponse.json(body, { status })))
     return apiClient.get('/probe/').catch((error: unknown) => error)
   }
 
@@ -156,6 +156,21 @@ describe('handleSessionError', () => {
     expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(true)
   })
 
+  it("re-reads the session when the API says the email isn't verified", async () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
+
+    handleSessionError(
+      queryClient,
+      await errorWithStatus(403, {
+        detail: 'Verify your email address to continue.',
+        code: 'email_unverified',
+      }),
+    )
+
+    expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(true)
+  })
+
   it('leaves the session alone for other errors', async () => {
     const queryClient = createTestQueryClient()
     queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
@@ -163,6 +178,15 @@ describe('handleSessionError', () => {
     handleSessionError(queryClient, await errorWithStatus(403))
 
     expect(queryClient.getQueryData(authKeys.currentUser)).toEqual(buildCurrentUser())
+    expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(false)
+  })
+
+  it('leaves the session alone for an error that never reached the API', () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
+
+    handleSessionError(queryClient, new Error('Rendering failed'))
+
     expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(false)
   })
 })

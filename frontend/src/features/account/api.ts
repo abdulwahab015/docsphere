@@ -2,6 +2,7 @@ import { apiClient } from '@/api/client'
 import type {
   CurrentUser,
   CurrentUserUpdatePayload,
+  EmailChangeRequestPayload,
   PasswordChangePayload,
   TokenPair,
 } from '@/api/types'
@@ -14,4 +15,8 @@ export async function changePassword(payload: PasswordChangePayload) {
 export async function updateCurrentUser(payload: CurrentUserUpdatePayload) {
   const { data } = await apiClient.patch<CurrentUser>('/users/me/', payload)
   return data
+}
+
+export async function requestEmailChange(payload: EmailChangeRequestPayload) {
+  await apiClient.post('/users/me/email/', payload)
 }

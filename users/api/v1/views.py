@@ -10,7 +10,7 @@ from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.generics import get_object_or_404
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import SAFE_METHODS, AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -22,6 +22,9 @@ from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
     CurrentUserSerializer,
+    EmailChangeConfirmSerializer,
+    EmailChangeRequestSerializer,
+    EmailVerificationSerializer,
     InvitationAcceptSerializer,
     InvitationBulkResultSerializer,
     InvitationCreateSerializer,
@@ -43,16 +46,24 @@ from users.api.v1.tokens import (
 )
 from users.choices import InvitationStatus, OrganizationRole
 from users.models import Invitation
-from users.permissions import IsOrganizationAdmin
+from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
 from users.services import (
+    EMAIL_IN_USE_MESSAGE,
     blacklist_outstanding_tokens,
     bulk_create_invitations,
     find_invitation_conflict,
+    is_email_in_use,
     lock_organization_for_admin_change,
     parse_invitation_emails,
     refresh_invitation,
 )
-from users.tasks import send_invitation_email_task, send_password_reset_email_task
+from users.tasks import (
+    send_email_change_link_task,
+    send_email_changed_notice_task,
+    send_invitation_email_task,
+    send_password_reset_email_task,
+    send_verification_email_task,
+)
 
 User = get_user_model()
 
@@ -111,15 +122,145 @@ class CurrentUserAPIView(generics.RetrieveUpdateAPIView):
     """The requesting user's own profile, and changing their name (the only
     part they may edit). Deliberately reachable without an active
     subscription, so a client can tell an admin (send to billing) from a
-    member (ask your admin) before any gated call returns 402."""
+    member (ask your admin) before any gated call returns 402 - and readable
+    before the email is verified, which is how a client learns to ask for
+    that."""
 
     serializer_class = CurrentUserSerializer
-    permission_classes = [IsAuthenticated]
     # Partial updates only: a PUT would have to resend read-only fields.
     http_method_names = ["get", "patch", "head", "options"]
 
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), HasVerifiedEmail()]
+
     def get_object(self):
         return self.request.user
+
+
+class EmailVerificationResendAPIView(APIView):
+    """Emails a signed-in user who hasn't verified their address a new
+    verification link. Earlier links keep working until they expire."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_verification"
+
+    @extend_schema(
+        request=None,
+        responses={
+            204: OpenApiResponse(description="A new link was sent."),
+            400: OpenApiResponse(description="The address is already verified."),
+        },
+    )
+    def post(self, request):
+        if request.user.email_verified:
+            raise ValidationError({"detail": "Your email address is already verified."})
+
+        send_verification_email_task.delay(request.user.pk)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmailVerificationConfirmAPIView(APIView):
+    """Marks an address verified from the link emailed to it. Works signed in
+    or not - the link may be opened on another device - and following it
+    again changes nothing."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_verification"
+
+    @extend_schema(
+        request=EmailVerificationSerializer,
+        responses={
+            204: OpenApiResponse(description="The address is verified."),
+            400: OpenApiResponse(description="Invalid or expired link."),
+        },
+    )
+    def post(self, request):
+        serializer = EmailVerificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+        if not user.email_verified:
+            user.email_verified_at = timezone.now()
+            user.save(update_fields=["email_verified_at"])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmailChangeRequestAPIView(APIView):
+    """A signed-in user asks to sign in with another address: a link to
+    confirm it is emailed to the new address, and nothing changes until it's
+    followed."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_change"
+
+    @extend_schema(
+        request=EmailChangeRequestSerializer,
+        responses={
+            204: OpenApiResponse(description="A link was sent to the new address."),
+            400: OpenApiResponse(
+                description="Wrong current password, or the address is your own "
+                "or already in use."
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = EmailChangeRequestSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        send_email_change_link_task.delay(
+            request.user.pk, serializer.validated_data["new_email"]
+        )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmailChangeConfirmAPIView(APIView):
+    """Moves an account to the address its link was emailed to. The address
+    is checked again - someone may have taken it since the link was sent -
+    every session is signed out, and the old address is told."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_change"
+
+    @extend_schema(
+        request=EmailChangeConfirmSerializer,
+        responses={
+            204: OpenApiResponse(description="The email changed; log in again."),
+            400: OpenApiResponse(
+                description="Invalid or expired link, or the address is in use."
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = EmailChangeConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data["user"]
+        old_email = user.email
+        new_email = serializer.validated_data["new_email"]
+
+        with transaction.atomic():
+            if is_email_in_use(new_email):
+                raise ValidationError({"detail": EMAIL_IN_USE_MESSAGE})
+
+            User.objects.release_email(new_email)
+            user.email = new_email
+            user.email_verified_at = timezone.now()
+            user.save(update_fields=["email", "email_verified_at"])
+            blacklist_outstanding_tokens(user)
+
+        send_email_changed_notice_task.delay(old_email, user.email)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @extend_schema(
@@ -139,7 +280,7 @@ class UserListAPIView(generics.ListAPIView):
     response includes ``org_role``/``created`` - a regular member only needs
     an id and email to pick a share target."""
 
-    permission_classes = [IsAuthenticated, HasActiveSubscription]
+    permission_classes = [IsAuthenticated, HasVerifiedEmail, HasActiveSubscription]
     filter_backends = [SearchFilter]
     search_fields = ["email", "name"]
 
@@ -163,7 +304,7 @@ class InvitationListCreateAPIView(generics.ListCreateAPIView):
     """Lists and creates invitations, scoped to the requesting admin's organization."""
 
     serializer_class = InvitationCreateSerializer
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     def get_queryset(self):
         return (
@@ -181,7 +322,7 @@ class InvitationBulkCreateAPIView(APIView):
     """Creates invitations in bulk from an uploaded .xlsx file of email
     addresses, scoped to the requesting admin's organization."""
 
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     @extend_schema(
         request={
@@ -252,11 +393,15 @@ class InvitationAcceptAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            User.objects.release_email(invitation.email)
+            # The invitation's link was emailed to this address, so following
+            # it proves the address is theirs.
             user = User.objects.create_user(
                 email=invitation.email,
                 password=password,
                 name=serializer.validated_data["name"],
                 organization=invitation.organization,
+                email_verified_at=timezone.now(),
             )
 
             invitation.status = InvitationStatus.ACCEPTED
@@ -372,7 +517,7 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
     Cross-organization targets are indistinguishable from missing ones.
     """
 
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     def get_queryset(self):
         return _organization_users(self.request)
@@ -394,7 +539,7 @@ class PasswordChangeAPIView(APIView):
     hold is revoked - other devices are signed out - and a fresh pair is
     returned so the current session carries on."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasVerifiedEmail]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "password_change"
 
@@ -428,7 +573,7 @@ class OrganizationRoleUpdateAPIView(APIView):
     role, and changes are made one at a time by admins who still are one, so
     the organization always keeps an admin."""
 
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     @extend_schema(
         request=OrganizationRoleSerializer,
@@ -461,7 +606,7 @@ class DeactivatedUserListAPIView(generics.ListAPIView):
     ``ReactivateUserAPIView`` restores from."""
 
     serializer_class = UserDetailSerializer
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
     filter_backends = [SearchFilter]
     search_fields = ["email", "name"]
 
@@ -475,7 +620,7 @@ class ReactivateUserAPIView(APIView):
     """Reverses a deactivation within the requesting admin's organization.
     An already-active or cross-organization user is a 404."""
 
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     @extend_schema(request=None, responses={200: UserDetailSerializer})
     def post(self, request, pk):
@@ -492,7 +637,7 @@ class InvitationRevokeAPIView(APIView):
     """Revokes a pending invitation so its link stops working. The record is
     kept (status ``REVOKED``) rather than deleted."""
 
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     @extend_schema(
         request=None,
@@ -515,7 +660,7 @@ class InvitationResendAPIView(APIView):
     can be resent too - unless the address has joined, or been sent a newer
     invitation, since."""
 
-    permission_classes = [IsOrganizationAdmin, HasActiveSubscription]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
 
     @extend_schema(
         request=None,

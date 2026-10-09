@@ -1,5 +1,6 @@
 import contextlib
 import threading
+import time
 from datetime import timedelta
 from io import BytesIO
 from unittest.mock import patch
@@ -7,6 +8,7 @@ from unittest.mock import patch
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -18,7 +20,7 @@ from django.test import (
     override_settings,
     skipUnlessDBFeature,
 )
-from django.urls import reverse
+from django.urls import URLPattern, URLResolver, get_resolver, reverse
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
@@ -30,17 +32,40 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.tests import AssumeActiveSubscription
 from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
+from organizations.models import Organization
 from users.api.v1 import views as user_views
 from users.choices import InvitationStatus, OrganizationRole
 from users.constants import MAX_BULK_INVITE_ROWS, MAX_NAME_LENGTH
+from users.email_links import (
+    INVALID_EMAIL_LINK_MESSAGE,
+    make_email_change_token,
+    make_verification_token,
+)
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
-from users.services import NO_LONGER_ADMIN_MESSAGE
+from users.services import EMAIL_IN_USE_MESSAGE, NO_LONGER_ADMIN_MESSAGE
+from users.tasks import remove_unverified_accounts_task
 
 User = get_user_model()
 
 XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def lapse_verification(user):
+    """Backdates an unverified signup past ``EMAIL_LINK_EXPIRY``, after which
+    it no longer holds its address."""
+    User.objects.filter(pk=user.pk).update(
+        created=timezone.now() - settings.EMAIL_LINK_EXPIRY - timedelta(minutes=1)
+    )
+
+
+def after_links_expire():
+    """Moves the clock the email links are signed with past their expiry."""
+    return patch(
+        "django.core.signing.time.time",
+        return_value=time.time() + settings.EMAIL_LINK_EXPIRY.total_seconds() + 1,
+    )
 
 
 def build_xlsx_upload(values, filename="invitees.xlsx"):
@@ -500,6 +525,393 @@ class PasswordChangeTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class EmailVerificationTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = AdminUserFactory(email="admin@acme.test", email_verified_at=None)
+        self.verify_url = reverse("auth_verify_email")
+        self.resend_url = reverse("user_verification_email_resend")
+
+    def test_the_emailed_link_verifies_the_address(self):
+        token = make_verification_token(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.email_verified)
+
+    def test_following_the_link_again_changes_nothing(self):
+        token = make_verification_token(self.user)
+        self.client.post(self.verify_url, {"token": token})
+        self.user.refresh_from_db()
+        verified_at = self.user.email_verified_at
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email_verified_at, verified_at)
+
+    def test_an_expired_link_is_refused(self):
+        token = make_verification_token(self.user)
+
+        with after_links_expire(), self.assertNumQueries(0):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], [INVALID_EMAIL_LINK_MESSAGE])
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.email_verified)
+
+    def test_a_forged_link_is_refused(self):
+        token = make_verification_token(self.user)
+        forged = token[:-1] + ("A" if token[-1] != "A" else "B")
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.verify_url, {"token": forged})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], [INVALID_EMAIL_LINK_MESSAGE])
+
+    def test_a_link_for_another_address_of_the_account_is_refused(self):
+        token = make_verification_token(self.user)
+        User.objects.filter(pk=self.user.pk).update(email="moved@acme.test")
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.email_verified)
+
+    def test_an_email_change_link_is_refused(self):
+        # An email-change link must not double as a verification link.
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_resend_emails_a_new_link(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["admin@acme.test"])
+        self.assertIn(
+            f"{settings.FRONTEND_URL}/verify-email?token=", mail.outbox[0].body
+        )
+
+    def test_resend_is_refused_once_verified(self):
+        verified = UserFactory()
+        self.client.force_authenticate(verified)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_needs_a_signed_in_user(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_resend_is_rate_limited(self):
+        self.client.force_authenticate(self.user)
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"email_verification": "1/min"}
+        ):
+            with self.assertNumQueries(1):
+                self.client.post(self.resend_url)
+            with self.assertNumQueries(0):
+                response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(len(mail.outbox), 1)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class EmailChangeTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.password = "S0me-Strong-Pass!"
+        self.user = UserFactory(email="old@acme.test", password=self.password)
+        self.request_url = reverse("user_email_change")
+        self.confirm_url = reverse("auth_confirm_email")
+
+    def request_change(self, new_email, password=None):
+        return self.client.post(
+            self.request_url,
+            {"new_email": new_email, "current_password": password or self.password},
+        )
+
+    def test_request_emails_a_link_to_the_new_address_and_changes_nothing_yet(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(3):
+            response = self.request_change("New@Acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["New@Acme.test"])
+        self.assertIn("old@acme.test", message.body)
+        self.assertIn(f"{settings.FRONTEND_URL}/confirm-email?token=", message.body)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "old@acme.test")
+
+    def test_confirming_moves_the_account_signs_out_everywhere_and_tells_the_old_address(
+        self,
+    ):
+        old_refresh = str(RefreshToken.for_user(self.user))
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        with self.assertNumQueries(12):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "new@acme.test")
+        self.assertTrue(self.user.email_verified)
+        refreshed = self.client.post(reverse("auth_refresh"), {"refresh": old_refresh})
+        self.assertEqual(refreshed.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["old@acme.test"])
+        self.assertIn("new@acme.test", mail.outbox[0].body)
+
+    def test_after_the_change_only_the_new_address_logs_in(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        self.client.post(self.confirm_url, {"token": token})
+        login_url = reverse("auth_login")
+
+        old = self.client.post(
+            login_url, {"email": "old@acme.test", "password": self.password}
+        )
+        new = self.client.post(
+            login_url, {"email": "new@acme.test", "password": self.password}
+        )
+
+        self.assertEqual(old.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(new.status_code, status.HTTP_200_OK)
+
+    def test_confirming_takes_the_address_from_an_account_that_never_verified_it(self):
+        squatter = AdminUserFactory(email="new@acme.test", email_verified_at=None)
+        lapse_verification(squatter)
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(
+            Organization.objects.filter(pk=squatter.organization_id).exists()
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "new@acme.test")
+
+    def test_request_refuses_a_wrong_current_password(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.request_change("new@acme.test", password="Wr0ng-Pass!")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", response.data)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_request_refuses_the_current_address(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(0):
+            response = self.request_change("OLD@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["new_email"], ["This is already your email address."]
+        )
+
+    def test_request_refuses_an_address_another_account_holds(self):
+        UserFactory(email="taken@acme.test", organization=None)
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.request_change("taken@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["new_email"], [EMAIL_IN_USE_MESSAGE])
+
+    def test_request_refuses_an_address_with_a_pending_invitation(self):
+        InvitationFactory(email="invited@acme.test")
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.request_change("invited@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["new_email"], [EMAIL_IN_USE_MESSAGE])
+
+    def test_request_needs_a_verified_address(self):
+        unverified = AdminUserFactory(email_verified_at=None)
+        self.client.force_authenticate(unverified)
+
+        with self.assertNumQueries(0):
+            response = self.request_change("new@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["code"], "email_unverified")
+
+    def test_request_needs_a_signed_in_user(self):
+        with self.assertNumQueries(0):
+            response = self.request_change("new@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_request_is_rate_limited(self):
+        self.client.force_authenticate(self.user)
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"email_change": "1/min"}
+        ):
+            self.request_change("new@acme.test")
+            with self.assertNumQueries(0):
+                response = self.request_change("other@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_confirm_refuses_a_link_already_used(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        self.client.post(self.confirm_url, {"token": token})
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], [INVALID_EMAIL_LINK_MESSAGE])
+
+    def test_confirm_refuses_an_address_taken_since_the_link_was_sent(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        UserFactory(email="new@acme.test", organization=None)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], EMAIL_IN_USE_MESSAGE)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "old@acme.test")
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_confirm_refuses_an_expired_link(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        with after_links_expire(), self.assertNumQueries(0):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "old@acme.test")
+
+    def test_confirm_refuses_a_verification_link(self):
+        token = make_verification_token(self.user)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_confirm_refuses_a_deactivated_account(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class EmailVerificationGateTests(APITestCase):
+    """Until a new signup verifies their address, every endpoint refuses them
+    except the few that let them verify, sign in and out, and see why."""
+
+    # (URL name, method) pairs an unverified signup may still use.
+    OPEN_TO_UNVERIFIED = frozenset(
+        {
+            ("auth_login", "post"),
+            ("auth_refresh", "post"),
+            ("auth_logout", "post"),
+            ("auth_password_reset", "post"),
+            ("auth_password_reset_confirm", "post"),
+            ("auth_verify_email", "post"),
+            ("auth_confirm_email", "post"),
+            ("invitation_accept", "post"),
+            ("organization_signup", "post"),
+            ("user_me", "get"),
+            ("user_verification_email_resend", "post"),
+        }
+    )
+
+    def setUp(self):
+        # An organization that hasn't subscribed yet, like every new signup:
+        # the refusal must say "verify" before it says "pay".
+        self.user = AdminUserFactory(email_verified_at=None)
+        self.client.force_authenticate(self.user)
+
+    def api_endpoints(self):
+        """Every named API route, with a placeholder id in its URL, and the
+        methods its view answers."""
+
+        def walk(patterns, prefix):
+            for pattern in patterns:
+                route = prefix + str(pattern.pattern)
+                if isinstance(pattern, URLResolver):
+                    yield from walk(pattern.url_patterns, route)
+                elif isinstance(pattern, URLPattern) and route.startswith("api/v1/"):
+                    yield pattern
+
+        for pattern in walk(get_resolver().url_patterns, ""):
+            view_class = pattern.callback.view_class
+            url = reverse(
+                pattern.name,
+                kwargs=dict.fromkeys(pattern.pattern.converters, 1),
+            )
+            for method in view_class.http_method_names:
+                if method not in ("head", "options") and hasattr(view_class, method):
+                    yield pattern.name, method, url
+
+    def test_every_other_endpoint_refuses_an_unverified_signup(self):
+        refused = []
+        for name, method, url in self.api_endpoints():
+            if (name, method) in self.OPEN_TO_UNVERIFIED:
+                continue
+            with self.subTest(endpoint=name, method=method):
+                with self.assertNumQueries(0):
+                    response = getattr(self.client, method)(url)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.data["code"], "email_unverified")
+                refused.append(name)
+
+        # The walk found the API: every app's endpoints were checked.
+        self.assertIn("project_list_create", refused)
+        self.assertIn("subscriptions_checkout", refused)
+        self.assertIn("organization_profile", refused)
+
+    def test_the_open_endpoints_exist(self):
+        endpoints = {(name, method) for name, method, _ in self.api_endpoints()}
+
+        self.assertLessEqual(self.OPEN_TO_UNVERIFIED, endpoints)
+
+
 class InvitationTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
         super().setUp()
@@ -660,6 +1072,22 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Invitation.objects.filter(email=self.member_a.email).exists())
 
+    @patch("core.email.send_mail")
+    def test_can_invite_an_address_its_unverified_account_has_lost(
+        self, mock_send_mail
+    ):
+        lapse_verification(
+            AdminUserFactory(email="squatted@example.com", email_verified_at=None)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "squatted@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
     def test_cannot_invite_an_email_with_an_existing_pending_invitation(self):
         InvitationFactory(
             organization=self.org_a,
@@ -703,7 +1131,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             token="valid-token",
         )
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {"token": "valid-token", "password": "Str0ng-New-Pass!"},
@@ -720,6 +1148,8 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(user.organization, self.org_a)
         self.assertTrue(user.check_password("Str0ng-New-Pass!"))
         self.assertEqual(user.name, "")
+        # The link was emailed to this address: following it proves it's theirs.
+        self.assertTrue(user.email_verified)
 
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, InvitationStatus.ACCEPTED)
@@ -730,7 +1160,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             organization=self.org_a, email="new-user@example.com", token="valid-token"
         )
 
-        with self.assertNumQueries(8):
+        with self.assertNumQueries(9):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {
@@ -827,6 +1257,26 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         )
         self.assertEqual(User.objects.filter(email="taken@example.com").count(), 1)
 
+    def test_accepting_takes_over_an_address_its_unverified_account_has_lost(self):
+        squatter = AdminUserFactory(email="taken@example.com", email_verified_at=None)
+        lapse_verification(squatter)
+        InvitationFactory(
+            organization=self.org_a, email="taken@example.com", token="valid-token"
+        )
+
+        response = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "valid-token", "password": "Str0ng-New-Pass!"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(
+            Organization.objects.filter(pk=squatter.organization_id).exists()
+        )
+        self.assertEqual(
+            User.objects.get(email="taken@example.com").organization, self.org_a
+        )
+
     def test_accept_invitation_is_rate_limited(self):
         cache.clear()
         InvitationFactory(
@@ -896,6 +1346,7 @@ class CurrentUserAPITests(APITestCase):
             {
                 "id": self.admin.pk,
                 "email": "admin@example.com",
+                "email_verified": True,
                 "name": "Ada Admin",
                 "org_role": "ADMIN",
                 "organization": {
@@ -936,6 +1387,16 @@ class CurrentUserAPITests(APITestCase):
             response = self.client.get(self.url)
 
         self.assertFalse(response.data["organization"]["has_active_subscription"])
+
+    def test_an_unverified_signup_can_read_their_account(self):
+        unverified = AdminUserFactory(organization=self.org, email_verified_at=None)
+        self.client.force_authenticate(unverified)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["email_verified"])
 
     def test_user_without_an_organization_gets_a_null_organization(self):
         rootless_admin = AdminUserFactory(organization=None)
@@ -1009,6 +1470,16 @@ class CurrentUserAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("name", response.data)
+
+    def test_an_unverified_signup_cannot_change_their_name(self):
+        unverified = AdminUserFactory(organization=self.org, email_verified_at=None)
+        self.client.force_authenticate(unverified)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(self.url, {"name": "Grace"})
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["code"], "email_unverified")
 
     def test_a_full_replace_is_not_offered(self):
         self.client.force_authenticate(self.member)
@@ -1536,6 +2007,8 @@ class UserManagerTests(TestCase):
 
         self.assertTrue(admin.is_staff)
         self.assertTrue(admin.is_superuser)
+        # Created from the command line, not by signing up: nothing to verify.
+        self.assertTrue(admin.email_verified)
 
     def test_create_superuser_rejects_non_staff(self):
         with self.assertNumQueries(0), self.assertRaises(ValueError):
@@ -1548,6 +2021,37 @@ class UserManagerTests(TestCase):
             User.objects.create_superuser(
                 email="root@example.com", password="R00t-Pass!", is_superuser=False
             )
+
+
+class UnverifiedAccountRemovalTests(TestCase):
+    def setUp(self):
+        self.lapsed = AdminUserFactory(email_verified_at=None)
+        lapse_verification(self.lapsed)
+
+    def test_removes_signups_that_never_verified_with_their_organizations(self):
+        waiting = AdminUserFactory(email_verified_at=None)
+        verified = AdminUserFactory()
+
+        remove_unverified_accounts_task.delay()
+
+        self.assertFalse(User.objects.filter(pk=self.lapsed.pk).exists())
+        self.assertFalse(
+            Organization.objects.filter(pk=self.lapsed.organization_id).exists()
+        )
+        self.assertTrue(User.objects.filter(pk=waiting.pk).exists())
+        self.assertTrue(User.objects.filter(pk=verified.pk).exists())
+
+    def test_leaves_an_organization_with_a_verified_member_alone(self):
+        UserFactory(organization=self.lapsed.organization)
+
+        remove_unverified_accounts_task.delay()
+
+        self.assertTrue(User.objects.filter(pk=self.lapsed.pk).exists())
+
+    def test_an_account_that_never_verified_in_time_no_longer_holds_its_address(self):
+        holders = User.objects.holding_email()
+
+        self.assertFalse(holders.filter(pk=self.lapsed.pk).exists())
 
 
 class PasswordComplexityTests(SimpleTestCase):

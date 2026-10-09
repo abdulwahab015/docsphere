@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import type { CurrentUserUpdatePayload, PasswordChangePayload } from '@/api/types'
-import { changePassword, updateCurrentUser } from '@/features/account/api'
+import { changePassword, requestEmailChange, updateCurrentUser } from '@/features/account/api'
 import { authKeys } from '@/features/auth/query-keys'
 import { renewSession } from '@/features/auth/session'
 
@@ -22,4 +22,10 @@ export function useUpdateName() {
     mutationFn: (payload: CurrentUserUpdatePayload) => updateCurrentUser(payload),
     onSuccess: (user) => queryClient.setQueryData(authKeys.currentUser, user),
   })
+}
+
+/** Emails a confirmation link to the new address. Nothing changes until it's
+ * followed, so the session and its data stay as they are. */
+export function useRequestEmailChange() {
+  return useMutation({ mutationFn: requestEmailChange })
 }

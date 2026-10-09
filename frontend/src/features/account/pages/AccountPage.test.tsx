@@ -1,8 +1,9 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import type { UserEvent } from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 
 import { getAccessToken } from '@/api/access-token'
+import { authKeys } from '@/features/auth/query-keys'
 import { MAX_NAME_LENGTH } from '@/lib/schemas'
 import { findAccountMenu } from '@/test/actions'
 import { buildCurrentUser, buildTokenPair } from '@/test/factories'
@@ -11,8 +12,14 @@ import { apiUrl, server, spyResolver } from '@/test/server'
 
 const PASSWORD_PATH = '/users/me/password/'
 const ME_PATH = '/users/me/'
+const EMAIL_PATH = '/users/me/email/'
 const CURRENT_PASSWORD = 'Old-Pass-123!'
 const NEW_PASSWORD = 'New-Pass-456!'
+
+// Both forms ask for the current password.
+function passwordForm() {
+  return within(screen.getByRole('form', { name: 'Password' }))
+}
 
 async function fillPasswordForm(
   user: UserEvent,
@@ -30,10 +37,10 @@ async function fillPasswordForm(
   for (const [label, value] of fields) {
     // Left blank when there's nothing to type.
     if (value) {
-      await user.type(screen.getByLabelText(label), value)
+      await user.type(passwordForm().getByLabelText(label), value)
     }
   }
-  await user.click(screen.getByRole('button', { name: 'Change password' }))
+  await user.click(passwordForm().getByRole('button', { name: 'Change password' }))
 }
 
 function rejectPasswordChange(errors: Record<string, string[]>) {
@@ -119,6 +126,74 @@ describe('AccountPage', () => {
     })
   })
 
+  describe('changing the email', () => {
+    function emailForm() {
+      return within(screen.getByRole('form', { name: 'Change email' }))
+    }
+
+    async function requestEmailChange(user: UserEvent, newEmail = 'grace@example.com') {
+      await user.type(emailForm().getByLabelText('New email'), newEmail)
+      await user.type(emailForm().getByLabelText('Current password'), CURRENT_PASSWORD)
+      await user.click(emailForm().getByRole('button', { name: 'Send confirmation link' }))
+    }
+
+    it('sends a link to the new address and changes nothing yet', async () => {
+      const request = spyResolver(() => new HttpResponse(null, { status: 204 }))
+      server.use(http.post(apiUrl(EMAIL_PATH), request))
+      const { user, queryClient } = renderRoute('/settings/account', {
+        signedInAs: buildCurrentUser(),
+      })
+
+      await requestEmailChange(user)
+
+      expect(
+        await screen.findByText('Check grace@example.com for a link to confirm the change.'),
+      ).toBeInTheDocument()
+      expect(await request.mock.calls[0][0].request.json()).toEqual({
+        new_email: 'grace@example.com',
+        current_password: CURRENT_PASSWORD,
+      })
+      expect(emailForm().getByLabelText('New email')).toHaveValue('')
+      expect(emailForm().getByLabelText('Current password')).toHaveValue('')
+      expect(queryClient.getQueryData(authKeys.currentUser)).toEqual(buildCurrentUser())
+    })
+
+    it("shows the server's reasons under the fields", async () => {
+      server.use(
+        http.post(apiUrl(EMAIL_PATH), () =>
+          HttpResponse.json(
+            {
+              new_email: ['This email address is already in use.'],
+              current_password: ['Current password is incorrect.'],
+            },
+            { status: 400 },
+          ),
+        ),
+      )
+      const { user } = renderRoute('/settings/account', { signedInAs: buildCurrentUser() })
+
+      await requestEmailChange(user)
+
+      expect(await emailForm().findByLabelText('New email')).toHaveAccessibleDescription(
+        'This email address is already in use.',
+      )
+      expect(emailForm().getByLabelText('Current password')).toHaveAccessibleDescription(
+        'Current password is incorrect.',
+      )
+    })
+
+    it('checks the address before sending it', async () => {
+      const request = spyResolver(() => new HttpResponse(null, { status: 204 }))
+      server.use(http.post(apiUrl(EMAIL_PATH), request))
+      const { user } = renderRoute('/settings/account', { signedInAs: buildCurrentUser() })
+
+      await requestEmailChange(user, 'not-an-email')
+
+      expect(await emailForm().findByLabelText('New email')).toBeInvalid()
+      expect(request).not.toHaveBeenCalled()
+    })
+  })
+
   describe('changing the password', () => {
     it('sends the current and new password, and keeps this session going', async () => {
       const change = spyResolver(() =>
@@ -137,7 +212,7 @@ describe('AccountPage', () => {
         new_password: NEW_PASSWORD,
       })
       expect(getAccessToken()).toBe('renewed-access-token')
-      expect(screen.getByLabelText('Current password')).toHaveValue('')
+      expect(passwordForm().getByLabelText('Current password')).toHaveValue('')
       expect(screen.getByLabelText('New password')).toHaveValue('')
       expect(screen.getByLabelText('Confirm new password')).toHaveValue('')
       expect(screen.getByRole('heading', { level: 1, name: 'Account' })).toBeInTheDocument()
@@ -149,7 +224,7 @@ describe('AccountPage', () => {
 
       await fillPasswordForm(user)
 
-      expect(await screen.findByLabelText('Current password')).toHaveAccessibleDescription(
+      expect(await passwordForm().findByLabelText('Current password')).toHaveAccessibleDescription(
         'Current password is incorrect.',
       )
     })

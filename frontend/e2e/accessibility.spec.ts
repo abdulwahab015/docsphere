@@ -11,6 +11,7 @@ import {
   openDocument,
   openProject,
   OVERDUE_ADMIN,
+  VERIFY_ADMIN,
 } from './fixtures'
 
 // WCAG 2.1 A and AA, plus axe's best practices (landmarks, one main, ...).
@@ -67,6 +68,8 @@ test('the signed-out pages', async ({ page }) => {
     '/forgot-password',
     '/reset-password',
     '/accept-invite?token=unchecked-until-submitted',
+    '/verify-email',
+    '/confirm-email?token=unchecked-until-submitted',
   ]) {
     await visit(page, path)
     await expectAccessible(page)
@@ -167,4 +170,11 @@ test("a lapsed organization's screens", async ({ page, browser }) => {
   await expect(memberPage.getByRole('heading', { name: 'Subscription inactive' })).toBeVisible()
   await expectAccessible(memberPage)
   await memberPage.context().close()
+})
+
+test('the screen a new signup sees until they verify their email', async ({ page }) => {
+  await page.goto('/login')
+  await fillLoginForm(page, VERIFY_ADMIN)
+  await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible()
+  await expectAccessible(page)
 })

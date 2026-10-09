@@ -20,6 +20,16 @@ export function getErrorStatus(error: unknown) {
   return isAxiosError(error) ? error.response?.status : undefined
 }
 
+/** The stable `code` the API puts beside `detail` on some refusals, telling
+ * apart two answers with the same status (e.g. `email_unverified`). */
+export function getErrorCode(error: unknown) {
+  const body: unknown = isAxiosError(error) ? error.response?.data : undefined
+  if (body && typeof body === 'object' && 'code' in body && typeof body.code === 'string') {
+    return body.code
+  }
+  return undefined
+}
+
 function toMessage(value: unknown) {
   if (typeof value === 'string') {
     return value

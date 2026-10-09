@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "09c4bb9c-31a2-448e-9c65-6a213c102b95",
     "name": "DocSphere \u2014 Full Demo Flow",
-    "description": "End-to-end walkthrough of DocSphere: org self-signup, invitations (single + bulk), projects, documents (including personal, project-less documents), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
+    "description": "End-to-end walkthrough of DocSphere: org self-signup (with email verification), invitations (single + bulk), projects, documents (including personal, project-less documents), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -69,7 +69,7 @@
                 "signup"
               ]
             },
-            "description": "AllowAny. Creates the Organization + first admin User in one call and logs them in. Throttled at ORG_SIGNUP_THROTTLE_RATE (5/hour) \u2014 don't spam this one during rehearsal.",
+            "description": "AllowAny. Creates the Organization + first admin User in one call and logs them in - unverified: until the link emailed to the admin is opened, everything except reading `me`, verifying, asking for a new link and logging out answers 403 `email_unverified`. The link is printed in the `runserver` console. Throttled at ORG_SIGNUP_THROTTLE_RATE (5/hour) \u2014 don't spam this one during rehearsal.",
             "auth": {
               "type": "noauth"
             },
@@ -112,7 +112,7 @@
           ]
         },
         {
-          "name": "Get Current User (me) - before subscribing",
+          "name": "Get Current User (me) - before verifying and subscribing",
           "request": {
             "method": "GET",
             "header": [],
@@ -128,7 +128,7 @@
                 "me"
               ]
             },
-            "description": "Any signed-in user, reachable WITHOUT an active subscription (unlike almost everything else, which returns 402). A frontend calls this right after login to learn its role and whether the org has paid - here has_active_subscription is false until checkout completes.",
+            "description": "Any signed-in user, reachable before verifying the email and WITHOUT an active subscription (unlike almost everything else, which returns 403 or 402). A frontend calls this right after login to learn whether the email is verified, its role and whether the org has paid - here email_verified and has_active_subscription are both false.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -150,8 +150,145 @@
                   "pm.test('current user returned', () => pm.response.to.have.status(200));",
                   "const data = pm.response.json();",
                   "pm.test('is the org admin', () => pm.expect(data.org_role).to.eql('ADMIN'));",
+                  "pm.test('email not yet verified', () => pm.expect(data.email_verified).to.be.false);",
                   "pm.test('org not yet subscribed', () => pm.expect(data.organization.has_active_subscription).to.be.false);",
                   "pm.environment.set('admin_user_id', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Org Profile - Before Verifying the Email (expect 403)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/profile/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "profile"
+              ]
+            },
+            "description": "A new signup can't do anything until their email is verified: 403 with code `email_unverified`, before the subscription is even checked.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused until the email is verified', () => pm.response.to.have.status(403));",
+                  "pm.test('says why', () => pm.expect(pm.response.json().code).to.eql('email_unverified'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend the Verification Email",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/verification-email/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "verification-email"
+              ]
+            },
+            "description": "Emails the signed-in, unverified user a new link (printed in the `runserver` console). Throttled at EMAIL_VERIFICATION_THROTTLE_RATE.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a new link was sent', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify the Admin's Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/auth/verify-email/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "verify-email"
+              ]
+            },
+            "description": "AllowAny - the link may be opened on another device. Before running it, set `verification_token` from the latest emailed link (`/verify-email?token=...`, printed in the `runserver` console). Opening the same link again changes nothing.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verification_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('email verified', () => pm.response.to.have.status(204));"
                 ]
               }
             }
@@ -1542,6 +1679,64 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('wrong current password rejected', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change Email with a Wrong Current Password (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/email/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "email"
+              ]
+            },
+            "description": "Changing the sign-in email takes the current password, then a link sent to the NEW address (confirmed at /api/v1/users/auth/confirm-email/, which signs the account out everywhere). Shown here only with a wrong password, so the rest of the walkthrough keeps the admin's address.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_email\": \"renamed-{{admin_email}}\",\n  \"current_password\": \"Not-The-Password-1!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wrong current password is refused', () => pm.response.to.have.status(400));",
+                  "pm.test('reported on that field', () => pm.expect(pm.response.json()).to.have.property('current_password'));"
                 ]
               }
             }
@@ -4503,7 +4698,7 @@
           ]
         },
         {
-          "name": "Checkout Before Billing Email Is Set (expect 400)",
+          "name": "Checkout Before the Email Is Verified (expect 403)",
           "request": {
             "method": "POST",
             "header": [
@@ -4524,7 +4719,7 @@
                 "checkout"
               ]
             },
-            "description": "Uses the temp org from the previous request, which has no billing_email set.",
+            "description": "Uses the temp org from the previous request, whose admin hasn't verified their email: refused before anything else is checked, even the missing billing email.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -4552,7 +4747,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('checkout refuses an org with no billing email', () => pm.response.to.have.status(400));"
+                  "pm.test('refused until the email is verified', () => pm.response.to.have.status(403));",
+                  "pm.test('says why', () => pm.expect(pm.response.json().code).to.eql('email_unverified'));"
                 ]
               }
             }

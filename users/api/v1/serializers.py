@@ -13,9 +13,20 @@ from users.constants import (
     MAX_PASSWORD_LENGTH,
     MAX_PENDING_INVITATIONS_PER_ORG,
 )
+from users.email_links import (
+    INVALID_EMAIL_LINK_MESSAGE,
+    InvalidEmailLinkError,
+    read_email_change_token,
+    read_verification_token,
+)
 from users.models import Invitation
-from users.services import create_invitation, find_invitation_conflict
-from users.validators import validate_password_for_field
+from users.services import (
+    EMAIL_IN_USE_MESSAGE,
+    create_invitation,
+    find_invitation_conflict,
+    is_email_in_use,
+)
+from users.validators import validate_current_password, validate_password_for_field
 
 User = get_user_model()
 
@@ -50,10 +61,13 @@ class CurrentUserSerializer(serializers.ModelSerializer):
     organization = OrganizationSummarySerializer(read_only=True, allow_null=True)
     # Always in the response (empty until given); only ever updated partially.
     name = serializers.CharField(max_length=MAX_NAME_LENGTH, allow_blank=True)
+    # False until a new signup follows the link emailed to them; the API
+    # refuses almost everything until then.
+    email_verified = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "email", "name", "org_role", "organization"]
+        fields = ["id", "email", "email_verified", "name", "org_role", "organization"]
         read_only_fields = ["id", "email", "org_role", "organization"]
 
 
@@ -73,10 +87,7 @@ class PasswordChangeSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True)
 
     def validate_current_password(self, value):
-        user = self.context["request"].user
-        if len(value) > MAX_PASSWORD_LENGTH or not user.check_password(value):
-            raise serializers.ValidationError("Current password is incorrect.")
-        return value
+        return validate_current_password(self.context["request"].user, value)
 
     def validate(self, attrs):
         validate_password_for_field(
@@ -186,13 +197,62 @@ class InvitationAcceptSerializer(serializers.Serializer):
         # (e.g. it signed up a new organization), which a new user would clash with.
         if (
             invitation.current_status != InvitationStatus.PENDING
-            or User.objects.filter(email=invitation.email).exists()
+            or User.objects.holding_email().filter(email=invitation.email).exists()
         ):
             raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
 
         validate_password_for_field("password", attrs["password"])
 
         attrs["invitation"] = invitation
+        return attrs
+
+
+class EmailVerificationSerializer(serializers.Serializer):
+    """The token from the link emailed to a new signup."""
+
+    token = serializers.CharField()
+
+    def validate(self, attrs):
+        try:
+            attrs["user"] = read_verification_token(attrs["token"])
+        except InvalidEmailLinkError:
+            raise serializers.ValidationError(
+                {"token": INVALID_EMAIL_LINK_MESSAGE}
+            ) from None
+        return attrs
+
+
+class EmailChangeRequestSerializer(serializers.Serializer):
+    """A signed-in user asks to move their account to another address. Their
+    password proves it's them; the link sent to the new address proves it's
+    theirs too."""
+
+    new_email = serializers.EmailField()
+    current_password = serializers.CharField(write_only=True)
+
+    def validate_new_email(self, value):
+        if value.lower() == self.context["request"].user.email:
+            raise serializers.ValidationError("This is already your email address.")
+        if is_email_in_use(value):
+            raise serializers.ValidationError(EMAIL_IN_USE_MESSAGE)
+        return value
+
+    def validate_current_password(self, value):
+        return validate_current_password(self.context["request"].user, value)
+
+
+class EmailChangeConfirmSerializer(serializers.Serializer):
+    """The token from the link emailed to the new address."""
+
+    token = serializers.CharField()
+
+    def validate(self, attrs):
+        try:
+            attrs["user"], attrs["new_email"] = read_email_change_token(attrs["token"])
+        except InvalidEmailLinkError:
+            raise serializers.ValidationError(
+                {"token": INVALID_EMAIL_LINK_MESSAGE}
+            ) from None
         return attrs
 
 

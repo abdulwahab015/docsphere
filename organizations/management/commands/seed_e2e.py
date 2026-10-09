@@ -3,6 +3,7 @@ import json
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from organizations.factories import (
     OrganizationFactory,
@@ -78,6 +79,10 @@ class Command(BaseCommand):
                 email=user_spec["email"],
                 name=user_spec.get("name", ""),
                 org_role=user_spec["role"],
+                # A signup still waiting on the link emailed to it.
+                email_verified_at=(
+                    timezone.now() if user_spec.get("email_verified", True) else None
+                ),
                 organization=organization,
                 password=password,
             )

@@ -1,4 +1,5 @@
 import { PageHeader } from '@/components/PageHeader'
+import { ChangeEmailForm } from '@/features/account/components/ChangeEmailForm'
 import { ChangePasswordForm } from '@/features/account/components/ChangePasswordForm'
 import { NameForm } from '@/features/account/components/NameForm'
 import { ProfileCard } from '@/features/account/components/ProfileCard'
@@ -10,6 +11,7 @@ export function AccountPage() {
       <div className="flex flex-col gap-6">
         <NameForm />
         <ProfileCard />
+        <ChangeEmailForm />
         <ChangePasswordForm />
       </div>
     </>

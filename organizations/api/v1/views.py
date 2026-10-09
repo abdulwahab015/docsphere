@@ -15,7 +15,8 @@ from subscriptions.services import sync_billing_email
 from users.api.v1.serializers import TokenPairSerializer
 from users.api.v1.tokens import token_pair_response
 from users.choices import OrganizationRole
-from users.permissions import IsOrganizationAdmin
+from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
+from users.tasks import send_verification_email_task
 
 User = get_user_model()
 
@@ -26,7 +27,8 @@ _PROVIDER_ERROR = OpenApiResponse(
 
 class OrganizationSignupAPIView(APIView):
     """Creates an Organization together with its first admin User, atomically,
-    and logs the admin in immediately with a JWT pair."""
+    and logs the admin in immediately with a JWT pair. The admin must follow
+    the link emailed to them before they can do anything else."""
 
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -42,6 +44,7 @@ class OrganizationSignupAPIView(APIView):
         data = serializer.validated_data
 
         with transaction.atomic():
+            User.objects.release_email(data["admin_email"])
             organization = Organization.objects.create(
                 name=data["name"], billing_email=data.get("billing_email")
             )
@@ -52,6 +55,8 @@ class OrganizationSignupAPIView(APIView):
                 organization=organization,
                 org_role=OrganizationRole.ADMIN,
             )
+
+        send_verification_email_task.delay(user.pk)
 
         return token_pair_response(user, status.HTTP_201_CREATED)
 
@@ -66,7 +71,7 @@ class OrganizationProfileAPIView(generics.RetrieveUpdateAPIView):
     is the prerequisite for checkout succeeding at all."""
 
     serializer_class = OrganizationSerializer
-    permission_classes = [IsOrganizationAdmin]
+    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
 
     def get_object(self):
         return self.request.user.organization

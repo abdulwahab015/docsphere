@@ -10,6 +10,7 @@ class UserAdmin(admin.ModelAdmin):
         "name",
         "organization",
         "org_role",
+        "email_verified_at",
         "is_active",
         "is_staff",
     )

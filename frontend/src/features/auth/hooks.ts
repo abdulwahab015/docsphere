@@ -4,14 +4,18 @@ import { useContext, useEffect } from 'react'
 import type { TokenPair } from '@/api/types'
 import {
   acceptInvitation,
+  confirmEmailChange,
   confirmPasswordReset,
   login,
   logout,
   requestPasswordReset,
+  resendVerificationEmail,
   signupOrganization,
+  verifyEmail,
 } from '@/features/auth/api'
 import { authKeys } from '@/features/auth/query-keys'
 import {
+  clearSession,
   endSessionDeliberately,
   loadSession,
   resyncSession,
@@ -86,6 +90,38 @@ export function useConfirmPasswordReset() {
   // The backend revokes every session of that user on a reset, so tabs
   // signed in as them should find out now rather than on their next refresh.
   return useMutation({ mutationFn: confirmPasswordReset, onSuccess: announceSessionChange })
+}
+
+/** Verifies the address from the emailed link. A tab still showing "Check
+ * your email" (often not the one the link opened in) re-reads the session and
+ * lets its user in. */
+export function useVerifyEmail() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: verifyEmail,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: authKeys.currentUser })
+      announceSessionChange()
+    },
+  })
+}
+
+export function useResendVerificationEmail() {
+  return useMutation({ mutationFn: resendVerificationEmail })
+}
+
+/** Moves the account to the address the link was emailed to. The API signs
+ * the account out everywhere, so this tab and the others drop the session
+ * now rather than on their next request. */
+export function useConfirmEmailChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: confirmEmailChange,
+    onSuccess: () => {
+      clearSession(queryClient)
+      announceSessionChange()
+    },
+  })
 }
 
 /** Keeps this tab's session in step with sign-ins and sign-outs in other tabs. */

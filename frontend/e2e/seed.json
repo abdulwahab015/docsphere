@@ -316,6 +316,10 @@
         {
           "email": "member@account.e2e.test",
           "role": "MEMBER"
+        },
+        {
+          "email": "mover@account.e2e.test",
+          "role": "MEMBER"
         }
       ]
     },
@@ -338,6 +342,17 @@
           "name": "Launch",
           "visibility": "PRIVATE",
           "owner": "admin@names.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Verify E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@verify.e2e.test",
+          "role": "ADMIN",
+          "email_verified": false
         }
       ]
     }

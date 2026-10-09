@@ -1,0 +1,5 @@
+Use the link below to make this your DocSphere sign-in email instead of {{ current_email }}:
+
+{{ confirm_url }}
+
+If you didn't ask for this, ignore this email.

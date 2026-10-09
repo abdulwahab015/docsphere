@@ -94,7 +94,7 @@ class OrganizationSignupSerializer(serializers.Serializer):
         return validate_unique_billing_email(value)
 
     def validate_admin_email(self, value):
-        if User.objects.filter(email=value).exists():
+        if User.objects.holding_email().filter(email=value).exists():
             raise serializers.ValidationError("A user with this email already exists.")
         return value
 

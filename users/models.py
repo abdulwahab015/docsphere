@@ -31,6 +31,10 @@ class User(AbstractUser, TimeStampedModel):
     org_role = models.CharField(
         max_length=10, choices=OrganizationRole.choices, default=OrganizationRole.MEMBER
     )
+    # When the person proved they own ``email`` by following a link sent to
+    # it; empty for a signup that hasn't yet. An invitation's link proves it
+    # too, so invited members start verified.
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     username = None
     USERNAME_FIELD = "email"
@@ -40,6 +44,10 @@ class User(AbstractUser, TimeStampedModel):
 
     def __str__(self):
         return self.email
+
+    @property
+    def email_verified(self):
+        return bool(self.email_verified_at)
 
     def get_full_name(self):
         return self.name
