@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { expect, test } from '@playwright/test'
 
 import {
@@ -71,7 +74,7 @@ test.describe('access levels on a document', () => {
     await page.getByLabel('Content').press('ControlOrMeta+s')
 
     await expect(page.getByText('Document saved.')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Make (public|private)/ })).toHaveCount(0)
   })
 
@@ -85,6 +88,7 @@ test.describe('access levels on a document', () => {
     await expect(page.getByText('Viewer', { exact: true })).toBeVisible()
     // Past versions may hold removed text: Viewers see only the current one.
     await expect(page.getByRole('button', { name: 'History' })).toHaveCount(0)
+    await expect(page.getByLabel('Attach a file')).toHaveCount(0)
   })
 
   test('names the project only to readers who can open it', async ({ page }) => {
@@ -128,7 +132,7 @@ test('a personal document: create, publish, delete and restore', async ({ page }
   await page.getByRole('alertdialog').getByRole('button', { name: 'Make public' }).click()
   await expect(page.getByText('Document is now public.')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete document' }).click()
   await expect(page.getByText(`Moved "${title}" to your trash.`)).toBeVisible()
 
@@ -179,13 +183,13 @@ test("deleting a project hides its documents until it's restored", async ({ page
   await createDocument(page, kept)
   await openProject(page, project)
   await createDocument(page, deletedAlone)
-  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete document' }).click()
   await expect(page.getByText(`Moved "${deletedAlone}" to your trash.`)).toBeVisible()
 
   // Deleting the project takes its remaining document with it.
   await openProject(page, project)
-  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
   const confirm = page.getByRole('alertdialog')
   await expect(confirm.getByText(/along with every document filed under it/)).toBeVisible()
   await confirm.getByRole('button', { name: 'Delete project' }).click()
@@ -301,4 +305,44 @@ test('every saved change is kept, and an old version can be restored', async ({ 
   await page.getByRole('button', { name: 'History' }).click()
   await expect(versions).toHaveCount(4)
   await expect(versions.first()).toContainText('Version 4Current')
+})
+
+test('an editor attaches a file, the owner downloads it, and an outsider never reaches it', async ({
+  page,
+  browser,
+}) => {
+  const minutes = new URL('./files/minutes.pdf', import.meta.url)
+  await logIn(page, DOCS_WRITER)
+  await openDocument(page, 'Meeting notes')
+  const documentUrl = page.url()
+  const attachField = page.getByLabel('Attach a file')
+
+  // Recognised by what's in it, not its name.
+  await attachField.setInputFiles(fileURLToPath(new URL('./files/not-really.pdf', import.meta.url)))
+  await expect(attachField).toHaveAccessibleDescription(
+    /This file's content doesn't match its \.pdf name\./,
+  )
+
+  await attachField.setInputFiles(fileURLToPath(minutes))
+  await expect(page.getByText('Attached minutes.pdf.')).toBeVisible()
+  const attachments = page.getByRole('list', { name: 'Attachments' })
+  await expect(attachments).toContainText('minutes.pdf')
+
+  // The document's owner downloads exactly what was attached.
+  const owner = await logInElsewhere(browser, DOCS_ADMIN)
+  await openDocument(owner, 'Meeting notes')
+  const [download] = await Promise.all([
+    owner.waitForEvent('download'),
+    owner.getByRole('button', { name: 'Download minutes.pdf' }).first().click(),
+  ])
+  expect(download.suggestedFilename()).toBe('minutes.pdf')
+  expect(readFileSync(await download.path())).toEqual(readFileSync(minutes))
+  await owner.context().close()
+
+  // A member who can't open the document can't see it or its files.
+  const outsider = await logInElsewhere(browser, DOCS_READER)
+  await outsider.goto(documentUrl)
+  await expect(outsider.getByRole('heading', { name: 'Not found' })).toBeVisible()
+  await expect(outsider.getByRole('list', { name: 'Attachments' })).toHaveCount(0)
+  await outsider.context().close()
 })

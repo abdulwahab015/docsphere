@@ -5,6 +5,9 @@ base.py's own sqlite default, so `make test` needs no database service; CI and
 `make test-pg` point DATABASE_URL at Postgres, the database production uses.
 """
 
+from pathlib import Path
+from tempfile import gettempdir
+
 from core.settings.base import *
 
 DEBUG = False
@@ -36,6 +39,10 @@ PASSWORD_HASHERS = [
 ]
 
 E2E_SEEDING_ENABLED = True
+
+# Attached files from the test suite stay out of the project folder; tests
+# that store files use a temporary MEDIA_ROOT of their own.
+MEDIA_ROOT = config("MEDIA_ROOT", default=str(Path(gettempdir()) / "docsphere-media"))
 
 # The end-to-end API (`make e2e-api`) sends mail with the file-based backend so
 # the browser tests can follow the links in it (invitations, password resets);

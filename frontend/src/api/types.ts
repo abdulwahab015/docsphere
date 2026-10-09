@@ -39,6 +39,8 @@ export type ExcerptSegment = Schemas['ExcerptSegment']
 // A document's history: one entry per revision, without and with its text.
 export type DocumentVersion = Schemas['DocumentVersion']
 export type DocumentVersionDetail = Schemas['DocumentVersionDetail']
+// A file attached to a document, as listed (the file itself is downloaded).
+export type Attachment = Schemas['Attachment']
 export type DocumentCreatePayload = Pick<
   Schemas['DocumentCreate'],
   'title' | 'content' | 'visibility' | 'project'

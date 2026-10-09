@@ -126,7 +126,7 @@ Good to know:
 | Backend on Postgres | `make test-pg` | The same suite on production's database. Row-lock (concurrency) tests run only here; SQLite skips them. |
 | Frontend | `make fe-check` (or `make fe-test`) | Components and pages through the real route table, with the API mocked at the network level (MSW). Coverage at 95% or more. |
 | End-to-end | `make fe-e2e` | A real browser against the real API on a fresh seeded database (API on :8001, app on :3100; your dev servers are untouched). The first run needs `cd frontend && npx playwright install chromium`. It also checks every page for accessibility and phone layout. |
-| Production stack | `make docker-smoke` | Builds the images, starts the whole stack and checks it from outside (health, headers, cookies, background tasks, backup and restore). |
+| Production stack | `make docker-smoke` | Builds the images, starts the whole stack and checks it from outside (health, headers, cookies, background tasks, attachment uploads and storage, backup and restore). |
 
 **Before a pull request**, run `make check`, `make fe-check` and `make fe-e2e`, plus
 `make docker-smoke` if you touched a Dockerfile, compose, nginx or settings. CI runs all of

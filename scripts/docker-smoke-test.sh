@@ -3,7 +3,8 @@
 # from outside, the way the load balancer and a browser reach it: every
 # service healthy with no manual step, the app's files and routes, Django
 # behind the same origin, the refresh cookie's production flags, scheduled
-# tasks reaching the worker, and a backup -> change -> restore round trip.
+# tasks reaching the worker, attached files' upload limit and storage, and a
+# backup -> change -> restore round trip, files included.
 # Needs a .env (a copy of .env.example will do). Stops the stack and deletes
 # its data afterwards, unless KEEP_STACK=1. The read-only checks it shares with
 # any deployment are in scripts/smoke-test.sh.
@@ -52,6 +53,21 @@ organization_count() {
   # shellcheck disable=SC2016 # expanded in the container, from its environment
   "${COMPOSE[@]}" exec -T db sh -c \
     'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT count(*) FROM organizations_organization"'
+}
+
+# Runs a line of Python in the web container's Django shell; prints its output.
+django_shell() {
+  "${COMPOSE[@]}" exec -T web python manage.py shell -v 0 -c "$1" | tr -d '\r'
+}
+
+# Stores a small file the way an attachment is stored; prints its stored name.
+store_file() {
+  django_shell "from django.core.files.base import ContentFile; from django.core.files.storage import default_storage; print(default_storage.save('attachments/smoke/check.txt', ContentFile(b'$1')))"
+}
+
+# Prints a stored file's content, or "missing".
+read_file() {
+  django_shell "from django.core.files.storage import default_storage as s; print(s.open('$1').read().decode() if s.exists('$1') else 'missing')"
 }
 
 # Signs up a new organization through nginx; prints the response's status
@@ -149,6 +165,25 @@ check "the worker runs the renewal reminders" "succeeded" \
   "$(log_line worker "${reminder_task}[$task_id] succeeded")"
 
 echo
+echo "Attached files"
+# As large as a real attachment can be, sent without signing in: Django
+# answering 401 shows nginx let the body through on the upload route.
+large_file=$(mktemp)
+head -c $((9 * 1024 * 1024)) /dev/zero >"$large_file"
+check "nginx lets a file-sized upload through to Django" "401" \
+  "$(status "${VIA_HTTPS[@]}" -X POST -F "file=@$large_file;filename=large.pdf" \
+    "$BASE_URL/api/v1/documents/1/attachments/")"
+check "...on that route only" "413" \
+  "$(status "${VIA_HTTPS[@]}" -X POST -F "file=@$large_file;filename=large.pdf" \
+    "$BASE_URL/api/v1/projects/")"
+rm -f "$large_file"
+stored=$(store_file kept)
+check "web stores files on the media volume" "attachments/smoke/" "$stored"
+"${COMPOSE[@]}" up --detach --force-recreate --no-deps web >/dev/null 2>&1
+wait_for_api
+check "...which keeps them when web is replaced" "kept" "$(read_file "$stored")"
+
+echo
 echo "Backups"
 check "the backup service made one when it started" "docsphere-" \
   "$(log_line backup "docsphere-")"
@@ -157,6 +192,8 @@ backup=$("${COMPOSE[@]}" exec -T backup sh /usr/local/bin/db-backup | tail -1 | 
 check "takes one on request" ".dump" "$backup"
 sign_up after-backup >/dev/null
 check "...after which a new organization is there" "$((before + 1))" "$(organization_count)"
+django_shell "from django.core.files.storage import default_storage; default_storage.delete('$stored')"
+check "...and the attached file is gone" "missing" "$(read_file "$stored")"
 "${COMPOSE[@]}" stop web worker beat flower >/dev/null 2>&1
 "${COMPOSE[@]}" exec -T backup sh /usr/local/bin/db-restore "$backup" >/dev/null
 "${COMPOSE[@]}" start web worker beat flower >/dev/null 2>&1
@@ -165,6 +202,7 @@ wait_for_api
 # The restarted web container has a new address, which nginx must follow.
 check "...and the app answers again through nginx" "200" \
   "$(status "${VIA_HTTPS[@]}" "$BASE_URL/healthz/")"
+check "...with the attached files as they were" "kept" "$(read_file "$stored")"
 
 echo
 if [ "$failures" -gt 0 ]; then

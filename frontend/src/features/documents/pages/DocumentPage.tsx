@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { VisibilityCard } from '@/components/VisibilityCard'
+import { AttachmentsCard } from '@/features/documents/components/AttachmentsCard'
 import { DeleteDocumentButton } from '@/features/documents/components/DeleteDocumentButton'
 import { DocumentEditor } from '@/features/documents/components/DocumentEditor'
 import { DocumentProjectLink } from '@/features/documents/components/DocumentProjectLink'
@@ -110,6 +111,7 @@ function DocumentView({ document }: { document: Document }) {
               </dl>
             </CardContent>
           </Card>
+          <AttachmentsCard document={document} />
           <VisibilityCard
             resourceName="document"
             visibility={document.visibility}

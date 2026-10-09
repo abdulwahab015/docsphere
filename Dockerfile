@@ -29,10 +29,11 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /root/.local /home/app/.local
 COPY --chown=app:app . .
 
-# /home/app/beat holds Celery beat's schedule file; a new volume mounted there
-# starts out owned by app, like the directory.
-RUN mkdir -p /app/staticfiles /home/app/beat \
-    && chown app:app /app/staticfiles /home/app/beat
+# /home/app/beat holds Celery beat's schedule file and /app/media the attached
+# files; a new volume mounted on either starts out owned by app, like the
+# directory.
+RUN mkdir -p /app/staticfiles /home/app/beat /app/media \
+    && chown app:app /app/staticfiles /home/app/beat /app/media
 
 USER app
 

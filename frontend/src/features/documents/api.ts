@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios'
 import { apiClient } from '@/api/client'
 import { HTTP_STATUS } from '@/api/constants'
 import type {
+  Attachment,
   Document,
   DocumentCreatePayload,
   DocumentListItem,
@@ -94,4 +95,44 @@ export async function fetchDocumentVersion(documentId: number, revision: number)
     `${documentPath(documentId)}versions/${revision}/`,
   )
   return data
+}
+
+function attachmentsPath(documentId: number) {
+  return `${documentPath(documentId)}attachments/`
+}
+
+export async function listAttachments(documentId: number, page: number) {
+  const { data } = await apiClient.get<Paginated<Attachment>>(attachmentsPath(documentId), {
+    params: { page },
+  })
+  return data
+}
+
+/** Sends one file, reporting how much of it has gone (0 to 1) as it goes. */
+export async function uploadAttachment(
+  documentId: number,
+  file: File,
+  onProgress: (fraction: number) => void,
+) {
+  const body = new FormData()
+  body.append('file', file)
+  const { data } = await apiClient.post<Attachment>(attachmentsPath(documentId), body, {
+    onUploadProgress: (event) => onProgress(event.total ? event.loaded / event.total : 0),
+  })
+  return data
+}
+
+/** The file's bytes, with the type the API sent. Fetched as an array buffer
+ * and wrapped here rather than as a blob, which the test environment's
+ * XMLHttpRequest can't produce. */
+export async function downloadAttachment(documentId: number, attachmentId: number) {
+  const { data, headers } = await apiClient.get<ArrayBuffer>(
+    `${attachmentsPath(documentId)}${attachmentId}/download/`,
+    { responseType: 'arraybuffer' },
+  )
+  return new Blob([data], { type: String(headers['content-type'] ?? '') })
+}
+
+export async function deleteAttachment(documentId: number, attachmentId: number) {
+  await apiClient.delete(`${attachmentsPath(documentId)}${attachmentId}/`)
 }

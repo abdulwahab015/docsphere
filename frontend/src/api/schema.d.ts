@@ -150,6 +150,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{id}/attachments/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description A document's attached files, newest first, and attaching a new one -
+         *     within the size limit, of an allowed kind (checked by content), and
+         *     within the organization's storage quota.
+         */
+        get: operations["api_v1_documents_attachments_list"];
+        put?: never;
+        /**
+         * @description A document's attached files, newest first, and attaching a new one -
+         *     within the size limit, of an allowed kind (checked by content), and
+         *     within the organization's storage quota.
+         */
+        post: operations["api_v1_documents_attachments_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{id}/attachments/{attachment_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Deletes an attached file, for the document's Editors and Owners. */
+        delete: operations["api_v1_documents_attachments_destroy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{id}/attachments/{attachment_id}/download/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description One attached file, always as a download - never shown in the browser,
+         *     which with ``nosniff`` never runs it either.
+         */
+        get: operations["api_v1_documents_attachments_download_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/documents/{id}/restore/": {
         parameters: {
             query?: never;
@@ -1115,6 +1178,30 @@ export interface components {
             readonly current_period_end: string | null;
             readonly cancel_at_period_end: boolean;
         };
+        /**
+         * @description A file attached to a document, as listed: what it is and who added it.
+         *     The file itself is fetched from its download endpoint.
+         */
+        Attachment: {
+            readonly id: number;
+            readonly name: string;
+            readonly content_type: string;
+            readonly size: number;
+            readonly uploaded_by: number;
+            /** Format: email */
+            readonly uploaded_by_email: string;
+            readonly uploaded_by_name: string;
+            /** Format: date-time */
+            readonly created: string;
+        };
+        /**
+         * @description An upload: at most ``MAX_ATTACHMENT_BYTES``, and one of the allowed
+         *     kinds, recognised from its content (``attachment_content_type``).
+         */
+        AttachmentUpload: {
+            /** Format: uri */
+            file: string;
+        };
         BillingPortalSessionResponse: {
             /** Format: uri */
             portal_url: string;
@@ -1415,6 +1502,21 @@ export interface components {
              *     payment details before Stripe gives up.
              */
             readonly payment_failed: boolean;
+        };
+        PaginatedAttachmentList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=4
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=2
+             */
+            previous?: string | null;
+            results: components["schemas"]["Attachment"][];
         };
         PaginatedDocumentAccessRequestList: {
             /** @example 123 */
@@ -2046,6 +2148,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentAccessRequest"];
+                };
+            };
+        };
+    };
+    api_v1_documents_attachments_list: {
+        parameters: {
+            query?: {
+                /** @description A page number within the paginated result set. */
+                page?: number;
+                /** @description Number of results to return per page. */
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedAttachmentList"];
+                };
+            };
+        };
+    };
+    api_v1_documents_attachments_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["AttachmentUpload"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Attachment"];
+                };
+            };
+            /** @description Too large, not an allowed kind of file, or over the organization's storage quota. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_documents_attachments_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachment_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_documents_attachments_download_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachment_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
                 };
             };
         };
