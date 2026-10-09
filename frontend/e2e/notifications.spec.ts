@@ -47,6 +47,15 @@ test.describe('notifications', () => {
     await expect(member.getByRole('heading', { level: 1, name: 'Bulletin' })).toBeVisible()
     await expect(member.getByLabel('Content')).toBeEditable()
     await expect(bell(member)).toBeVisible()
+
+    // Every notification, now read, is on its own page too. (The menu that
+    // was just used has to finish closing before the bell opens it again.)
+    await expect(member.getByRole('menu')).toHaveCount(0)
+    await bell(member).click()
+    await member.getByRole('menuitem', { name: 'See all notifications' }).click()
+    await expect(
+      member.getByRole('list', { name: 'Notifications' }).getByRole('listitem').first(),
+    ).toHaveText(/^Olive Owner approved your request to edit "Bulletin"/)
     await member.context().close()
   })
 })

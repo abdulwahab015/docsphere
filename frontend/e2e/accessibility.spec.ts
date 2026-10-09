@@ -95,6 +95,7 @@ test.describe("the app's pages", () => {
     '/billing',
     // Seeded shares, including some on private documents the admin can't open.
     '/activity',
+    '/notifications',
     '/no-such-page',
   ]) {
     test(path, async ({ page }) => {
@@ -158,6 +159,11 @@ test('a read-only document, and the menus and dialogs of the shell', async ({ pa
   await expect(page.getByRole('menuitem').first()).toBeVisible()
   await expectAccessible(page, { skipRules: ['region'] })
   await page.keyboard.press('Escape')
+
+  await visit(page, '/notifications')
+  await expect(page.getByRole('list', { name: 'Notifications' })).toBeVisible()
+  await expectAccessible(page)
+  await openDocument(page, 'Findings')
 
   await page.setViewportSize(PHONE)
   await page.getByRole('button', { name: 'Toggle navigation' }).click()

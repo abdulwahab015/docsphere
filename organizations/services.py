@@ -15,12 +15,15 @@ User = get_user_model()
 def schedule_deletion(organization):
     """Deletes ``organization`` as far as its people can tell: everyone is
     signed out, pending invitations stop working and the subscription is
-    cancelled at once. Its admins can restore it until it's purged. If Stripe
-    can't cancel the subscription, nothing changes."""
+    cancelled at once. Its billing email is let go too, for another
+    organization to use; restoring means checking out again, which asks for
+    one. Its admins can restore it until it's purged. If Stripe can't cancel
+    the subscription, nothing changes."""
     with transaction.atomic():
         organization = Organization.objects.select_for_update().get(pk=organization.pk)
         organization.deletion_requested_at = timezone.now()
-        organization.save(update_fields=["deletion_requested_at"])
+        organization.billing_email = None
+        organization.save(update_fields=["deletion_requested_at", "billing_email"])
         Invitation.objects.for_organization(organization).pending().update(
             status=InvitationStatus.REVOKED
         )

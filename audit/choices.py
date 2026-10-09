@@ -18,6 +18,8 @@ class AuditVerb(models.TextChoices):
     INVITATION_REVOKED = "INVITATION_REVOKED", "Invitation revoked"
     INVITATION_ACCEPTED = "INVITATION_ACCEPTED", "Invitation accepted"
     ACCOUNT_DELETED = "ACCOUNT_DELETED", "Account deleted"
+    EXPORT_REQUESTED = "EXPORT_REQUESTED", "Export requested"
+    EXPORT_DOWNLOADED = "EXPORT_DOWNLOADED", "Export downloaded"
     DELETED = "DELETED", "Moved to the trash"
     RESTORED = "RESTORED", "Restored"
     ATTACHMENT_ADDED = "ATTACHMENT_ADDED", "File attached"
@@ -31,3 +33,4 @@ class AuditKind(models.TextChoices):
     MEMBERSHIP = "MEMBERSHIP", "Membership"
     TRASH = "TRASH", "Deletes and restores"
     ATTACHMENTS = "ATTACHMENTS", "Attachments"
+    EXPORTS = "EXPORTS", "Data exports"

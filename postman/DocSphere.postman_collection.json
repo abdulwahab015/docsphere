@@ -6425,7 +6425,7 @@
                 ""
               ]
             },
-            "description": "Holds only what the admin can open; private things are counted, not included. The link works for 7 days.",
+            "description": "Holds only what the admin can open; private things are counted, not included. The link works for 7 days. One export at a time per organization (a second request while one is building is a 400) and ORGANIZATION_EXPORT_THROTTLE_RATE a day for the whole organization (429 after that). A failed build is retried, then the admin is emailed that it failed. Asking and downloading both show in the Activity log.",
             "auth": {
               "type": "bearer",
               "bearer": [

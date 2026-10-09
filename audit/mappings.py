@@ -21,6 +21,7 @@ VERBS_BY_KIND = {
     ),
     AuditKind.TRASH: (AuditVerb.DELETED, AuditVerb.RESTORED),
     AuditKind.ATTACHMENTS: (AuditVerb.ATTACHMENT_ADDED, AuditVerb.ATTACHMENT_DELETED),
+    AuditKind.EXPORTS: (AuditVerb.EXPORT_REQUESTED, AuditVerb.EXPORT_DOWNLOADED),
 }
 
 # Details that describe what's inside a project or document, withheld along

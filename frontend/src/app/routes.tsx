@@ -155,6 +155,13 @@ export const routes: RouteObject[] = [
                         ),
                       },
                       {
+                        path: PATHS.notifications,
+                        lazy: lazyPage(
+                          () => import('@/features/notifications/pages/NotificationsPage'),
+                          (module) => module.NotificationsPage,
+                        ),
+                      },
+                      {
                         path: PATHS.people,
                         lazy: lazyPage(
                           () => import('@/features/people/pages/PeoplePage'),

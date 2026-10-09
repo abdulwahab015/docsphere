@@ -3,13 +3,20 @@ import { ACCESS_LEVEL_LABELS, ORG_ROLE_LABELS, VISIBILITY_LABELS } from '@/lib/a
 import { displayName } from '@/lib/people'
 
 /** The kinds the activity list can be narrowed to, in the order offered. */
-export const ACTIVITY_KINDS: readonly AuditKind[] = ['ACCESS', 'MEMBERSHIP', 'TRASH', 'ATTACHMENTS']
+export const ACTIVITY_KINDS: readonly AuditKind[] = [
+  'ACCESS',
+  'MEMBERSHIP',
+  'TRASH',
+  'ATTACHMENTS',
+  'EXPORTS',
+]
 
 export const ACTIVITY_KIND_LABELS: Record<AuditKind, string> = {
   ACCESS: 'Access',
   MEMBERSHIP: 'Membership',
   TRASH: 'Deletes and restores',
   ATTACHMENTS: 'Attachments',
+  EXPORTS: 'Data exports',
 }
 
 /** Who did it: a person, or - once their account is gone - nobody to name. */
@@ -65,6 +72,8 @@ const DESCRIPTIONS: Record<AuditVerb, (event: AuditEvent) => string> = {
   INVITATION_REVOKED: (event) => `Revoked the invitation to ${event.details.email}`,
   INVITATION_ACCEPTED: () => 'Joined from an invitation',
   ACCOUNT_DELETED: () => 'Deleted their account',
+  EXPORT_REQUESTED: () => "Asked for an export of the organization's data",
+  EXPORT_DOWNLOADED: () => "Downloaded an export of the organization's data",
   DELETED: (event) => `Moved ${resourceName(event)} to the trash`,
   RESTORED: (event) => `Restored ${resourceName(event)} from the trash`,
   ATTACHMENT_ADDED: (event) => `Attached ${attachmentName(event)} to ${resourceName(event)}`,

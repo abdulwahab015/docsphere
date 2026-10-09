@@ -14,21 +14,10 @@ DEBUG = False
 
 LOGGING["loggers"]["core"]["level"] = "WARNING"
 
+# Every scope the app throttles, unthrottled - taken from the base settings,
+# so a new scope can't be forgotten here.
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = dict.fromkeys(
-    (
-        "anon",
-        "user",
-        "login",
-        "invite_accept",
-        "password_reset",
-        "billing_checkout",
-        "billing_portal",
-        "org_signup",
-        "password_change",
-        "email_verification",
-        "email_change",
-    ),
-    "100000/min",
+    REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"], "100000/min"
 )
 
 CELERY_TASK_ALWAYS_EAGER = True

@@ -3,22 +3,46 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.email import email_task, send_templated_mail
-from organizations.constants import EXPORT_LINK_EXPIRY
+from organizations.choices import ExportStatus
+from organizations.constants import (
+    EXPORT_LINK_EXPIRY,
+    EXPORT_MAX_RETRIES,
+    EXPORT_RETRY_BACKOFF_SECONDS,
+)
 from organizations.exports import build_export, make_export_token
 from organizations.models import Organization, OrganizationExport
 from organizations.services import purge_organization
 
-# Where the emailed export link opens, in the app.
+# Where the emailed export link opens, in the app, and where a new one is
+# asked for.
 EXPORT_DOWNLOAD_PATH = "/settings/organization/export"
+ORGANIZATION_SETTINGS_PATH = "/settings/organization"
 
 
-@shared_task
-def build_organization_export_task(export_id):
-    """Builds the .zip an admin asked for, then emails them the link."""
+@shared_task(bind=True, max_retries=EXPORT_MAX_RETRIES)
+def build_organization_export_task(self, export_id):
+    """Builds the .zip an admin asked for, then emails them the link. A
+    failed build is tried again with growing waits; once the retries are
+    used up the export is marked failed - so the admin may ask again - and
+    they're told. The error is raised again either way, so it's reported."""
     export = OrganizationExport.objects.select_related(
         "organization", "requested_by"
     ).get(pk=export_id)
-    build_export(export)
+    try:
+        build_export(export)
+    except Exception as error:
+        if self.request.retries < self.max_retries:
+            raise self.retry(
+                exc=error,
+                countdown=EXPORT_RETRY_BACKOFF_SECONDS * 2**self.request.retries,
+            ) from error
+        export.status = ExportStatus.FAILED
+        export.save(update_fields=["status", "modified"])
+        send_export_failed_email_task.delay(export.pk)
+        raise
+
+    export.status = ExportStatus.READY
+    export.save(update_fields=["status", "modified"])
     send_export_ready_email_task.delay(export.pk)
 
 
@@ -37,6 +61,22 @@ def send_export_ready_email_task(export_id):
                 f"?token={make_export_token(export)}"
             ),
             "days": EXPORT_LINK_EXPIRY.days,
+        },
+        [export.requested_by.email],
+    )
+
+
+@email_task
+def send_export_failed_email_task(export_id):
+    export = OrganizationExport.objects.select_related(
+        "organization", "requested_by"
+    ).get(pk=export_id)
+
+    send_templated_mail(
+        "organizations/email/export_failed",
+        {
+            "organization_name": export.organization.name,
+            "settings_url": f"{settings.FRONTEND_URL}{ORGANIZATION_SETTINGS_PATH}",
         },
         [export.requested_by.email],
     )

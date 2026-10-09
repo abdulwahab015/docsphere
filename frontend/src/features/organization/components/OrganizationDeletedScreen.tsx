@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { actionErrorMessage } from '@/api/errors'
 import type { OrganizationSummary } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { DeleteAccountDialog } from '@/features/account/components/DeleteAccountDialog'
 import { AuthCard } from '@/features/auth/components/AuthCard'
 import { LogoutButton } from '@/features/auth/components/LogoutButton'
 import { useRestoreOrganization } from '@/features/organization/hooks'
@@ -15,7 +16,8 @@ interface OrganizationDeletedScreenProps {
 
 /** What everyone in a deleted organization sees instead of the app, until
  * it's purged: when that happens, and - for its admins - a way to restore
- * it. */
+ * it. Anyone may delete their own account here, which frees their email
+ * address for another organization at once instead of at the purge. */
 export function OrganizationDeletedScreen({
   organization,
   isAdmin,
@@ -35,8 +37,8 @@ export function OrganizationDeletedScreen({
       title="Organization deleted"
       description={
         isAdmin
-          ? `${organization.name} was deleted. It will be removed for good on ${purgeDate}, with everything in it. Until then you can restore it; you'll need to subscribe again.`
-          : `${organization.name} was deleted and will be removed for good on ${purgeDate}. Ask an admin if this is a mistake.`
+          ? `${organization.name} was deleted. It will be removed for good on ${purgeDate}, with everything in it. Until then you can restore it; you'll need to subscribe again. To use your email address elsewhere sooner, delete your account.`
+          : `${organization.name} was deleted and will be removed for good on ${purgeDate}. Ask an admin if this is a mistake. To use your email address elsewhere sooner, delete your account.`
       }
     >
       <div className="flex flex-col gap-2">
@@ -45,6 +47,7 @@ export function OrganizationDeletedScreen({
             Restore organization
           </Button>
         )}
+        <DeleteAccountDialog triggerClassName="w-full" />
         <LogoutButton className="w-full" />
       </div>
     </AuthCard>

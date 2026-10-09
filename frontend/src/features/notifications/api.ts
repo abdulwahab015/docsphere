@@ -3,9 +3,11 @@ import type { Notification, Paginated, UnreadCount } from '@/api/types'
 
 const NOTIFICATIONS_PATH = '/notifications/'
 
-/** The newest page of the signed-in user's notifications. */
-export async function listNotifications() {
-  const { data } = await apiClient.get<Paginated<Notification>>(NOTIFICATIONS_PATH)
+/** A page of the signed-in user's notifications, newest first. */
+export async function listNotifications(page: number) {
+  const { data } = await apiClient.get<Paginated<Notification>>(NOTIFICATIONS_PATH, {
+    params: { page },
+  })
   return data
 }
 

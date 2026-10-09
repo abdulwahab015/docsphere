@@ -17,6 +17,7 @@ export const PATHS = {
   documentDetail: '/documents/:documentId',
   documentTrash: '/documents/trash',
   accessRequests: '/requests',
+  notifications: '/notifications',
   people: '/people',
   activity: '/activity',
   organizationSettings: '/settings/organization',

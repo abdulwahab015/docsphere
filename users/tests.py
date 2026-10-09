@@ -2644,6 +2644,21 @@ class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
+    def test_in_a_deleted_organization_even_its_last_admin_and_only_owner_may_leave(
+        self,
+    ):
+        # The admin is the organization's only admin and the document's only
+        # Owner - but nobody can use either while it waits to be purged.
+        self.org.deletion_requested_at = timezone.now()
+        self.org.save()
+        self.client.force_authenticate(self.admin)
+
+        response = self.delete_account(queries=10)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.deleted_at)
+
     def test_signing_in_is_required(self):
         self.client.force_authenticate(None)
 

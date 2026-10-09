@@ -16,6 +16,8 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from core.permissions import HasActiveSubscription
 from organizations.api.v1.serializers import (
     ExportDownloadSerializer,
@@ -31,6 +33,7 @@ from organizations.exports import (
 from organizations.models import Organization, OrganizationExport
 from organizations.services import cancel_deletion, schedule_deletion
 from organizations.tasks import build_organization_export_task
+from organizations.throttles import OrganizationScopedRateThrottle
 from subscriptions.services import sync_billing_email
 from users.api.v1.serializers import TokenPairSerializer
 from users.api.v1.tokens import token_pair_response
@@ -39,6 +42,11 @@ from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
 from users.tasks import send_verification_email_task
 
 User = get_user_model()
+
+EXPORT_IN_PROGRESS_MESSAGE = (
+    "An export of this organization is already being prepared. We'll email a link "
+    "when it's ready."
+)
 
 _PROVIDER_ERROR = OpenApiResponse(
     description="Stripe couldn't be updated with the new billing email; nothing was saved."
@@ -167,20 +175,32 @@ class OrganizationDeleteCancelAPIView(APIView):
 
 class OrganizationExportCreateAPIView(APIView):
     """An admin asks for an export of the organization: it's built in the
-    background and a download link is emailed to them."""
+    background and a download link is emailed to them. One at a time per
+    organization, checked under a lock on it so two requests at once can't
+    both start one, and a few a day (the ``organization_export`` rate, counted
+    for the whole organization)."""
 
     permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    throttle_classes = [OrganizationScopedRateThrottle]
+    throttle_scope = "organization_export"
 
     @extend_schema(
         request=None,
         responses={
-            202: OpenApiResponse(description="Building; a link will be emailed.")
+            202: OpenApiResponse(description="Building; a link will be emailed."),
+            400: OpenApiResponse(description="One is already being built."),
         },
     )
     def post(self, request):
-        export = OrganizationExport.objects.create(
-            organization=request.user.organization, requested_by=request.user
-        )
+        organization = request.user.organization
+        with transaction.atomic():
+            Organization.objects.select_for_update().get(pk=organization.pk)
+            if OrganizationExport.objects.filter(organization=organization).building():
+                raise ValidationError({"detail": EXPORT_IN_PROGRESS_MESSAGE})
+            export = OrganizationExport.objects.create(
+                organization=organization, requested_by=request.user
+            )
+            AuditEvent.objects.record(request.user, AuditVerb.EXPORT_REQUESTED)
         transaction.on_commit(lambda: build_organization_export_task.delay(export.pk))
 
         return Response(status=status.HTTP_202_ACCEPTED)
@@ -209,9 +229,10 @@ class OrganizationExportDownloadAPIView(APIView):
         export = get_object_or_404(
             OrganizationExport.objects.filter(
                 organization=request.user.organization
-            ).exclude(file=""),
+            ).ready(),
             pk=export_id,
         )
+        AuditEvent.objects.record(request.user, AuditVerb.EXPORT_DOWNLOADED)
 
         response = FileResponse(
             export.file.open("rb"),
