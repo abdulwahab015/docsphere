@@ -152,6 +152,12 @@ test('a read-only document, and the menus and dialogs of the shell', async ({ pa
   await expectAccessible(page, { viewports: [DESKTOP], skipRules: ['region'] })
   await page.keyboard.press('Escape')
 
+  // The reader was shared documents when seeded, so the bell lists them.
+  await page.getByRole('button', { name: /^Notifications/ }).click()
+  await expect(page.getByRole('menuitem').first()).toBeVisible()
+  await expectAccessible(page, { skipRules: ['region'] })
+  await page.keyboard.press('Escape')
+
   await page.setViewportSize(PHONE)
   await page.getByRole('button', { name: 'Toggle navigation' }).click()
   await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible()

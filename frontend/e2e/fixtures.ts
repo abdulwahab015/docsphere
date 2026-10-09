@@ -65,6 +65,8 @@ export const ACCOUNT_MOVER = seededAccount('mover@account.e2e.test')
 export const NAMES_ADMIN = seededAccount('admin@names.e2e.test')
 export const NAMES_MEMBER = seededAccount('member@names.e2e.test')
 export const ACTIVITY_ADMIN = seededAccount('admin@activity.e2e.test')
+export const NOTIFY_OWNER = seededAccount('owner@notify.e2e.test')
+export const NOTIFY_MEMBER = seededAccount('member@notify.e2e.test')
 // Signed up, but hasn't followed the verification link yet.
 export const VERIFY_ADMIN = seededAccount('admin@verify.e2e.test')
 

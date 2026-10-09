@@ -3,21 +3,7 @@ from django.utils import timezone
 
 from audit.constants import AUDIT_EVENT_RETENTION
 from audit.mappings import VERBS_BY_KIND
-from projects.choices import Visibility
-from projects.models import DocumentPermission, ProjectPermission
-
-
-def _can_open(resource_field, permission_model, user):
-    """Whether ``user`` could open the event's project or document - if it
-    were live: public, or shared with them at any level. An explicit grant
-    always counts, whatever it allows."""
-    return models.Q(**{f"{resource_field}__visibility": Visibility.PUBLIC}) | models.Q(
-        models.Exists(
-            permission_model.objects.filter(
-                **{resource_field: models.OuterRef(resource_field)}, user=user
-            )
-        )
-    )
+from projects.permissions import openable_by
 
 
 class AuditEventQuerySet(models.QuerySet):
@@ -53,11 +39,11 @@ class AuditEventQuerySet(models.QuerySet):
             resource_visible=models.Case(
                 models.When(
                     project__isnull=False,
-                    then=_can_open("project", ProjectPermission, user),
+                    then=openable_by(user, "project"),
                 ),
                 models.When(
                     document__isnull=False,
-                    then=_can_open("document", DocumentPermission, user),
+                    then=openable_by(user, "document"),
                 ),
                 default=models.Value(True),
                 output_field=models.BooleanField(),

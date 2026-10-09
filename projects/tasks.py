@@ -1,6 +1,6 @@
 from core.email import email_task, send_templated_mail
-from projects.choices import AccessLevel
 from projects.models import DocumentAccessRequest, DocumentPermission, ProjectPermission
+from projects.permissions import active_owners
 
 
 def _send_share_notification(
@@ -56,11 +56,7 @@ def send_access_request_created_email_task(access_request_id):
         "document", "requested_by"
     ).get(pk=access_request_id)
     owner_emails = list(
-        DocumentPermission.objects.filter(
-            document=access_request.document,
-            access_level=AccessLevel.OWNER,
-            user__is_active=True,
-        ).values_list("user__email", flat=True)
+        active_owners(access_request.document).values_list("email", flat=True)
     )
     if not owner_emails:
         return

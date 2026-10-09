@@ -45,4 +45,7 @@ export const server = setupServer(
   http.get(apiUrl('/documents/:documentId/attachments/'), () =>
     HttpResponse.json({ count: 0, results: [] }),
   ),
+  // The top bar's bell asks for unread notifications on every signed-in page.
+  http.get(apiUrl('/notifications/unread-count/'), () => HttpResponse.json({ count: 0 })),
+  http.get(apiUrl('/notifications/'), () => HttpResponse.json({ count: 0, results: [] })),
 )

@@ -77,6 +77,10 @@ export type SoleOwnership = Schemas['SoleOwnership']
 // One entry in the organization's activity (the audit log), for admins.
 export type AuditEvent = Schemas['AuditEvent']
 export type AuditVerb = Schemas['AuditVerbEnum']
+// What the bell in the top bar lists: something the signed-in user should know about.
+export type Notification = Schemas['Notification']
+export type NotificationVerb = Schemas['NotificationVerbEnum']
+export type UnreadCount = Schemas['UnreadCount']
 export type AuditKind = NonNullable<
   NonNullable<operations['api_v1_audit_events_list']['parameters']['query']>['kind']
 >

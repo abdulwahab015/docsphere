@@ -591,7 +591,7 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(41):
+        with self.assertNumQueries(43):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
@@ -608,7 +608,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertFalse(User.objects.get(email="new@unpaid.test").email_verified)
 
     def test_seeds_plans_and_billing_emails(self):
-        with self.assertNumQueries(41):
+        with self.assertNumQueries(43):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         prices = Price.objects.order_by("stripe_data__unit_amount")
@@ -627,7 +627,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
 
     def test_seeds_projects_with_their_owner_and_shares(self):
-        with self.assertNumQueries(41):
+        with self.assertNumQueries(43):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         roadmap = Project.objects.get(name="Roadmap")
@@ -658,7 +658,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(archived.visibility, "PUBLIC")
 
     def test_seeds_documents_in_projects_or_personal(self):
-        with self.assertNumQueries(41):
+        with self.assertNumQueries(43):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         spec = Document.objects.get(title="Spec")
@@ -678,6 +678,22 @@ class SeedE2ECommandTests(TestCase):
                     "owner@projects.test",
                     "ACCESS_GRANTED",
                     "editor@projects.test",
+                    {"access_level": "VIEWER"},
+                )
+            ],
+        )
+        # ...and tells the person shared with, as sharing in the app does.
+        self.assertEqual(
+            list(
+                spec.notifications.values_list(
+                    "recipient__email", "actor__email", "verb", "details"
+                )
+            ),
+            [
+                (
+                    "editor@projects.test",
+                    "owner@projects.test",
+                    "ACCESS_GRANTED",
                     {"access_level": "VIEWER"},
                 )
             ],

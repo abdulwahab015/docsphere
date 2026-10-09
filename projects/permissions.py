@@ -1,9 +1,13 @@
+from django.contrib.auth import get_user_model
+from django.db import models
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from projects.choices import AccessLevel, Action, Visibility
 from projects.mappings import ALLOWED_ACTIONS
 from projects.models import DocumentPermission, ProjectPermission
+
+User = get_user_model()
 
 
 def resolve_access(user, document):
@@ -30,6 +34,34 @@ def resolve_access(user, document):
         return AccessLevel.VIEWER
 
     return None
+
+
+def openable_by(user, resource_field):
+    """A condition on rows that refer to a project or document through
+    ``resource_field`` (``"project"`` or ``"document"``): whether ``user``
+    could open it, were it live - it's public, or shared with them at any
+    level. The same rule as :func:`resolve_access`, for a whole queryset;
+    callers scope to the user's organization."""
+    permission_model = {"project": ProjectPermission, "document": DocumentPermission}[
+        resource_field
+    ]
+    return models.Q(**{f"{resource_field}__visibility": Visibility.PUBLIC}) | models.Q(
+        models.Exists(
+            permission_model.objects.filter(
+                **{resource_field: models.OuterRef(resource_field)}, user=user
+            )
+        )
+    )
+
+
+def active_owners(document):
+    """The active users who hold Owner on ``document``: the ones who answer
+    its access requests."""
+    return User.objects.filter(
+        document_permissions__document=document,
+        document_permissions__access_level=AccessLevel.OWNER,
+        is_active=True,
+    )
 
 
 def access_permits(access_level, action):

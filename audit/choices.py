@@ -30,10 +30,3 @@ class AuditKind(models.TextChoices):
     MEMBERSHIP = "MEMBERSHIP", "Membership"
     TRASH = "TRASH", "Deletes and restores"
     ATTACHMENTS = "ATTACHMENTS", "Attachments"
-
-
-class ResourceKind(models.TextChoices):
-    """What kind of resource an event is about, when it's about one."""
-
-    PROJECT = "PROJECT", "Project"
-    DOCUMENT = "DOCUMENT", "Document"

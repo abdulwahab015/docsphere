@@ -411,6 +411,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's own notifications, newest first. */
+        get: operations["api_v1_notifications_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/{id}/read/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Marks one of the caller's notifications read; anyone else's is a
+         *     404. Reading it again changes nothing.
+         */
+        post: operations["api_v1_notifications_read_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/read-all/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Marks every one of the caller's notifications read. */
+        post: operations["api_v1_notifications_read_all_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/unread-count/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description How many of the caller's notifications are unread - what the app
+         *     polls for its badge.
+         */
+        get: operations["api_v1_notifications_unread_count_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/profile/": {
         parameters: {
             query?: never;
@@ -1529,6 +1603,37 @@ export interface components {
         Logout: {
             refresh?: string;
         };
+        /**
+         * @description One notification for its recipient. A project or document they can no
+         *     longer open (access taken away, or made private) is left unnamed and
+         *     unlinked. Needs a queryset annotated by ``with_resource_access``.
+         */
+        Notification: {
+            readonly id: number;
+            /** Format: date-time */
+            readonly created: string;
+            readonly verb: components["schemas"]["NotificationVerbEnum"];
+            readonly read: boolean;
+            /** Format: email */
+            readonly actor_email: string | null;
+            readonly actor_name: string | null;
+            readonly resource_kind: (components["schemas"]["ResourceKindEnum"] | components["schemas"]["NullEnum"]) | null;
+            readonly resource_id: number | null;
+            readonly resource_name: string | null;
+            readonly details: components["schemas"]["NotificationDetails"];
+        };
+        NotificationDetails: {
+            access_level?: components["schemas"]["AccessLevelEnum"];
+        };
+        /**
+         * @description * `ACCESS_GRANTED` - Shared with you
+         *     * `ACCESS_CHANGED` - Your access changed
+         *     * `ACCESS_REQUESTED` - Edit access requested
+         *     * `ACCESS_REQUEST_APPROVED` - Your request was approved
+         *     * `ACCESS_REQUEST_DENIED` - Your request was denied
+         * @enum {string}
+         */
+        NotificationVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REQUESTED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED";
         /** @enum {unknown} */
         NullEnum: null;
         /**
@@ -1697,6 +1802,21 @@ export interface components {
              */
             previous?: string | null;
             results: components["schemas"]["InvitationCreate"][];
+        };
+        PaginatedNotificationList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=4
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?page=2
+             */
+            previous?: string | null;
+            results: components["schemas"]["Notification"][];
         };
         PaginatedPriceList: {
             /** @example 123 */
@@ -1950,6 +2070,9 @@ export interface components {
         TokenRefresh: {
             readonly access: string;
             refresh: string;
+        };
+        UnreadCount: {
+            count: number;
         };
         /**
          * @description Minimal roster entry visible to every org member - just enough to pick
@@ -2601,6 +2724,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaginatedDocumentList"];
+                };
+            };
+        };
+    };
+    api_v1_notifications_list: {
+        parameters: {
+            query?: {
+                /** @description A page number within the paginated result set. */
+                page?: number;
+                /** @description Number of results to return per page. */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedNotificationList"];
+                };
+            };
+        };
+    };
+    api_v1_notifications_read_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_notifications_read_all_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All marked read. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_notifications_unread_count_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadCount"];
                 };
             };
         };
