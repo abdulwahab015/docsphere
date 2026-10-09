@@ -1,5 +1,6 @@
 import contextlib
 import json
+import re
 import threading
 import time
 import zipfile
@@ -49,6 +50,7 @@ from organizations.exports import (
     INVALID_EXPORT_LINK_MESSAGE,
     build_export,
     make_export_token,
+    read_export_token,
 )
 from organizations.factories import (
     OrganizationFactory,
@@ -588,7 +590,14 @@ class SeedE2ECommandTests(TestCase):
                 "name": "Overdue Org",
                 "subscribed": True,
                 "subscription_status": "past_due",
-                "users": [{"email": "admin@overdue.test", "role": "ADMIN"}],
+                "require_two_factor": True,
+                "users": [
+                    {
+                        "email": "admin@overdue.test",
+                        "role": "ADMIN",
+                        "two_factor_secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+                    }
+                ],
             },
             {
                 "name": "Project Org",
@@ -657,6 +666,13 @@ class SeedE2ECommandTests(TestCase):
         self.assertTrue(admin.check_password("Seed-Pass-123!"))
         self.assertTrue(admin.email_verified)
         self.assertFalse(User.objects.get(email="new@unpaid.test").email_verified)
+        # Two-factor sign-in, on for one account and required by its organization.
+        self.assertFalse(admin.two_factor_enabled)
+        self.assertFalse(paid.require_two_factor)
+        self.assertTrue(overdue.require_two_factor)
+        with_app = User.objects.get(email="admin@overdue.test")
+        self.assertTrue(with_app.two_factor_enabled)
+        self.assertEqual(with_app.totp_secret, "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
 
     def test_seeds_plans_and_billing_emails(self):
         with self.assertNumQueries(43):
@@ -1030,10 +1046,12 @@ class OrganizationExportTests(
             [(self.admin.pk, AuditVerb.EXPORT_REQUESTED)],
         )
         self.assertEqual(mail.outbox[0].to, ["ada@acme.test"])
-        self.assertIn(
-            f"/settings/organization/export?token={make_export_token(export)}",
-            mail.outbox[0].body,
-        )
+        # The link's token names this export (read back rather than signed
+        # again: a token carries the second it was signed in).
+        token = re.search(
+            r"/settings/organization/export\?token=(\S+)", mail.outbox[0].body
+        ).group(1)
+        self.assertEqual(read_export_token(token), export.pk)
 
     def test_it_holds_only_what_the_admin_can_open(self):
         shared = DocumentFactory(

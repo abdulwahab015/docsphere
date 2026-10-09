@@ -488,6 +488,62 @@
           "role": "ADMIN"
         }
       ]
+    },
+    {
+      "name": "Two-Factor E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@twofactor.e2e.test",
+          "role": "ADMIN",
+          "two_factor_secret": "T2GSU2G4A56GZWPAGAZNB6KKHBRUMQTG"
+        },
+        {
+          "email": "phone@twofactor.e2e.test",
+          "role": "MEMBER",
+          "two_factor_secret": "QCZ5AEYYFVW7MRQ7DTXEHFUR7SVTHZDQ"
+        },
+        {
+          "email": "setup@twofactor.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "codes@twofactor.e2e.test",
+          "role": "MEMBER",
+          "two_factor_secret": "ZLO555PHF7UC7JTPHSCBE55UUXQ2NUVS"
+        }
+      ]
+    },
+    {
+      "name": "Required E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@required.e2e.test",
+          "role": "ADMIN",
+          "two_factor_secret": "HWXROCBKIY57FGY4JIOMWLYR24M7OSYC"
+        },
+        {
+          "email": "member@required.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Held E2E",
+      "subscribed": true,
+      "require_two_factor": true,
+      "users": [
+        {
+          "email": "admin@held.e2e.test",
+          "role": "ADMIN",
+          "two_factor_secret": "JO3JM6QKRBTEW6JYS6KENN5BMZW3AQ5F"
+        },
+        {
+          "email": "member@held.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
     }
   ]
 }

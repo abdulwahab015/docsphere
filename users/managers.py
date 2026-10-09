@@ -23,6 +23,11 @@ class InvitationQuerySet(models.QuerySet):
 InvitationManager = models.Manager.from_queryset(InvitationQuerySet)
 
 
+class RecoveryCodeQuerySet(models.QuerySet):
+    def unused(self):
+        return self.filter(used_at__isnull=True)
+
+
 class UserQuerySet(models.QuerySet):
     def unverified_past_expiry(self):
         """Accounts that signed up without verifying their address within

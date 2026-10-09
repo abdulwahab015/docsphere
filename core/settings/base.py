@@ -179,6 +179,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
         "users.permissions.HasVerifiedEmail",
+        "users.permissions.MeetsTwoFactorRequirement",
         "core.permissions.HasActiveSubscription",
     ),
     "DEFAULT_PAGINATION_CLASS": "core.paginations.PageNumberPagination",
@@ -191,6 +192,7 @@ REST_FRAMEWORK = {
         "anon": config("ANON_THROTTLE_RATE"),
         "user": config("USER_THROTTLE_RATE"),
         "login": config("LOGIN_THROTTLE_RATE"),
+        "two_factor_login": config("TWO_FACTOR_LOGIN_THROTTLE_RATE"),
         "invite_accept": config("INVITE_ACCEPT_THROTTLE_RATE"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
         "billing_checkout": config("BILLING_CHECKOUT_THROTTLE_RATE"),

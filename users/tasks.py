@@ -92,6 +92,24 @@ def send_email_changed_notice_task(old_email, new_email):
     )
 
 
+@email_task
+def send_two_factor_reset_email_task(user_id, admin_id):
+    """Sent when an admin turns off someone's two-factor sign-in, so they
+    find out if they didn't ask for it."""
+    user = User.objects.get(pk=user_id)
+    admin = User.objects.get(pk=admin_id)
+
+    send_templated_mail(
+        "users/email/two_factor_reset",
+        {
+            "admin_name": admin.name_and_email,
+            "email": user.email,
+            "account_url": f"{settings.FRONTEND_URL}/settings/account",
+        },
+        [user.email],
+    )
+
+
 @shared_task
 def remove_unverified_accounts_task():
     """Daily: deletes signups that never verified their address in time,

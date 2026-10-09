@@ -12,10 +12,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useChangeRole, useDeactivateUser, useSoleOwnership } from '@/features/team/hooks'
+import {
+  useChangeRole,
+  useDeactivateUser,
+  useResetTwoFactor,
+  useSoleOwnership,
+} from '@/features/team/hooks'
 import { displayName } from '@/lib/people'
 
-type PendingAction = 'role' | 'deactivate'
+type PendingAction = 'role' | 'two-factor' | 'deactivate'
 
 function countOf(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
@@ -34,12 +39,14 @@ function soleOwnershipWarning({ projects, documents }: SoleOwnership) {
   return `They're the only Owner of ${owned.join(' and ')}. Nobody can change who has access to those until they're reactivated.`
 }
 
-/** An admin's menu for one member: switch them between admin and member, or
- * deactivate them - each confirmed first. Admins can't do either to
+/** An admin's menu for one member: switch them between admin and member,
+ * reset their two-factor sign-in (when it's on), or deactivate them - each
+ * confirmed first. Admins can't do either to
  * themselves (the API refuses), so the caller leaves this out of their row. */
 export function MemberActions({ member }: { member: UserDetail }) {
   const [confirming, setConfirming] = useState<PendingAction | null>(null)
   const changeRole = useChangeRole()
+  const resetTwoFactor = useResetTwoFactor()
   const deactivate = useDeactivateUser()
   const soleOwnership = useSoleOwnership(member.id, { enabled: confirming === 'deactivate' })
   const ownershipWarning = soleOwnership.data && soleOwnershipWarning(soleOwnership.data)
@@ -64,6 +71,15 @@ export function MemberActions({ member }: { member: UserDetail }) {
       },
     )
 
+  const resetMemberTwoFactor = () =>
+    resetTwoFactor.mutate(member.id, {
+      onSuccess: () => {
+        toast.success(`Reset ${who}'s two-factor sign-in.`)
+        close()
+      },
+      onError: reportFailure(`Couldn't reset ${who}'s two-factor sign-in.`),
+    })
+
   const deactivateMember = () =>
     deactivate.mutate(member.id, {
       onSuccess: () => {
@@ -85,6 +101,11 @@ export function MemberActions({ member }: { member: UserDetail }) {
           <DropdownMenuItem onSelect={() => setConfirming('role')}>
             {isAdmin ? 'Make member' : 'Make admin'}
           </DropdownMenuItem>
+          {member.two_factor_enabled && (
+            <DropdownMenuItem onSelect={() => setConfirming('two-factor')}>
+              Reset two-factor sign-in
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirming('deactivate')}>
             Deactivate
           </DropdownMenuItem>
@@ -102,6 +123,16 @@ export function MemberActions({ member }: { member: UserDetail }) {
         confirmLabel={isAdmin ? 'Make member' : 'Make admin'}
         onConfirm={switchRole}
         isPending={changeRole.isPending}
+      />
+      <ConfirmDialog
+        open={confirming === 'two-factor'}
+        onOpenChange={close}
+        title={`Reset ${who}'s two-factor sign-in?`}
+        description="For someone who lost their phone and their recovery codes. They'll log in with their password alone until they set it up again, and they'll be emailed that you did this."
+        confirmLabel="Reset"
+        destructive
+        onConfirm={resetMemberTwoFactor}
+        isPending={resetTwoFactor.isPending}
       />
       <ConfirmDialog
         open={confirming === 'deactivate'}

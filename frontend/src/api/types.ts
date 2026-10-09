@@ -6,10 +6,14 @@ export type CurrentUser = Schemas['CurrentUser']
 export type CurrentUserUpdatePayload = Pick<Schemas['PatchedCurrentUser'], 'name'>
 export type OrgRole = Schemas['OrgRoleEnum']
 export type OrganizationSummary = Schemas['OrganizationSummary']
-export type Organization = Schemas['Organization']
+// The API always returns `require_two_factor`; the schema marks it optional
+// only because of its model default (see `Project.visibility`).
+export type Organization = Omit<Schemas['Organization'], 'require_two_factor'> & {
+  require_two_factor: boolean
+}
 export type OrganizationUpdatePayload = Pick<
   Schemas['PatchedOrganization'],
-  'name' | 'billing_email'
+  'name' | 'billing_email' | 'require_two_factor'
 >
 export type ActiveSubscription = Schemas['ActiveSubscription']
 export type Price = Schemas['Price']
@@ -58,6 +62,16 @@ export type AccessRequest = Schemas['DocumentAccessRequest']
 export type AccessRequestStatus = Schemas['DocumentAccessRequestStatusEnum']
 export type TokenPair = Schemas['TokenPair']
 export type LoginPayload = Schemas['Login']
+// A login answers with a token pair, or - for an account with two-factor
+// sign-in on - a token for the code step.
+export type LoginResult = Schemas['LoginResult']
+export type TwoFactorChallenge = Schemas['TwoFactorChallenge']
+export type TwoFactorLoginPayload = Schemas['TwoFactorLogin']
+export type TwoFactorStatus = Schemas['TwoFactorStatus']
+export type TwoFactorSetup = Schemas['TwoFactorSetup']
+export type TwoFactorConfirmPayload = Schemas['TwoFactorConfirm']
+export type RecoveryCodes = Schemas['RecoveryCodes']
+export type CurrentPasswordPayload = Schemas['CurrentPassword']
 export type OrganizationSignupPayload = Schemas['OrganizationSignup']
 export type PasswordResetRequestPayload = Schemas['PasswordResetRequest']
 export type PasswordResetConfirmPayload = Schemas['PasswordResetConfirm']

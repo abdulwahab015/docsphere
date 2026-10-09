@@ -35,6 +35,7 @@ from users.constants import (
 )
 from users.models import Invitation
 from users.tasks import send_invitation_email_task
+from users.two_factor import clear_two_factor
 
 User = get_user_model()
 
@@ -269,7 +270,7 @@ def delete_account(user):
     what they wrote keeps an author, but without their name, email address
     or password, and it can never sign in or be reactivated. Their access,
     pending requests, notifications and sessions go with it, and the address
-    is free for someone else.
+    is free for someone else. So does their two-factor key.
 
     Refused for the organization's last active admin and for the only active
     Owner of anything, checked under a lock on the organization so two
@@ -291,6 +292,7 @@ def delete_account(user):
             requested_by=user, status=AccessRequestStatus.PENDING
         ).delete()
         Notification.objects.filter(recipient=user).delete()
+        clear_two_factor(user)
         blacklist_outstanding_tokens(user)
         AuditEvent.objects.record(user, AuditVerb.ACCOUNT_DELETED)
 

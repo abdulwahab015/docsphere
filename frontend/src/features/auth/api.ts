@@ -5,14 +5,21 @@ import type {
   EmailVerificationPayload,
   InvitationAcceptPayload,
   LoginPayload,
+  LoginResult,
   OrganizationSignupPayload,
   PasswordResetConfirmPayload,
   PasswordResetRequestPayload,
   TokenPair,
+  TwoFactorLoginPayload,
 } from '@/api/types'
 
 export async function login(payload: LoginPayload) {
-  const { data } = await apiClient.post<TokenPair>('/users/auth/login/', payload)
+  const { data } = await apiClient.post<LoginResult>('/users/auth/login/', payload)
+  return data
+}
+
+export async function loginWithTwoFactor(payload: TwoFactorLoginPayload) {
+  const { data } = await apiClient.post<TokenPair>('/users/auth/login/two-factor/', payload)
   return data
 }
 

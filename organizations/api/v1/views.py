@@ -38,7 +38,11 @@ from subscriptions.services import sync_billing_email
 from users.api.v1.serializers import TokenPairSerializer
 from users.api.v1.tokens import token_pair_response
 from users.choices import OrganizationRole
-from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
+from users.permissions import (
+    HasVerifiedEmail,
+    IsOrganizationAdmin,
+    MeetsTwoFactorRequirement,
+)
 from users.tasks import send_verification_email_task
 
 User = get_user_model()
@@ -99,7 +103,11 @@ class OrganizationProfileAPIView(generics.RetrieveUpdateAPIView):
     is the prerequisite for checkout succeeding at all."""
 
     serializer_class = OrganizationSerializer
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+    ]
 
     def get_object(self):
         return self.request.user.organization
@@ -122,7 +130,11 @@ class OrganizationDeleteAPIView(APIView):
     admin restores it. Reachable without a subscription, so a lapsed
     organization can leave too."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+    ]
 
     @extend_schema(
         request=OrganizationDeletionSerializer,
@@ -154,7 +166,11 @@ class OrganizationDeleteCancelAPIView(APIView):
     """An admin restores their deleted organization before it's purged. Its
     subscription stays cancelled."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+    ]
 
     @extend_schema(
         request=None,
@@ -180,7 +196,12 @@ class OrganizationExportCreateAPIView(APIView):
     both start one, and a few a day (the ``organization_export`` rate, counted
     for the whole organization)."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
     throttle_classes = [OrganizationScopedRateThrottle]
     throttle_scope = "organization_export"
 
@@ -210,7 +231,12 @@ class OrganizationExportDownloadAPIView(APIView):
     """Downloads an export from the token in its emailed link, for an admin
     of its organization, while the link hasn't expired."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(
         parameters=[OpenApiParameter("token", str, required=True)],

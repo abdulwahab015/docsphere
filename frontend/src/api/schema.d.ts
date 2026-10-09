@@ -957,6 +957,28 @@ export interface paths {
         patch: operations["api_v1_users_role_partial_update"];
         trace?: never;
     };
+    "/api/v1/users/{id}/two-factor/reset/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description An admin turns off two-factor sign-in for a member who lost their
+         *     authenticator app and recovery codes, so they can sign in with their
+         *     password alone (and set it up again). The member is emailed, so they
+         *     find out if they didn't ask for it.
+         */
+        post: operations["api_v1_users_two_factor_reset_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/auth/confirm-email/": {
         parameters: {
             query?: never;
@@ -988,11 +1010,35 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * @description Email/password → JWT pair, with a tight per-IP rate limit on top of the
-         *     global anon throttle to blunt credential stuffing. Also sets the refresh
-         *     token as an HttpOnly cookie.
+         * @description Email/password → JWT pair (and the refresh token as an HttpOnly
+         *     cookie), with a tight per-IP rate limit on top of the global anon
+         *     throttle to blunt credential stuffing. For an account with two-factor
+         *     sign-in on, the password alone signs nobody in: the answer is a
+         *     short-lived token for ``TwoFactorLoginAPIView`` instead.
          */
         post: operations["api_v1_users_auth_login_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/auth/login/two-factor/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description The second step of signing in to an account with two-factor sign-in
+         *     on: the token from the password step and a code from the authenticator
+         *     app (or a recovery code) → JWT pair and cookie. Limited per account, so
+         *     codes can't be guessed from many addresses at once.
+         */
+        post: operations["api_v1_users_auth_login_two_factor_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1318,6 +1364,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/me/two-factor/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Whether the signed-in user signs in with two-factor, and how many
+         *     recovery codes they have left. Open to someone whose organization
+         *     requires two-factor before they've set it up.
+         */
+        get: operations["api_v1_users_me_two_factor_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/two-factor/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Turns two-factor sign-in on once a code from the app proves it holds
+         *     the new key, and returns the first recovery codes - the only time
+         *     they're shown.
+         */
+        post: operations["api_v1_users_me_two_factor_confirm_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/two-factor/disable/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Turns the signed-in user's two-factor sign-in off, confirmed with
+         *     their password - unless their organization requires it.
+         */
+        post: operations["api_v1_users_me_two_factor_disable_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/two-factor/recovery-codes/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description A new set of recovery codes, confirmed with the password; the old set
+         *     stops working.
+         */
+        post: operations["api_v1_users_me_two_factor_recovery_codes_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/two-factor/setup/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Starts setting up two-factor sign-in: a new authenticator key for the
+         *     app to read. Nothing changes at sign-in until a code confirms it, and
+         *     starting again replaces an unconfirmed key.
+         */
+        post: operations["api_v1_users_me_two_factor_setup_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/me/verification-email/": {
         parameters: {
             query?: never;
@@ -1460,13 +1609,16 @@ export interface components {
          *     * `ACCOUNT_DELETED` - Account deleted
          *     * `EXPORT_REQUESTED` - Export requested
          *     * `EXPORT_DOWNLOADED` - Export downloaded
+         *     * `TWO_FACTOR_ENABLED` - Two-factor sign-in turned on
+         *     * `TWO_FACTOR_DISABLED` - Two-factor sign-in turned off
+         *     * `TWO_FACTOR_RESET` - Two-factor sign-in reset
          *     * `DELETED` - Moved to the trash
          *     * `RESTORED` - Restored
          *     * `ATTACHMENT_ADDED` - File attached
          *     * `ATTACHMENT_DELETED` - File deleted
          * @enum {string}
          */
-        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "ACCOUNT_DELETED" | "EXPORT_REQUESTED" | "EXPORT_DOWNLOADED" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
+        AuditVerbEnum: "ACCESS_GRANTED" | "ACCESS_CHANGED" | "ACCESS_REVOKED" | "VISIBILITY_CHANGED" | "ACCESS_REQUEST_APPROVED" | "ACCESS_REQUEST_DENIED" | "ROLE_CHANGED" | "MEMBER_DEACTIVATED" | "MEMBER_REACTIVATED" | "INVITATION_SENT" | "INVITATION_RESENT" | "INVITATION_REVOKED" | "INVITATION_ACCEPTED" | "ACCOUNT_DELETED" | "EXPORT_REQUESTED" | "EXPORT_DOWNLOADED" | "TWO_FACTOR_ENABLED" | "TWO_FACTOR_DISABLED" | "TWO_FACTOR_RESET" | "DELETED" | "RESTORED" | "ATTACHMENT_ADDED" | "ATTACHMENT_DELETED";
         BillingPortalSessionResponse: {
             /** Format: uri */
             portal_url: string;
@@ -1479,6 +1631,13 @@ export interface components {
             checkout_url: string;
         };
         /**
+         * @description A sensitive change to your own account: your password proves it's
+         *     really you.
+         */
+        CurrentPassword: {
+            current_password: string;
+        };
+        /**
          * @description The requesting user's own identity, role and organization - what a
          *     client needs after login to decide which screens to offer. The name is
          *     the only part they may change themselves.
@@ -1488,6 +1647,7 @@ export interface components {
             /** Format: email */
             readonly email: string;
             readonly email_verified: boolean;
+            readonly two_factor_enabled: boolean;
             name: string;
             readonly org_role: components["schemas"]["OrgRoleEnum"];
             readonly organization: components["schemas"]["OrganizationSummary"] | null;
@@ -1708,13 +1868,16 @@ export interface components {
          */
         InvitationCreateStatusEnum: "PENDING" | "ACCEPTED" | "EXPIRED" | "REVOKED";
         /**
-         * @description Adds a password-length ceiling before the (unvalidated) auth check, so an
-         *     oversized string can't reach the password hasher.
+         * @description Checks an email and password, leaving the sign-in itself to the view
+         *     (``self.user``): it may need a code next. Adds a password-length ceiling
+         *     before the (unvalidated) auth check, so an oversized string can't reach
+         *     the password hasher.
          */
         Login: {
             email: string;
             password: string;
         };
+        LoginResult: components["schemas"]["TokenPair"] | components["schemas"]["TwoFactorChallenge"];
         /** @description ``refresh`` may be omitted when the refresh-token cookie carries it. */
         Logout: {
             refresh?: string;
@@ -1766,6 +1929,7 @@ export interface components {
             readonly id: number;
             name: string;
             billing_email?: (string) | null;
+            require_two_factor?: boolean;
             readonly active_subscription: components["schemas"]["ActiveSubscription"] | null;
             /** Format: date-time */
             readonly created: string;
@@ -1804,6 +1968,7 @@ export interface components {
             readonly payment_failed: boolean;
             /** Format: date-time */
             readonly deletion_scheduled_for: string | null;
+            readonly require_two_factor: boolean;
         };
         PaginatedAttachmentList: {
             /** @example 123 */
@@ -2042,6 +2207,7 @@ export interface components {
             /** Format: email */
             readonly email?: string;
             readonly email_verified?: boolean;
+            readonly two_factor_enabled?: boolean;
             name?: string;
             readonly org_role?: components["schemas"]["OrgRoleEnum"];
             readonly organization?: components["schemas"]["OrganizationSummary"] | null;
@@ -2081,6 +2247,7 @@ export interface components {
             readonly id?: number;
             name?: string;
             billing_email?: (string) | null;
+            require_two_factor?: boolean;
             readonly active_subscription?: components["schemas"]["ActiveSubscription"] | null;
             /** Format: date-time */
             readonly created?: string;
@@ -2157,6 +2324,10 @@ export interface components {
             readonly user_name: string;
             readonly access_level: components["schemas"]["AccessLevelEnum"];
         };
+        /** @description Shown once: only their hashes are kept. */
+        RecoveryCodes: {
+            recovery_codes: string[];
+        };
         /**
          * @description * `PROJECT` - Project
          *     * `DOCUMENT` - Document
@@ -2193,6 +2364,37 @@ export interface components {
             readonly access: string;
             refresh: string;
         };
+        /**
+         * @description The password was right and the account signs in with two-factor:
+         *     send this token back with a code to finish signing in.
+         */
+        TwoFactorChallenge: {
+            two_factor_token: string;
+        };
+        /** @description A code from the app, proving it holds the new key. */
+        TwoFactorConfirm: {
+            otp: string;
+        };
+        /**
+         * @description The code step of signing in: a code from the authenticator app, or a
+         *     recovery code, for the account the token was issued to.
+         */
+        TwoFactorLogin: {
+            two_factor_token: string;
+            otp: string;
+        };
+        /**
+         * @description A new authenticator key: the app reads ``otpauth_uri`` from a QR code,
+         *     or the person types ``secret`` in.
+         */
+        TwoFactorSetup: {
+            secret: string;
+            otpauth_uri: string;
+        };
+        TwoFactorStatus: {
+            enabled: boolean;
+            recovery_codes_left: number;
+        };
         UnreadCount: {
             count: number;
         };
@@ -2207,8 +2409,9 @@ export interface components {
             readonly name: string;
         };
         /**
-         * @description Adds role and join-date - admin-only, for actual user management
-         *     rather than picking a share target.
+         * @description Adds role, join date and whether they sign in with two-factor -
+         *     admin-only, for actual user management rather than picking a share
+         *     target.
          */
         UserDetail: {
             readonly id: number;
@@ -2218,6 +2421,7 @@ export interface components {
             readonly org_role: components["schemas"]["OrgRoleEnum"];
             /** Format: date-time */
             readonly created: string;
+            readonly two_factor_enabled: boolean;
         };
         /**
          * @description * `PRIVATE` - Private
@@ -2242,7 +2446,7 @@ export interface operations {
                 /** @description Only events before this time (ISO 8601). */
                 before?: string;
                 /** @description Only this kind. */
-                kind?: "ACCESS" | "ATTACHMENTS" | "EXPORTS" | "MEMBERSHIP" | "TRASH";
+                kind?: "ACCESS" | "ATTACHMENTS" | "EXPORTS" | "MEMBERSHIP" | "TRASH" | "TWO_FACTOR";
                 /** @description A page number within the paginated result set. */
                 page?: number;
                 /** @description Number of results to return per page. */
@@ -3645,6 +3849,40 @@ export interface operations {
             };
         };
     };
+    api_v1_users_two_factor_reset_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Two-factor sign-in is off. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not on, or your own account. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such active user in your organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     api_v1_users_auth_confirm_email_create: {
         parameters: {
             query?: never;
@@ -3696,8 +3934,47 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Login"];
+                    "application/json": components["schemas"]["LoginResult"];
                 };
+            };
+            /** @description Wrong email or password. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_users_auth_login_two_factor_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFactorLogin"];
+                "application/x-www-form-urlencoded": components["schemas"]["TwoFactorLogin"];
+                "multipart/form-data": components["schemas"]["TwoFactorLogin"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenPair"];
+                };
+            };
+            /** @description The code didn't work, or the sign-in expired. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -4161,6 +4438,146 @@ export interface operations {
                 };
             };
             /** @description Wrong current password, or new password rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_users_me_two_factor_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorStatus"];
+                };
+            };
+        };
+    };
+    api_v1_users_me_two_factor_confirm_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFactorConfirm"];
+                "application/x-www-form-urlencoded": components["schemas"]["TwoFactorConfirm"];
+                "multipart/form-data": components["schemas"]["TwoFactorConfirm"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            /** @description Wrong code, setup not started, or already on. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_users_me_two_factor_disable_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurrentPassword"];
+                "application/x-www-form-urlencoded": components["schemas"]["CurrentPassword"];
+                "multipart/form-data": components["schemas"]["CurrentPassword"];
+            };
+        };
+        responses: {
+            /** @description Two-factor sign-in is off. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wrong password, not on, or the organization requires it. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_users_me_two_factor_recovery_codes_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurrentPassword"];
+                "application/x-www-form-urlencoded": components["schemas"]["CurrentPassword"];
+                "multipart/form-data": components["schemas"]["CurrentPassword"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            /** @description Wrong password, or not on. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_users_me_two_factor_setup_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorSetup"];
+                };
+            };
+            /** @description Two-factor sign-in is already on. */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -76,6 +76,7 @@ class Command(BaseCommand):
             billing_email=spec.get("billing_email"),
             # Deleted by its admin, waiting to be purged.
             deletion_requested_at=timezone.now() if spec.get("deleted") else None,
+            require_two_factor=spec.get("require_two_factor", False),
         )
         if spec["subscribed"]:
             StripeSubscriptionFactory(
@@ -91,6 +92,11 @@ class Command(BaseCommand):
                 # A signup still waiting on the link emailed to it.
                 email_verified_at=(
                     timezone.now() if user_spec.get("email_verified", True) else None
+                ),
+                # Signs in with codes from an authenticator app holding this key.
+                totp_secret=user_spec.get("two_factor_secret", ""),
+                two_factor_enabled_at=(
+                    timezone.now() if user_spec.get("two_factor_secret") else None
                 ),
                 organization=organization,
                 password=password,

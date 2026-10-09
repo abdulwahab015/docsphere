@@ -171,6 +171,21 @@ describe('handleSessionError', () => {
     expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(true)
   })
 
+  it('re-reads the session when the organization starts requiring two-factor sign-in', async () => {
+    const queryClient = createTestQueryClient()
+    queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())
+
+    handleSessionError(
+      queryClient,
+      await errorWithStatus(403, {
+        detail: 'Your organization requires two-factor sign-in. Set it up to continue.',
+        code: 'two_factor_required',
+      }),
+    )
+
+    expect(queryClient.getQueryState(authKeys.currentUser)?.isInvalidated).toBe(true)
+  })
+
   it('re-reads the session when the organization was deleted', async () => {
     const queryClient = createTestQueryClient()
     queryClient.setQueryData(authKeys.currentUser, buildCurrentUser())

@@ -9,6 +9,8 @@ the body carries no token.
 """
 
 from django.conf import settings
+from django.contrib.auth.models import update_last_login
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -50,3 +52,11 @@ def token_pair_response(user, status_code):
     )
     set_refresh_cookie(response, refresh)
     return response
+
+
+def sign_in_response(user):
+    """Signs ``user`` in with their credentials, recording when, and returns
+    a fresh pair."""
+    if jwt_settings.UPDATE_LAST_LOGIN:
+        update_last_login(None, user)
+    return token_pair_response(user, status.HTTP_200_OK)

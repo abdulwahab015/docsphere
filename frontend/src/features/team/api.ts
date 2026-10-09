@@ -33,6 +33,12 @@ export async function deactivateUser(userId: number) {
   await apiClient.delete(`${userPath(userId)}deactivate/`)
 }
 
+/** Turns off a member's two-factor sign-in (they lost their phone and
+ * recovery codes); they're emailed about it. */
+export async function resetTwoFactor(userId: number) {
+  await apiClient.post(`${userPath(userId)}two-factor/reset/`)
+}
+
 /** What deactivating the user would leave with no active Owner. Counts only:
  * the admin may not be able to see those projects and documents. */
 export async function getSoleOwnership(userId: number) {

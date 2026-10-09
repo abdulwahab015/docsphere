@@ -15,8 +15,9 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from audit.choices import AuditVerb
 from audit.models import AuditEvent
@@ -24,6 +25,7 @@ from core.permissions import HasActiveSubscription
 from users.api.v1.serializers import (
     INVALID_INVITATION_MESSAGE,
     AccountDeletionSerializer,
+    CurrentPasswordSerializer,
     CurrentUserSerializer,
     EmailChangeConfirmSerializer,
     EmailChangeRequestSerializer,
@@ -37,7 +39,13 @@ from users.api.v1.serializers import (
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    RecoveryCodesSerializer,
     TokenPairSerializer,
+    TwoFactorChallengeSerializer,
+    TwoFactorConfirmSerializer,
+    TwoFactorLoginSerializer,
+    TwoFactorSetupSerializer,
+    TwoFactorStatusSerializer,
     UserDetailSerializer,
     UserSerializer,
 )
@@ -45,11 +53,16 @@ from users.api.v1.tokens import (
     clear_refresh_cookie,
     refresh_token_from,
     set_refresh_cookie,
+    sign_in_response,
     token_pair_response,
 )
 from users.choices import InvitationStatus, OrganizationRole
 from users.models import Invitation
-from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
+from users.permissions import (
+    HasVerifiedEmail,
+    IsOrganizationAdmin,
+    MeetsTwoFactorRequirement,
+)
 from users.services import (
     EMAIL_IN_USE_MESSAGE,
     blacklist_outstanding_tokens,
@@ -66,10 +79,23 @@ from users.tasks import (
     send_email_changed_notice_task,
     send_invitation_email_task,
     send_password_reset_email_task,
+    send_two_factor_reset_email_task,
     send_verification_email_task,
+)
+from users.throttles import TwoFactorLoginThrottle
+from users.two_factor import (
+    clear_two_factor,
+    enable_two_factor,
+    issue_recovery_codes,
+    make_login_token,
+    provisioning_uri,
+    start_setup,
 )
 
 User = get_user_model()
+
+TWO_FACTOR_ALREADY_ON_MESSAGE = "Two-factor sign-in is already on."
+TWO_FACTOR_NOT_ON_MESSAGE = "Two-factor sign-in isn't on."
 
 
 def _organization_users(request):
@@ -92,19 +118,69 @@ def _get_pending_invitation(request, pk):
     return invitation
 
 
-class LoginView(TokenObtainPairView):
-    """Email/password → JWT pair, with a tight per-IP rate limit on top of the
-    global anon throttle to blunt credential stuffing. Also sets the refresh
-    token as an HttpOnly cookie."""
+class LoginView(APIView):
+    """Email/password → JWT pair (and the refresh token as an HttpOnly
+    cookie), with a tight per-IP rate limit on top of the global anon
+    throttle to blunt credential stuffing. For an account with two-factor
+    sign-in on, the password alone signs nobody in: the answer is a
+    short-lived token for ``TwoFactorLoginAPIView`` instead."""
 
-    serializer_class = LoginSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
 
-    def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
-        set_refresh_cookie(response, response.data["refresh"])
-        return response
+    def get_authenticate_header(self, request):
+        """A wrong password is a 401 (DRF turns it into a 403 without this
+        header), as from SimpleJWT's own login view."""
+        return f'{jwt_settings.AUTH_HEADER_TYPES[0]} realm="api"'
+
+    @extend_schema(
+        request=LoginSerializer,
+        responses={
+            200: PolymorphicProxySerializer(
+                component_name="LoginResult",
+                serializers=[TokenPairSerializer, TwoFactorChallengeSerializer],
+                resource_type_field_name=None,
+            ),
+            401: OpenApiResponse(description="Wrong email or password."),
+        },
+    )
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = serializer.user
+
+        if user.two_factor_enabled:
+            return Response({"two_factor_token": make_login_token(user)})
+        return sign_in_response(user)
+
+
+class TwoFactorLoginAPIView(APIView):
+    """The second step of signing in to an account with two-factor sign-in
+    on: the token from the password step and a code from the authenticator
+    app (or a recovery code) → JWT pair and cookie. Limited per account, so
+    codes can't be guessed from many addresses at once."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [TwoFactorLoginThrottle]
+    throttle_scope = "two_factor_login"
+
+    @extend_schema(
+        request=TwoFactorLoginSerializer,
+        responses={
+            200: TokenPairSerializer,
+            400: OpenApiResponse(
+                description="The code didn't work, or the sign-in expired."
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = TwoFactorLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        return sign_in_response(serializer.user)
 
 
 class CookieTokenRefreshView(TokenRefreshView):
@@ -137,7 +213,7 @@ class CurrentUserAPIView(generics.RetrieveUpdateAPIView):
     def get_permissions(self):
         if self.request.method in SAFE_METHODS:
             return [IsAuthenticated()]
-        return [IsAuthenticated(), HasVerifiedEmail()]
+        return [IsAuthenticated(), HasVerifiedEmail(), MeetsTwoFactorRequirement()]
 
     def get_object(self):
         return self.request.user
@@ -149,7 +225,7 @@ class AccountDeleteAPIView(APIView):
     without a subscription, so a member of a lapsed organization can still
     leave."""
 
-    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+    permission_classes = [IsAuthenticated, HasVerifiedEmail, MeetsTwoFactorRequirement]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "password_change"
 
@@ -174,6 +250,159 @@ class AccountDeleteAPIView(APIView):
         response = Response(status=status.HTTP_204_NO_CONTENT)
         clear_refresh_cookie(response)
         return response
+
+
+class TwoFactorStatusAPIView(APIView):
+    """Whether the signed-in user signs in with two-factor, and how many
+    recovery codes they have left. Open to someone whose organization
+    requires two-factor before they've set it up."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+
+    @extend_schema(responses=TwoFactorStatusSerializer)
+    def get(self, request):
+        user = request.user
+        status_data = {
+            "enabled": user.two_factor_enabled,
+            "recovery_codes_left": user.recovery_codes.unused().count(),
+        }
+        return Response(TwoFactorStatusSerializer(status_data).data)
+
+
+class TwoFactorSetupAPIView(APIView):
+    """Starts setting up two-factor sign-in: a new authenticator key for the
+    app to read. Nothing changes at sign-in until a code confirms it, and
+    starting again replaces an unconfirmed key."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+
+    @extend_schema(
+        request=None,
+        responses={
+            200: TwoFactorSetupSerializer,
+            400: OpenApiResponse(description="Two-factor sign-in is already on."),
+        },
+    )
+    def post(self, request):
+        user = request.user
+        if user.two_factor_enabled:
+            raise ValidationError({"detail": TWO_FACTOR_ALREADY_ON_MESSAGE})
+
+        start_setup(user)
+
+        return Response(
+            TwoFactorSetupSerializer(
+                {"secret": user.totp_secret, "otpauth_uri": provisioning_uri(user)}
+            ).data
+        )
+
+
+class TwoFactorConfirmAPIView(APIView):
+    """Turns two-factor sign-in on once a code from the app proves it holds
+    the new key, and returns the first recovery codes - the only time
+    they're shown."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+
+    @extend_schema(
+        request=TwoFactorConfirmSerializer,
+        responses={
+            200: RecoveryCodesSerializer,
+            400: OpenApiResponse(
+                description="Wrong code, setup not started, or already on."
+            ),
+        },
+    )
+    def post(self, request):
+        user = request.user
+        if user.two_factor_enabled:
+            raise ValidationError({"detail": TWO_FACTOR_ALREADY_ON_MESSAGE})
+        if not user.totp_secret:
+            raise ValidationError(
+                {"detail": "Start setting up two-factor sign-in first."}
+            )
+        serializer = TwoFactorConfirmSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            recovery_codes = enable_two_factor(user)
+            AuditEvent.objects.record(user, AuditVerb.TWO_FACTOR_ENABLED)
+
+        return Response(
+            RecoveryCodesSerializer({"recovery_codes": recovery_codes}).data
+        )
+
+
+class TwoFactorDisableAPIView(APIView):
+    """Turns the signed-in user's two-factor sign-in off, confirmed with
+    their password - unless their organization requires it."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail, MeetsTwoFactorRequirement]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_change"
+
+    @extend_schema(
+        request=CurrentPasswordSerializer,
+        responses={
+            204: OpenApiResponse(description="Two-factor sign-in is off."),
+            400: OpenApiResponse(
+                description="Wrong password, not on, or the organization "
+                "requires it."
+            ),
+        },
+    )
+    def post(self, request):
+        user = request.user
+        if not user.two_factor_enabled:
+            raise ValidationError({"detail": TWO_FACTOR_NOT_ON_MESSAGE})
+        if user.organization_id and user.organization.require_two_factor:
+            raise ValidationError(
+                {
+                    "detail": "Your organization requires two-factor sign-in, "
+                    "so it can't be turned off."
+                }
+            )
+        serializer = CurrentPasswordSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            clear_two_factor(user)
+            AuditEvent.objects.record(user, AuditVerb.TWO_FACTOR_DISABLED)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class RecoveryCodesRegenerateAPIView(APIView):
+    """A new set of recovery codes, confirmed with the password; the old set
+    stops working."""
+
+    permission_classes = [IsAuthenticated, HasVerifiedEmail, MeetsTwoFactorRequirement]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_change"
+
+    @extend_schema(
+        request=CurrentPasswordSerializer,
+        responses={
+            200: RecoveryCodesSerializer,
+            400: OpenApiResponse(description="Wrong password, or not on."),
+        },
+    )
+    def post(self, request):
+        user = request.user
+        if not user.two_factor_enabled:
+            raise ValidationError({"detail": TWO_FACTOR_NOT_ON_MESSAGE})
+        serializer = CurrentPasswordSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        return Response(
+            RecoveryCodesSerializer({"recovery_codes": issue_recovery_codes(user)}).data
+        )
 
 
 class EmailVerificationResendAPIView(APIView):
@@ -233,7 +462,7 @@ class EmailChangeRequestAPIView(APIView):
     confirm it is emailed to the new address, and nothing changes until it's
     followed."""
 
-    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+    permission_classes = [IsAuthenticated, HasVerifiedEmail, MeetsTwoFactorRequirement]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "email_change"
 
@@ -317,7 +546,12 @@ class UserListAPIView(generics.ListAPIView):
     response includes ``org_role``/``created`` - a regular member only needs
     an id and email to pick a share target."""
 
-    permission_classes = [IsAuthenticated, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsAuthenticated,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
     filter_backends = [SearchFilter]
     search_fields = ["email", "name"]
 
@@ -341,7 +575,12 @@ class InvitationListCreateAPIView(generics.ListCreateAPIView):
     """Lists and creates invitations, scoped to the requesting admin's organization."""
 
     serializer_class = InvitationCreateSerializer
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     def get_queryset(self):
         return (
@@ -359,7 +598,12 @@ class InvitationBulkCreateAPIView(APIView):
     """Creates invitations in bulk from an uploaded .xlsx file of email
     addresses, scoped to the requesting admin's organization."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(
         request={
@@ -557,7 +801,12 @@ class DeactivateUserAPIView(generics.DestroyAPIView):
     Cross-organization targets are indistinguishable from missing ones.
     """
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     def get_queryset(self):
         return _organization_users(self.request)
@@ -582,7 +831,7 @@ class PasswordChangeAPIView(APIView):
     hold is revoked - other devices are signed out - and a fresh pair is
     returned so the current session carries on."""
 
-    permission_classes = [IsAuthenticated, HasVerifiedEmail]
+    permission_classes = [IsAuthenticated, HasVerifiedEmail, MeetsTwoFactorRequirement]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "password_change"
 
@@ -616,7 +865,12 @@ class OrganizationRoleUpdateAPIView(APIView):
     role, and changes are made one at a time by admins who still are one, so
     the organization always keeps an admin."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(
         request=OrganizationRoleSerializer,
@@ -659,7 +913,12 @@ class DeactivatedUserListAPIView(generics.ListAPIView):
     deactivated ones: they can never come back."""
 
     serializer_class = UserDetailSerializer
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
     filter_backends = [SearchFilter]
     search_fields = ["email", "name"]
 
@@ -675,7 +934,12 @@ class ReactivateUserAPIView(APIView):
     """Reverses a deactivation within the requesting admin's organization.
     An already-active, deleted or cross-organization user is a 404."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(request=None, responses={200: UserDetailSerializer})
     def post(self, request, pk):
@@ -699,7 +963,12 @@ class InvitationRevokeAPIView(APIView):
     """Revokes a pending invitation so its link stops working. The record is
     kept (status ``REVOKED``) rather than deleted."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(
         request=None,
@@ -726,7 +995,12 @@ class InvitationResendAPIView(APIView):
     can be resent too - unless the address has joined, or been sent a newer
     invitation, since."""
 
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
 
     @extend_schema(
         request=None,
@@ -754,3 +1028,50 @@ class InvitationResendAPIView(APIView):
         send_invitation_email_task.delay(invitation.pk)
 
         return Response(InvitationCreateSerializer(invitation).data)
+
+
+class TwoFactorResetAPIView(APIView):
+    """An admin turns off two-factor sign-in for a member who lost their
+    authenticator app and recovery codes, so they can sign in with their
+    password alone (and set it up again). The member is emailed, so they
+    find out if they didn't ask for it."""
+
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
+
+    @extend_schema(
+        request=None,
+        responses={
+            204: OpenApiResponse(description="Two-factor sign-in is off."),
+            400: OpenApiResponse(description="Not on, or your own account."),
+            404: OpenApiResponse(
+                description="No such active user in your organization."
+            ),
+        },
+    )
+    def post(self, request, pk):
+        if pk == request.user.pk:
+            raise ValidationError(
+                {
+                    "detail": "Turn off your own two-factor sign-in from your "
+                    "account settings."
+                }
+            )
+        member = get_object_or_404(
+            _organization_users(request).filter(is_active=True), pk=pk
+        )
+        if not member.two_factor_enabled:
+            raise ValidationError({"detail": TWO_FACTOR_NOT_ON_MESSAGE})
+
+        with transaction.atomic():
+            clear_two_factor(member)
+            AuditEvent.objects.record(
+                request.user, AuditVerb.TWO_FACTOR_RESET, target_user=member
+            )
+        send_two_factor_reset_email_task.delay(member.pk, request.user.pk)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

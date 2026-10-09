@@ -12,6 +12,7 @@ import {
   listInvitations,
   reactivateUser,
   resendInvitation,
+  resetTwoFactor,
   revokeInvitation,
 } from '@/features/team/api'
 import { teamKeys } from '@/features/team/query-keys'
@@ -95,4 +96,8 @@ export function useDeactivateUser() {
 
 export function useReactivateUser() {
   return useMembershipMutation(reactivateUser)
+}
+
+export function useResetTwoFactor() {
+  return useMembershipMutation(resetTwoFactor)
 }

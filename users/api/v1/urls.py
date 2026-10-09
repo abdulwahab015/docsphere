@@ -22,6 +22,13 @@ from users.api.v1.views import (
     PasswordResetConfirmAPIView,
     PasswordResetRequestAPIView,
     ReactivateUserAPIView,
+    RecoveryCodesRegenerateAPIView,
+    TwoFactorConfirmAPIView,
+    TwoFactorDisableAPIView,
+    TwoFactorLoginAPIView,
+    TwoFactorResetAPIView,
+    TwoFactorSetupAPIView,
+    TwoFactorStatusAPIView,
     UserListAPIView,
 )
 
@@ -36,12 +43,38 @@ urlpatterns = [
         EmailVerificationResendAPIView.as_view(),
         name="user_verification_email_resend",
     ),
+    path("me/two-factor/", TwoFactorStatusAPIView.as_view(), name="user_two_factor"),
+    path(
+        "me/two-factor/setup/",
+        TwoFactorSetupAPIView.as_view(),
+        name="user_two_factor_setup",
+    ),
+    path(
+        "me/two-factor/confirm/",
+        TwoFactorConfirmAPIView.as_view(),
+        name="user_two_factor_confirm",
+    ),
+    path(
+        "me/two-factor/disable/",
+        TwoFactorDisableAPIView.as_view(),
+        name="user_two_factor_disable",
+    ),
+    path(
+        "me/two-factor/recovery-codes/",
+        RecoveryCodesRegenerateAPIView.as_view(),
+        name="user_two_factor_recovery_codes",
+    ),
     path(
         "deactivated/",
         DeactivatedUserListAPIView.as_view(),
         name="user_deactivated_list",
     ),
     path("auth/login/", LoginView.as_view(), name="auth_login"),
+    path(
+        "auth/login/two-factor/",
+        TwoFactorLoginAPIView.as_view(),
+        name="auth_login_two_factor",
+    ),
     path("auth/refresh/", CookieTokenRefreshView.as_view(), name="auth_refresh"),
     path("auth/logout/", LogoutAPIView.as_view(), name="auth_logout"),
     path(
@@ -98,6 +131,11 @@ urlpatterns = [
         "<int:pk>/reactivate/",
         ReactivateUserAPIView.as_view(),
         name="user_reactivate",
+    ),
+    path(
+        "<int:pk>/two-factor/reset/",
+        TwoFactorResetAPIView.as_view(),
+        name="user_two_factor_reset",
     ),
     path(
         "<int:pk>/role/",

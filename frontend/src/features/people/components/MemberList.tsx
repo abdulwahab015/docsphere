@@ -26,10 +26,11 @@ import { SECONDARY_COLUMN } from '@/lib/table-columns'
 import { cn } from '@/lib/utils'
 
 const LOADING_ROWS = 5
-const ADMIN_COLUMN_COUNT = 4
+const ADMIN_COLUMN_COUNT = 5
 
-/** The organization's active members. Admins also get each member's role and
- * join date (the API only sends those to admins), and a menu to manage them. */
+/** The organization's active members. Admins also get each member's role,
+ * join date and whether they use two-factor sign-in (the API only sends those
+ * to admins), and a menu to manage them. */
 export function MemberList() {
   const user = useSignedInMember()
   const { page, search, setPage, setSearch } = useListParams()
@@ -63,6 +64,7 @@ export function MemberList() {
                     <>
                       <TableHead>Role</TableHead>
                       <TableHead className={SECONDARY_COLUMN}>Joined</TableHead>
+                      <TableHead className={SECONDARY_COLUMN}>Two-factor</TableHead>
                       <TableHead>
                         <span className="sr-only">Actions</span>
                       </TableHead>
@@ -109,6 +111,9 @@ function MemberRow({ person, isYou }: { person: RosterUser; isYou: boolean }) {
           <TableCell>{ORG_ROLE_LABELS[person.org_role]}</TableCell>
           <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
             {formatDate(person.created)}
+          </TableCell>
+          <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
+            {person.two_factor_enabled ? 'On' : 'Off'}
           </TableCell>
           <TableCell className="text-right">
             {!isYou && <MemberActions member={person} />}

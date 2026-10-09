@@ -9,6 +9,7 @@ import { RequireActiveSubscription } from '@/features/auth/components/RequireAct
 import { RequireAuth } from '@/features/auth/components/RequireAuth'
 import { RequireGuest } from '@/features/auth/components/RequireGuest'
 import { RequireOrgAdmin } from '@/features/auth/components/RequireOrgAdmin'
+import { RequireTwoFactor } from '@/features/auth/components/RequireTwoFactor'
 import { RequireVerifiedEmail } from '@/features/auth/components/RequireVerifiedEmail'
 import { RouteErrorPage } from '@/pages/RouteErrorPage'
 
@@ -89,130 +90,135 @@ export const routes: RouteObject[] = [
           {
             element: <RequireVerifiedEmail />,
             children: [
-              // Stripe Checkout's return addresses: reached before the subscription is
-              // active (the webhook confirming it may still be on its way).
               {
-                path: PATHS.billingSuccess,
-                lazy: lazyPage(
-                  () => import('@/features/billing/pages/CheckoutSuccessPage'),
-                  (module) => module.CheckoutSuccessPage,
-                ),
-              },
-              {
-                path: PATHS.billingCancel,
-                lazy: lazyPage(
-                  () => import('@/features/billing/pages/CheckoutCancelPage'),
-                  (module) => module.CheckoutCancelPage,
-                ),
-              },
-              {
-                element: <RequireActiveSubscription />,
+                element: <RequireTwoFactor />,
                 children: [
+                  // Stripe Checkout's return addresses: reached before the subscription is
+                  // active (the webhook confirming it may still be on its way).
                   {
-                    element: <AppLayout />,
+                    path: PATHS.billingSuccess,
+                    lazy: lazyPage(
+                      () => import('@/features/billing/pages/CheckoutSuccessPage'),
+                      (module) => module.CheckoutSuccessPage,
+                    ),
+                  },
+                  {
+                    path: PATHS.billingCancel,
+                    lazy: lazyPage(
+                      () => import('@/features/billing/pages/CheckoutCancelPage'),
+                      (module) => module.CheckoutCancelPage,
+                    ),
+                  },
+                  {
+                    element: <RequireActiveSubscription />,
                     children: [
-                      { path: PATHS.home, element: <Navigate to={PATHS.projects} replace /> },
                       {
-                        path: PATHS.projects,
-                        lazy: lazyPage(
-                          () => import('@/features/projects/pages/ProjectsPage'),
-                          (module) => module.ProjectsPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.projectDetail,
-                        lazy: lazyPage(
-                          () => import('@/features/projects/pages/ProjectDetailPage'),
-                          (module) => module.ProjectDetailPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.documents,
-                        lazy: lazyPage(
-                          () => import('@/features/documents/pages/DocumentsPage'),
-                          (module) => module.DocumentsPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.documentTrash,
-                        lazy: lazyPage(
-                          () => import('@/features/documents/pages/DocumentTrashPage'),
-                          (module) => module.DocumentTrashPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.documentDetail,
-                        lazy: lazyPage(
-                          () => import('@/features/documents/pages/DocumentPage'),
-                          (module) => module.DocumentPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.accessRequests,
-                        lazy: lazyPage(
-                          () => import('@/features/sharing/pages/RequestsPage'),
-                          (module) => module.RequestsPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.notifications,
-                        lazy: lazyPage(
-                          () => import('@/features/notifications/pages/NotificationsPage'),
-                          (module) => module.NotificationsPage,
-                        ),
-                      },
-                      {
-                        path: PATHS.people,
-                        lazy: lazyPage(
-                          () => import('@/features/people/pages/PeoplePage'),
-                          (module) => module.PeoplePage,
-                        ),
-                      },
-                      {
-                        path: PATHS.account,
-                        lazy: lazyPage(
-                          () => import('@/features/account/pages/AccountPage'),
-                          (module) => module.AccountPage,
-                        ),
-                      },
-                      {
-                        element: <RequireOrgAdmin />,
+                        element: <AppLayout />,
                         children: [
+                          { path: PATHS.home, element: <Navigate to={PATHS.projects} replace /> },
                           {
-                            path: PATHS.projectTrash,
+                            path: PATHS.projects,
                             lazy: lazyPage(
-                              () => import('@/features/projects/pages/ProjectTrashPage'),
-                              (module) => module.ProjectTrashPage,
+                              () => import('@/features/projects/pages/ProjectsPage'),
+                              (module) => module.ProjectsPage,
                             ),
                           },
                           {
-                            path: PATHS.organizationSettings,
+                            path: PATHS.projectDetail,
                             lazy: lazyPage(
-                              () =>
-                                import('@/features/organization/pages/OrganizationSettingsPage'),
-                              (module) => module.OrganizationSettingsPage,
+                              () => import('@/features/projects/pages/ProjectDetailPage'),
+                              (module) => module.ProjectDetailPage,
                             ),
                           },
                           {
-                            path: PATHS.organizationExport,
+                            path: PATHS.documents,
                             lazy: lazyPage(
-                              () => import('@/features/organization/pages/ExportDownloadPage'),
-                              (module) => module.ExportDownloadPage,
+                              () => import('@/features/documents/pages/DocumentsPage'),
+                              (module) => module.DocumentsPage,
                             ),
                           },
                           {
-                            path: PATHS.billing,
+                            path: PATHS.documentTrash,
                             lazy: lazyPage(
-                              () => import('@/features/billing/pages/BillingPage'),
-                              (module) => module.BillingPage,
+                              () => import('@/features/documents/pages/DocumentTrashPage'),
+                              (module) => module.DocumentTrashPage,
                             ),
                           },
                           {
-                            path: PATHS.activity,
+                            path: PATHS.documentDetail,
                             lazy: lazyPage(
-                              () => import('@/features/activity/pages/ActivityPage'),
-                              (module) => module.ActivityPage,
+                              () => import('@/features/documents/pages/DocumentPage'),
+                              (module) => module.DocumentPage,
                             ),
+                          },
+                          {
+                            path: PATHS.accessRequests,
+                            lazy: lazyPage(
+                              () => import('@/features/sharing/pages/RequestsPage'),
+                              (module) => module.RequestsPage,
+                            ),
+                          },
+                          {
+                            path: PATHS.notifications,
+                            lazy: lazyPage(
+                              () => import('@/features/notifications/pages/NotificationsPage'),
+                              (module) => module.NotificationsPage,
+                            ),
+                          },
+                          {
+                            path: PATHS.people,
+                            lazy: lazyPage(
+                              () => import('@/features/people/pages/PeoplePage'),
+                              (module) => module.PeoplePage,
+                            ),
+                          },
+                          {
+                            path: PATHS.account,
+                            lazy: lazyPage(
+                              () => import('@/features/account/pages/AccountPage'),
+                              (module) => module.AccountPage,
+                            ),
+                          },
+                          {
+                            element: <RequireOrgAdmin />,
+                            children: [
+                              {
+                                path: PATHS.projectTrash,
+                                lazy: lazyPage(
+                                  () => import('@/features/projects/pages/ProjectTrashPage'),
+                                  (module) => module.ProjectTrashPage,
+                                ),
+                              },
+                              {
+                                path: PATHS.organizationSettings,
+                                lazy: lazyPage(
+                                  () =>
+                                    import('@/features/organization/pages/OrganizationSettingsPage'),
+                                  (module) => module.OrganizationSettingsPage,
+                                ),
+                              },
+                              {
+                                path: PATHS.organizationExport,
+                                lazy: lazyPage(
+                                  () => import('@/features/organization/pages/ExportDownloadPage'),
+                                  (module) => module.ExportDownloadPage,
+                                ),
+                              },
+                              {
+                                path: PATHS.billing,
+                                lazy: lazyPage(
+                                  () => import('@/features/billing/pages/BillingPage'),
+                                  (module) => module.BillingPage,
+                                ),
+                              },
+                              {
+                                path: PATHS.activity,
+                                lazy: lazyPage(
+                                  () => import('@/features/activity/pages/ActivityPage'),
+                                  (module) => module.ActivityPage,
+                                ),
+                              },
+                            ],
                           },
                         ],
                       },

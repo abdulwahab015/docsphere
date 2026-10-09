@@ -11,6 +11,10 @@ from users.validators import validate_password_for_field
 
 User = get_user_model()
 
+REQUIRE_TWO_FACTOR_WITHOUT_IT_MESSAGE = (
+    "Turn on two-factor sign-in for your own account before requiring it."
+)
+
 
 class ActiveSubscriptionSerializer(serializers.Serializer):
     """Read-only summary of a dj-stripe Subscription."""
@@ -51,6 +55,7 @@ class OrganizationSummarySerializer(serializers.ModelSerializer):
             "has_active_subscription",
             "payment_failed",
             "deletion_scheduled_for",
+            "require_two_factor",
         ]
         read_only_fields = fields
 
@@ -78,6 +83,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "billing_email",
+            "require_two_factor",
             "active_subscription",
             "created",
             "modified",
@@ -86,6 +92,13 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     def validate_billing_email(self, value):
         return validate_unique_billing_email(value, organization=self.instance)
+
+    def validate_require_two_factor(self, value):
+        """An admin can't require what they haven't set up themselves: they'd
+        be the first one held at the setup screen."""
+        if value and not self.context["request"].user.two_factor_enabled:
+            raise serializers.ValidationError(REQUIRE_TWO_FACTOR_WITHOUT_IT_MESSAGE)
+        return value
 
 
 class OrganizationSignupSerializer(serializers.Serializer):

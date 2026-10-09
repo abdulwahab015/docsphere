@@ -4,7 +4,7 @@ from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenObtainSerializer
 
 from organizations.api.v1.serializers import OrganizationSummarySerializer
 from users.choices import InvitationStatus
@@ -12,6 +12,7 @@ from users.constants import (
     MAX_NAME_LENGTH,
     MAX_PASSWORD_LENGTH,
     MAX_PENDING_INVITATIONS_PER_ORG,
+    MAX_TWO_FACTOR_CODE_LENGTH,
 )
 from users.email_links import (
     INVALID_EMAIL_LINK_MESSAGE,
@@ -25,6 +26,14 @@ from users.services import (
     create_invitation,
     find_invitation_conflict,
     is_email_in_use,
+)
+from users.two_factor import (
+    EXPIRED_SIGN_IN_MESSAGE,
+    INVALID_CODE_MESSAGE,
+    InvalidTwoFactorLoginError,
+    read_login_token,
+    verify_app_code,
+    verify_second_factor,
 )
 from users.validators import validate_current_password, validate_password_for_field
 
@@ -44,11 +53,19 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserDetailSerializer(UserSerializer):
-    """Adds role and join-date - admin-only, for actual user management
-    rather than picking a share target."""
+    """Adds role, join date and whether they sign in with two-factor -
+    admin-only, for actual user management rather than picking a share
+    target."""
+
+    two_factor_enabled = serializers.BooleanField(read_only=True)
 
     class Meta(UserSerializer.Meta):
-        fields = [*UserSerializer.Meta.fields, "org_role", "created"]
+        fields = [
+            *UserSerializer.Meta.fields,
+            "org_role",
+            "created",
+            "two_factor_enabled",
+        ]
         read_only_fields = fields
 
 
@@ -64,10 +81,19 @@ class CurrentUserSerializer(serializers.ModelSerializer):
     # False until a new signup follows the link emailed to them; the API
     # refuses almost everything until then.
     email_verified = serializers.BooleanField(read_only=True)
+    two_factor_enabled = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "email", "email_verified", "name", "org_role", "organization"]
+        fields = [
+            "id",
+            "email",
+            "email_verified",
+            "two_factor_enabled",
+            "name",
+            "org_role",
+            "organization",
+        ]
         read_only_fields = ["id", "email", "org_role", "organization"]
 
 
@@ -96,9 +122,11 @@ class PasswordChangeSerializer(serializers.Serializer):
         return attrs
 
 
-class LoginSerializer(TokenObtainPairSerializer):
-    """Adds a password-length ceiling before the (unvalidated) auth check, so an
-    oversized string can't reach the password hasher."""
+class LoginSerializer(TokenObtainSerializer):
+    """Checks an email and password, leaving the sign-in itself to the view
+    (``self.user``): it may need a code next. Adds a password-length ceiling
+    before the (unvalidated) auth check, so an oversized string can't reach
+    the password hasher."""
 
     def validate(self, attrs):
         if len(attrs.get("password") or "") > MAX_PASSWORD_LENGTH:
@@ -222,13 +250,77 @@ class EmailVerificationSerializer(serializers.Serializer):
         return attrs
 
 
-class AccountDeletionSerializer(serializers.Serializer):
-    """Deleting your own account: your password proves it's really you."""
+class CurrentPasswordSerializer(serializers.Serializer):
+    """A sensitive change to your own account: your password proves it's
+    really you."""
 
     current_password = serializers.CharField(write_only=True)
 
     def validate_current_password(self, value):
         return validate_current_password(self.context["request"].user, value)
+
+
+class AccountDeletionSerializer(CurrentPasswordSerializer):
+    """Deleting your own account: your password proves it's really you."""
+
+
+class TwoFactorChallengeSerializer(serializers.Serializer):
+    """The password was right and the account signs in with two-factor:
+    send this token back with a code to finish signing in."""
+
+    two_factor_token = serializers.CharField()
+
+
+class TwoFactorLoginSerializer(serializers.Serializer):
+    """The code step of signing in: a code from the authenticator app, or a
+    recovery code, for the account the token was issued to."""
+
+    two_factor_token = serializers.CharField()
+    otp = serializers.CharField(max_length=MAX_TWO_FACTOR_CODE_LENGTH)
+
+    def validate_two_factor_token(self, value):
+        try:
+            self.user = read_login_token(value)
+        except InvalidTwoFactorLoginError:
+            raise serializers.ValidationError(EXPIRED_SIGN_IN_MESSAGE) from None
+        return value
+
+    def validate(self, attrs):
+        if not verify_second_factor(self.user, attrs["otp"]):
+            raise serializers.ValidationError({"otp": INVALID_CODE_MESSAGE})
+        return attrs
+
+
+class TwoFactorStatusSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    recovery_codes_left = serializers.IntegerField()
+
+
+class TwoFactorSetupSerializer(serializers.Serializer):
+    """A new authenticator key: the app reads ``otpauth_uri`` from a QR code,
+    or the person types ``secret`` in."""
+
+    secret = serializers.CharField()
+    otpauth_uri = serializers.CharField()
+
+
+class TwoFactorConfirmSerializer(serializers.Serializer):
+    """A code from the app, proving it holds the new key."""
+
+    otp = serializers.CharField(max_length=MAX_TWO_FACTOR_CODE_LENGTH)
+
+    def validate_otp(self, value):
+        if not verify_app_code(self.context["request"].user, value.strip()):
+            raise serializers.ValidationError(
+                "That code didn't work. Enter the code your app shows now."
+            )
+        return value
+
+
+class RecoveryCodesSerializer(serializers.Serializer):
+    """Shown once: only their hashes are kept."""
+
+    recovery_codes = serializers.ListField(child=serializers.CharField())
 
 
 class EmailChangeRequestSerializer(serializers.Serializer):

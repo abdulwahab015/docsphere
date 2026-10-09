@@ -5,6 +5,7 @@ from datetime import timedelta
 from io import BytesIO
 from unittest.mock import patch
 
+import pyotp
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
@@ -45,9 +46,14 @@ from projects.factories import (
 )
 from projects.models import DocumentAccessRequest, DocumentPermission
 from users import services as user_services
+from users import two_factor
 from users.api.v1 import views as user_views
 from users.choices import InvitationStatus, OrganizationRole
-from users.constants import MAX_BULK_INVITE_ROWS, MAX_NAME_LENGTH
+from users.constants import (
+    MAX_BULK_INVITE_ROWS,
+    MAX_NAME_LENGTH,
+    TWO_FACTOR_LOGIN_TIMEOUT,
+)
 from users.email_links import (
     INVALID_EMAIL_LINK_MESSAGE,
     make_email_change_token,
@@ -88,6 +94,34 @@ def after_links_expire():
         "django.core.signing.time.time",
         return_value=time.time() + settings.EMAIL_LINK_EXPIRY.total_seconds() + 1,
     )
+
+
+def api_endpoints():
+    """Every named API route, with a placeholder id in its URL, and the
+    methods its view answers."""
+
+    def walk(patterns, prefix):
+        for pattern in patterns:
+            route = prefix + str(pattern.pattern)
+            if isinstance(pattern, URLResolver):
+                yield from walk(pattern.url_patterns, route)
+            elif isinstance(pattern, URLPattern) and route.startswith("api/v1/"):
+                yield pattern
+
+    for pattern in walk(get_resolver().url_patterns, ""):
+        view_class = pattern.callback.view_class
+        url = reverse(pattern.name, kwargs=dict.fromkeys(pattern.pattern.converters, 1))
+        for method in view_class.http_method_names:
+            if method not in ("head", "options") and hasattr(view_class, method):
+                yield pattern.name, method, url
+
+
+def app_code(user, steps_ahead=0):
+    """The code ``user``'s authenticator app shows now, or that many time
+    steps (30 seconds each) from now - a code not used yet, when one from
+    this step already was."""
+    totp = pyotp.TOTP(user.totp_secret)
+    return totp.at(timezone.now() + timedelta(seconds=totp.interval * steps_ahead))
 
 
 def build_xlsx_upload(values, filename="invitees.xlsx"):
@@ -870,6 +904,7 @@ class EmailVerificationGateTests(APITestCase):
     OPEN_TO_UNVERIFIED = frozenset(
         {
             ("auth_login", "post"),
+            ("auth_login_two_factor", "post"),
             ("auth_refresh", "post"),
             ("auth_logout", "post"),
             ("auth_password_reset", "post"),
@@ -889,31 +924,9 @@ class EmailVerificationGateTests(APITestCase):
         self.user = AdminUserFactory(email_verified_at=None)
         self.client.force_authenticate(self.user)
 
-    def api_endpoints(self):
-        """Every named API route, with a placeholder id in its URL, and the
-        methods its view answers."""
-
-        def walk(patterns, prefix):
-            for pattern in patterns:
-                route = prefix + str(pattern.pattern)
-                if isinstance(pattern, URLResolver):
-                    yield from walk(pattern.url_patterns, route)
-                elif isinstance(pattern, URLPattern) and route.startswith("api/v1/"):
-                    yield pattern
-
-        for pattern in walk(get_resolver().url_patterns, ""):
-            view_class = pattern.callback.view_class
-            url = reverse(
-                pattern.name,
-                kwargs=dict.fromkeys(pattern.pattern.converters, 1),
-            )
-            for method in view_class.http_method_names:
-                if method not in ("head", "options") and hasattr(view_class, method):
-                    yield pattern.name, method, url
-
     def test_every_other_endpoint_refuses_an_unverified_signup(self):
         refused = []
-        for name, method, url in self.api_endpoints():
+        for name, method, url in api_endpoints():
             if (name, method) in self.OPEN_TO_UNVERIFIED:
                 continue
             with self.subTest(endpoint=name, method=method):
@@ -929,7 +942,7 @@ class EmailVerificationGateTests(APITestCase):
         self.assertIn("organization_profile", refused)
 
     def test_the_open_endpoints_exist(self):
-        endpoints = {(name, method) for name, method, _ in self.api_endpoints()}
+        endpoints = {(name, method) for name, method, _ in api_endpoints()}
 
         self.assertLessEqual(self.OPEN_TO_UNVERIFIED, endpoints)
 
@@ -1369,6 +1382,7 @@ class CurrentUserAPITests(APITestCase):
                 "id": self.admin.pk,
                 "email": "admin@example.com",
                 "email_verified": True,
+                "two_factor_enabled": False,
                 "name": "Ada Admin",
                 "org_role": "ADMIN",
                 "organization": {
@@ -1377,6 +1391,7 @@ class CurrentUserAPITests(APITestCase):
                     "has_active_subscription": True,
                     "payment_failed": False,
                     "deletion_scheduled_for": None,
+                    "require_two_factor": False,
                 },
             },
         )
@@ -1697,7 +1712,7 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
         for row in response.data["results"]:
             self.assertEqual(set(row.keys()), {"id", "email", "name"})
 
-    def test_admin_also_sees_role_and_join_date(self):
+    def test_admin_also_sees_role_join_date_and_two_factor(self):
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(2):
@@ -1705,7 +1720,8 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
 
         for row in response.data["results"]:
             self.assertEqual(
-                set(row.keys()), {"id", "email", "name", "org_role", "created"}
+                set(row.keys()),
+                {"id", "email", "name", "org_role", "created", "two_factor_enabled"},
             )
 
     def test_schema_documents_both_the_admin_and_member_shapes(self):
@@ -2528,7 +2544,7 @@ class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
         NotificationFactory(recipient=self.member)
         RefreshToken.for_user(self.member)
 
-        response = self.delete_account(queries=16)
+        response = self.delete_account(queries=18)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(response.cookies[settings.REFRESH_COOKIE_NAME].value, "")
@@ -2568,7 +2584,7 @@ class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
         )
 
     def test_the_old_address_can_no_longer_sign_in_and_is_free_again(self):
-        self.delete_account(queries=12)
+        self.delete_account(queries=14)
         self.client.force_authenticate(None)
 
         with self.assertNumQueries(1):
@@ -2586,7 +2602,7 @@ class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(invite.status_code, status.HTTP_201_CREATED)
 
     def test_a_deleted_account_is_neither_deactivated_nor_reactivatable(self):
-        self.delete_account(queries=12)
+        self.delete_account(queries=14)
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(1):
@@ -2640,7 +2656,7 @@ class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
         leaving = AdminUserFactory(organization=self.org)
         self.client.force_authenticate(leaving)
 
-        response = self.delete_account(queries=13)
+        response = self.delete_account(queries=15)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
@@ -2653,7 +2669,7 @@ class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
         self.org.save()
         self.client.force_authenticate(self.admin)
 
-        response = self.delete_account(queries=10)
+        response = self.delete_account(queries=12)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.admin.refresh_from_db()
@@ -2721,4 +2737,615 @@ class ConcurrentAccountDeletionTests(AssumeActiveSubscription, TransactionTestCa
                 is_active=True,
             ).count(),
             1,
+        )
+
+
+class TwoFactorSetupTests(APITestCase):
+    def setUp(self):
+        self.user = UserFactory(email="setup@example.com")
+        self.client.force_authenticate(self.user)
+
+    def start_setup(self):
+        response = self.client.post(reverse("user_two_factor_setup"))
+        self.user.refresh_from_db()
+        return response
+
+    def test_starting_gives_a_key_for_the_app_without_turning_it_on(self):
+        with self.assertNumQueries(1):
+            response = self.client.post(reverse("user_two_factor_setup"))
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["secret"], self.user.totp_secret)
+        self.assertEqual(
+            response.data["otpauth_uri"],
+            pyotp.TOTP(self.user.totp_secret).provisioning_uri(
+                name="setup@example.com", issuer_name="DocSphere"
+            ),
+        )
+        self.assertFalse(self.user.two_factor_enabled)
+
+    def test_a_code_from_the_app_turns_it_on_and_gives_recovery_codes(self):
+        self.start_setup()
+
+        with self.assertNumQueries(9):
+            response = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": app_code(self.user)}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        codes = response.data["recovery_codes"]
+        self.assertEqual(len(set(codes)), 10)
+        for code in codes:
+            self.assertRegex(code, r"^[a-z2-9]{5}-[a-z2-9]{5}$")
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.two_factor_enabled)
+        # Only hashes are kept.
+        stored = set(self.user.recovery_codes.values_list("code_hash", flat=True))
+        self.assertEqual(len(stored), 10)
+        self.assertFalse(stored & {code.replace("-", "") for code in codes})
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                actor=self.user, verb=AuditVerb.TWO_FACTOR_ENABLED
+            ).exists()
+        )
+
+    def test_the_status_says_whether_it_is_on_and_how_many_codes_are_left(self):
+        with self.assertNumQueries(1):
+            off = self.client.get(reverse("user_two_factor"))
+        self.assertEqual(off.data, {"enabled": False, "recovery_codes_left": 0})
+
+        self.start_setup()
+        self.client.post(
+            reverse("user_two_factor_confirm"), {"otp": app_code(self.user)}
+        )
+        self.user.refresh_from_db()
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(1):
+            on = self.client.get(reverse("user_two_factor"))
+        self.assertEqual(on.data, {"enabled": True, "recovery_codes_left": 10})
+
+    def test_a_wrong_code_turns_nothing_on(self):
+        self.start_setup()
+        wrong = f"{(int(app_code(self.user)) + 1) % 1_000_000:06d}"
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": wrong}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("otp", response.data)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.two_factor_enabled)
+        self.assertFalse(AuditEvent.objects.exists())
+
+    def test_starting_again_replaces_an_unconfirmed_key(self):
+        self.start_setup()
+        first = self.user.totp_secret
+
+        self.start_setup()
+
+        self.assertNotEqual(self.user.totp_secret, first)
+
+    def test_confirming_needs_a_started_setup(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": "123456"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_setup_and_confirm_are_refused_once_it_is_on(self):
+        user = UserFactory(two_factor=True)
+        self.client.force_authenticate(user)
+
+        with self.assertNumQueries(0):
+            setup = self.client.post(reverse("user_two_factor_setup"))
+        with self.assertNumQueries(0):
+            confirm = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": app_code(user)}
+            )
+
+        self.assertEqual(setup.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(confirm.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class TwoFactorLoginTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = UserFactory(two_factor=True)
+        self.recovery_codes = two_factor.issue_recovery_codes(self.user)
+
+    def log_in_with_password(self):
+        return self.client.post(
+            reverse("auth_login"),
+            {"email": self.user.email, "password": DEFAULT_TEST_PASSWORD},
+        )
+
+    def send_code(self, otp, token=None, **extra):
+        return self.client.post(
+            reverse("auth_login_two_factor"),
+            {
+                "two_factor_token": token
+                or self.log_in_with_password().data["two_factor_token"],
+                "otp": otp,
+            },
+            **extra,
+        )
+
+    def test_the_password_alone_signs_nobody_in(self):
+        with self.assertNumQueries(1):
+            response = self.log_in_with_password()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(response.data), {"two_factor_token"})
+        self.assertNotIn(settings.REFRESH_COOKIE_NAME, response.cookies)
+        self.assertFalse(OutstandingToken.objects.exists())
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.last_login)
+
+    def test_a_code_from_the_app_finishes_signing_in(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+
+        with self.assertNumQueries(4):
+            response = self.send_code(app_code(self.user), token)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(response.data), {"access", "refresh"})
+        self.assertIn(settings.REFRESH_COOKIE_NAME, response.cookies)
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.last_login)
+
+    def test_a_recovery_code_works_once_however_it_is_typed(self):
+        code = self.recovery_codes[0]
+        typed = f"  {code.upper().replace('-', ' ')} "
+        token = self.log_in_with_password().data["two_factor_token"]
+
+        with self.assertNumQueries(4):
+            first = self.send_code(typed, token)
+        with self.assertNumQueries(2):
+            again = self.send_code(code, token)
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(again.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.user.recovery_codes.unused().count(), 9)
+
+    def test_an_app_code_works_only_once(self):
+        code = app_code(self.user)
+        self.assertEqual(self.send_code(code).status_code, status.HTTP_200_OK)
+
+        response = self.send_code(code)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["otp"], [two_factor.INVALID_CODE_MESSAGE])
+        # The next one still works.
+        next_code = self.send_code(app_code(self.user, steps_ahead=1))
+        self.assertEqual(next_code.status_code, status.HTTP_200_OK)
+
+    def test_a_wrong_code_is_refused(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        wrong = f"{(int(app_code(self.user)) + 1) % 1_000_000:06d}"
+
+        with self.assertNumQueries(1):
+            response = self.send_code(wrong, token)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["otp"], [two_factor.INVALID_CODE_MESSAGE])
+        self.assertFalse(OutstandingToken.objects.exists())
+
+    def test_a_code_from_too_long_ago_is_refused(self):
+        response = self.send_code(app_code(self.user, steps_ahead=-2))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_the_sign_in_expires(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        later = time.time() + TWO_FACTOR_LOGIN_TIMEOUT.total_seconds() + 1
+
+        with (
+            patch("django.core.signing.time.time", return_value=later),
+            self.assertNumQueries(0),
+        ):
+            response = self.send_code(app_code(self.user), token)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["two_factor_token"], [two_factor.EXPIRED_SIGN_IN_MESSAGE]
+        )
+
+    def test_a_forged_token_is_refused(self):
+        with self.assertNumQueries(0):
+            response = self.send_code(app_code(self.user), "not-a-real-token")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("two_factor_token", response.data)
+
+    def test_the_sign_in_ends_if_two_factor_is_reset_or_the_account_deactivated(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        two_factor.clear_two_factor(self.user)
+        reset = self.send_code(self.recovery_codes[0], token)
+
+        other = UserFactory(two_factor=True)
+        other_token = two_factor.make_login_token(other)
+        User.objects.filter(pk=other.pk).update(is_active=False)
+        deactivated = self.send_code(app_code(other), other_token)
+
+        self.assertEqual(reset.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("two_factor_token", reset.data)
+        self.assertEqual(deactivated.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("two_factor_token", deactivated.data)
+
+    def test_codes_are_rate_limited_per_account_not_per_address(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        wrong = f"{(int(app_code(self.user)) + 1) % 1_000_000:06d}"
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"two_factor_login": "1/min"}
+        ):
+            first = self.send_code(wrong, token, REMOTE_ADDR="10.0.0.1")
+            with self.assertNumQueries(0):
+                second = self.send_code(
+                    app_code(self.user), token, REMOTE_ADDR="10.0.0.2"
+                )
+
+        self.assertEqual(first.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_an_account_without_two_factor_signs_in_with_its_password(self):
+        user = UserFactory()
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                reverse("auth_login"),
+                {"email": user.email, "password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(set(response.data), {"access", "refresh"})
+
+
+class TwoFactorManagementTests(APITestCase):
+    def setUp(self):
+        self.user = UserFactory(two_factor=True)
+        self.recovery_codes = two_factor.issue_recovery_codes(self.user)
+        self.client.force_authenticate(self.user)
+
+    def test_new_recovery_codes_replace_the_old_ones(self):
+        with self.assertNumQueries(4):
+            response = self.client.post(
+                reverse("user_two_factor_recovery_codes"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["recovery_codes"]), 10)
+        self.assertFalse(
+            two_factor.use_recovery_code(self.user, self.recovery_codes[0])
+        )
+        self.assertTrue(
+            two_factor.use_recovery_code(self.user, response.data["recovery_codes"][0])
+        )
+
+    def test_new_recovery_codes_need_the_password_and_two_factor_on(self):
+        with self.assertNumQueries(0):
+            wrong = self.client.post(
+                reverse("user_two_factor_recovery_codes"),
+                {"current_password": "Wrong-Pass-1!"},
+            )
+        self.client.force_authenticate(UserFactory())
+        with self.assertNumQueries(0):
+            off = self.client.post(
+                reverse("user_two_factor_recovery_codes"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(wrong.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", wrong.data)
+        self.assertEqual(off.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(two_factor.use_recovery_code(self.user, self.recovery_codes[0]))
+
+    def test_turning_it_off_forgets_the_key_and_codes(self):
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.two_factor_enabled)
+        self.assertEqual(self.user.totp_secret, "")
+        self.assertFalse(self.user.recovery_codes.exists())
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                actor=self.user, verb=AuditVerb.TWO_FACTOR_DISABLED
+            ).exists()
+        )
+
+    def test_turning_it_off_needs_the_password(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": "Wrong-Pass-1!"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.two_factor_enabled)
+
+    def test_it_cannot_be_turned_off_while_the_organization_requires_it(self):
+        Organization.objects.filter(pk=self.user.organization_id).update(
+            require_two_factor=True
+        )
+        self.user.organization.refresh_from_db()
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.two_factor_enabled)
+
+    def test_turning_it_off_when_it_is_off_is_refused(self):
+        self.client.force_authenticate(UserFactory())
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_deleting_the_account_forgets_the_key_and_codes(self):
+        with self.assertNumQueries(14):
+            response = self.client.post(
+                reverse("user_account_delete"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.totp_secret, "")
+        self.assertFalse(self.user.two_factor_enabled)
+        self.assertFalse(self.user.recovery_codes.exists())
+
+
+class TwoFactorRequirementTests(APITestCase):
+    """While their organization requires two-factor sign-in and they haven't
+    set it up, every endpoint refuses them except the few that let them set
+    it up, sign in and out, and see why."""
+
+    OPEN_TO_NOT_SET_UP = EmailVerificationGateTests.OPEN_TO_UNVERIFIED | {
+        ("user_two_factor", "get"),
+        ("user_two_factor_setup", "post"),
+        ("user_two_factor_confirm", "post"),
+    }
+
+    def setUp(self):
+        self.organization = OrganizationFactory(require_two_factor=True)
+        self.user = AdminUserFactory(organization=self.organization)
+        self.client.force_authenticate(self.user)
+
+    def test_every_other_endpoint_refuses_someone_without_it(self):
+        refused = []
+        for name, method, url in api_endpoints():
+            if (name, method) in self.OPEN_TO_NOT_SET_UP:
+                continue
+            with self.subTest(endpoint=name, method=method):
+                with self.assertNumQueries(0):
+                    response = getattr(self.client, method)(url)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.data["code"], "two_factor_required")
+                refused.append(name)
+
+        self.assertIn("project_list_create", refused)
+        self.assertIn("subscriptions_checkout", refused)
+        self.assertIn("organization_profile", refused)
+        self.assertIn("user_me", refused)  # PATCH
+
+    def test_the_open_endpoints_exist(self):
+        endpoints = {(name, method) for name, method, _ in api_endpoints()}
+
+        self.assertLessEqual(self.OPEN_TO_NOT_SET_UP, endpoints)
+
+    def test_setting_it_up_lets_them_in(self):
+        self.client.post(reverse("user_two_factor_setup"))
+        self.user.refresh_from_db()
+        self.client.post(
+            reverse("user_two_factor_confirm"), {"otp": app_code(self.user)}
+        )
+        self.user.refresh_from_db()
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("organization_profile"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_the_session_says_what_is_required_and_what_is_on(self):
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("user_me"))
+
+        self.assertFalse(response.data["two_factor_enabled"])
+        self.assertTrue(response.data["organization"]["require_two_factor"])
+
+    def test_an_organization_without_the_requirement_lets_everyone_in(self):
+        self.client.force_authenticate(AdminUserFactory())
+
+        response = self.client.get(reverse("organization_profile"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class RequireTwoFactorSettingTests(APITestCase):
+    def setUp(self):
+        self.admin = AdminUserFactory(two_factor=True)
+        self.client.force_authenticate(self.admin)
+        self.url = reverse("organization_profile")
+
+    def test_an_admin_with_two_factor_can_require_it(self):
+        with self.assertNumQueries(4):
+            response = self.client.patch(self.url, {"require_two_factor": True})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["require_two_factor"])
+        self.admin.organization.refresh_from_db()
+        self.assertTrue(self.admin.organization.require_two_factor)
+
+    def test_an_admin_without_it_cannot_require_it(self):
+        admin = AdminUserFactory()
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(self.url, {"require_two_factor": True})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("require_two_factor", response.data)
+        admin.organization.refresh_from_db()
+        self.assertFalse(admin.organization.require_two_factor)
+
+    def test_the_requirement_can_be_lifted(self):
+        Organization.objects.filter(pk=self.admin.organization_id).update(
+            require_two_factor=True
+        )
+        self.admin.organization.refresh_from_db()
+
+        response = self.client.patch(self.url, {"require_two_factor": False})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.admin.organization.refresh_from_db()
+        self.assertFalse(self.admin.organization.require_two_factor)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class TwoFactorResetTests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.admin = AdminUserFactory(name="Ada Admin", email="ada@example.com")
+        self.member = UserFactory(
+            organization=self.admin.organization,
+            email="lost-phone@example.com",
+            two_factor=True,
+        )
+        two_factor.issue_recovery_codes(self.member)
+        self.client.force_authenticate(self.admin)
+
+    def reset(self, user):
+        return self.client.post(reverse("user_two_factor_reset", args=[user.pk]))
+
+    def test_an_admin_turns_off_a_members_two_factor_and_they_are_told(self):
+        with self.assertNumQueries(8):
+            response = self.reset(self.member)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.two_factor_enabled)
+        self.assertFalse(self.member.recovery_codes.exists())
+        event = AuditEvent.objects.get(verb=AuditVerb.TWO_FACTOR_RESET)
+        self.assertEqual(event.actor, self.admin)
+        self.assertEqual(event.target_user, self.member)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["lost-phone@example.com"])
+        self.assertIn("Ada Admin (ada@example.com)", mail.outbox[0].body)
+
+        # They sign in with the password alone.
+        self.client.force_authenticate(None)
+        login = self.client.post(
+            reverse("auth_login"),
+            {"email": self.member.email, "password": DEFAULT_TEST_PASSWORD},
+        )
+        self.assertEqual(set(login.data), {"access", "refresh"})
+
+    def test_the_admin_roster_says_who_has_it_on(self):
+        response = self.client.get(reverse("user_list"))
+
+        on = {
+            row["email"]: row["two_factor_enabled"] for row in response.data["results"]
+        }
+        self.assertEqual(on, {"ada@example.com": False, "lost-phone@example.com": True})
+
+    def test_a_member_without_it_or_your_own_account_is_refused(self):
+        without = UserFactory(organization=self.admin.organization)
+        self.admin.totp_secret = pyotp.random_base32()
+        self.admin.two_factor_enabled_at = timezone.now()
+        self.admin.save()
+
+        with self.assertNumQueries(1):
+            not_on = self.reset(without)
+        with self.assertNumQueries(0):
+            own = self.reset(self.admin)
+
+        self.assertEqual(not_on.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(own.status_code, status.HTTP_400_BAD_REQUEST)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.two_factor_enabled)
+        self.assertFalse(AuditEvent.objects.exists())
+
+    def test_another_organizations_member_is_not_found(self):
+        outsider = UserFactory(two_factor=True)
+
+        with self.assertNumQueries(1):
+            response = self.reset(outsider)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        outsider.refresh_from_db()
+        self.assertTrue(outsider.two_factor_enabled)
+
+    def test_members_cannot_reset_anyone(self):
+        self.client.force_authenticate(
+            UserFactory(organization=self.admin.organization)
+        )
+
+        with self.assertNumQueries(0):
+            response = self.reset(self.member)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.two_factor_enabled)
+
+
+class ConcurrentTwoFactorCodeTests(TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    @skipUnlessDBFeature("has_select_for_update")
+    def test_one_code_sent_twice_at_once_signs_in_once(self):
+        user = UserFactory(two_factor=True)
+        token = two_factor.make_login_token(user)
+        code = app_code(user)
+        both_matched = threading.Barrier(2)
+        find_step = two_factor._matching_step
+        responses = []
+
+        def match_then_wait(*args):
+            step = find_step(*args)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_matched.wait(timeout=RACE_WAIT_SECONDS)
+            return step
+
+        def sign_in():
+            try:
+                responses.append(
+                    APIClient().post(
+                        reverse("auth_login_two_factor"),
+                        {"two_factor_token": token, "otp": code},
+                    )
+                )
+            finally:
+                connection.close()
+
+        with patch.object(two_factor, "_matching_step", side_effect=match_then_wait):
+            requests = [threading.Thread(target=sign_in) for _ in range(2)]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST],
         )

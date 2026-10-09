@@ -70,6 +70,12 @@ describe('describeEvent', () => {
       "Downloaded an export of the organization's data",
       { verb: 'EXPORT_DOWNLOADED', ...NO_RESOURCE, details: {} },
     ],
+    ['Turned on two-factor sign-in', { verb: 'TWO_FACTOR_ENABLED', ...NO_RESOURCE, details: {} }],
+    ['Turned off two-factor sign-in', { verb: 'TWO_FACTOR_DISABLED', ...NO_RESOURCE, details: {} }],
+    [
+      "Reset Grace Hopper's two-factor sign-in",
+      { verb: 'TWO_FACTOR_RESET', ...NO_RESOURCE, details: {} },
+    ],
     ['Moved the project "Launch" to the trash', { verb: 'DELETED', ...PROJECT, details: {} }],
     ['Restored the document "Q3 plan" from the trash', { verb: 'RESTORED', details: {} }],
     [

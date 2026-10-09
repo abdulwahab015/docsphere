@@ -6,7 +6,11 @@ from audit.api.v1.serializers import AuditEventFilterSerializer, AuditEventSeria
 from audit.choices import AuditKind
 from audit.models import AuditEvent
 from core.permissions import HasActiveSubscription
-from users.permissions import HasVerifiedEmail, IsOrganizationAdmin
+from users.permissions import (
+    HasVerifiedEmail,
+    IsOrganizationAdmin,
+    MeetsTwoFactorRequirement,
+)
 
 
 @extend_schema_view(
@@ -32,7 +36,12 @@ class AuditEventListAPIView(generics.ListAPIView):
     or the address an invitation went to."""
 
     serializer_class = AuditEventSerializer
-    permission_classes = [IsOrganizationAdmin, HasVerifiedEmail, HasActiveSubscription]
+    permission_classes = [
+        IsOrganizationAdmin,
+        HasVerifiedEmail,
+        MeetsTwoFactorRequirement,
+        HasActiveSubscription,
+    ]
     filter_backends = [SearchFilter]
     search_fields = [
         "actor__email",
