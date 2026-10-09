@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useId } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 
@@ -22,6 +23,7 @@ export function ChangePasswordForm() {
     defaultValues: EMPTY_VALUES,
   })
   const { errors } = form.formState
+  const headingId = useId()
 
   const onSubmit = form.handleSubmit(({ current_password, new_password }) =>
     changePassword.mutate(
@@ -40,14 +42,19 @@ export function ChangePasswordForm() {
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Password</h2>
+          <h2 id={headingId}>Password</h2>
         </CardTitle>
         <CardDescription>
           Changing your password signs you out on your other devices. You stay signed in here.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} noValidate className="flex max-w-md flex-col gap-4">
+        <form
+          onSubmit={onSubmit}
+          noValidate
+          aria-labelledby={headingId}
+          className="flex max-w-md flex-col gap-4"
+        >
           {/* Tells password managers which account the new password belongs to. */}
           <input type="email" autoComplete="username" value={user.email} readOnly hidden />
           <FormAlert message={errors.root?.server?.message} />

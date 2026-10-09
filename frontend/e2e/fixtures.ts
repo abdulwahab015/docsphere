@@ -61,8 +61,11 @@ export const TEAM_PROMOTE = seededAccount('promote@team.e2e.test')
 export const TEAM_LEAVER = seededAccount('leaver@team.e2e.test')
 export const TEAM_FORGETFUL = seededAccount('forgetful@team.e2e.test')
 export const ACCOUNT_MEMBER = seededAccount('member@account.e2e.test')
+export const ACCOUNT_MOVER = seededAccount('mover@account.e2e.test')
 export const NAMES_ADMIN = seededAccount('admin@names.e2e.test')
 export const NAMES_MEMBER = seededAccount('member@names.e2e.test')
+// Signed up, but hasn't followed the verification link yet.
+export const VERIFY_ADMIN = seededAccount('admin@verify.e2e.test')
 
 export function memberCount(organizationName: string) {
   const organization = seed.organizations.find((candidate) => candidate.name === organizationName)
@@ -172,6 +175,18 @@ function decodeQuotedPrintable(message: string) {
 
 function escapeRegExp(text: string) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** The latest email sent to `recipient`, once one has arrived. */
+export async function latestEmailTo(recipient: string) {
+  let message = ''
+  await expect
+    .poll(() => {
+      message = emailsTo(recipient).at(-1) ?? ''
+      return message
+    })
+    .not.toBe('')
+  return message
 }
 
 /** The link to `path` (e.g. `/accept-invite`) in the latest email sent to

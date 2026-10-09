@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,11 +9,13 @@ import stripe
 from django.conf import settings
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from djstripe.models import Price
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -95,9 +98,10 @@ class OrganizationAdminActionTests(TestCase):
         self.assertTrue(org.is_active)
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 class OrganizationSignupAPITests(APITestCase):
     def test_signup_creates_organization_and_admin_and_logs_in(self):
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(9):
             response = self.client.post(
                 reverse("organization_signup"),
                 {
@@ -123,10 +127,52 @@ class OrganizationSignupAPITests(APITestCase):
         self.assertEqual(user.org_role, "ADMIN")
         self.assertTrue(user.check_password("Str0ng-New-Pass!"))
         self.assertEqual(user.name, "")
+        self.assertIsNone(user.email_verified_at)
+
+    def test_signup_emails_the_admin_a_link_to_verify_their_address(self):
+        response = self.client.post(
+            reverse("organization_signup"),
+            {
+                "name": "Acme Inc",
+                "admin_email": "admin@acme.test",
+                "admin_password": "Str0ng-New-Pass!",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["admin@acme.test"])
+        self.assertEqual(message.subject, "Verify your email address for DocSphere")
+        self.assertIn("Acme Inc", message.body)
+        self.assertIn(f"{settings.FRONTEND_URL}/verify-email?token=", message.body)
+
+    def test_signup_takes_over_an_address_its_unverified_account_has_lost(self):
+        squatter = AdminUserFactory(email="admin@acme.test", email_verified_at=None)
+        User.objects.filter(pk=squatter.pk).update(
+            created=timezone.now() - settings.EMAIL_LINK_EXPIRY - timedelta(minutes=1)
+        )
+
+        response = self.client.post(
+            reverse("organization_signup"),
+            {
+                "name": "Acme Inc",
+                "admin_email": "admin@acme.test",
+                "admin_password": "Str0ng-New-Pass!",
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(
+            Organization.objects.filter(pk=squatter.organization_id).exists()
+        )
+        self.assertEqual(
+            User.objects.get(email="admin@acme.test").organization.name, "Acme Inc"
+        )
 
     def test_signup_records_the_admins_name(self):
         # One query fewer than above: no billing email to check for uniqueness.
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("organization_signup"),
                 {
@@ -159,7 +205,7 @@ class OrganizationSignupAPITests(APITestCase):
     ):
         OrganizationFactory(billing_email=None)
 
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("organization_signup"),
                 {
@@ -206,6 +252,22 @@ class OrganizationSignupAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Organization.objects.filter(name="Acme Inc").count(), 0)
+
+    def test_signup_rejects_an_address_still_waiting_to_be_verified(self):
+        AdminUserFactory(email="admin@acme.test", email_verified_at=None)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("organization_signup"),
+                {
+                    "name": "Acme Inc",
+                    "admin_email": "admin@acme.test",
+                    "admin_password": "Str0ng-New-Pass!",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("admin_email", response.data)
 
     def test_signup_rejects_a_password_missing_a_character_class(self):
         with self.assertNumQueries(1):
@@ -462,7 +524,14 @@ class SeedE2ECommandTests(TestCase):
             {
                 "name": "Unpaid Org",
                 "subscribed": False,
-                "users": [{"email": "member@unpaid.test", "role": "MEMBER"}],
+                "users": [
+                    {"email": "member@unpaid.test", "role": "MEMBER"},
+                    {
+                        "email": "new@unpaid.test",
+                        "role": "ADMIN",
+                        "email_verified": False,
+                    },
+                ],
             },
             {
                 "name": "Overdue Org",
@@ -517,7 +586,7 @@ class SeedE2ECommandTests(TestCase):
         self.seed_path.write_text(json.dumps(self.seed), encoding="utf-8")
 
     def test_seeds_organizations_users_and_subscriptions(self):
-        with self.assertNumQueries(35):
+        with self.assertNumQueries(36):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         paid = Organization.objects.get(name="Paid Org")
@@ -530,9 +599,11 @@ class SeedE2ECommandTests(TestCase):
         admin = User.objects.get(email="admin@paid.test")
         self.assertEqual(admin.org_role, "ADMIN")
         self.assertTrue(admin.check_password("Seed-Pass-123!"))
+        self.assertTrue(admin.email_verified)
+        self.assertFalse(User.objects.get(email="new@unpaid.test").email_verified)
 
     def test_seeds_plans_and_billing_emails(self):
-        with self.assertNumQueries(35):
+        with self.assertNumQueries(36):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         prices = Price.objects.order_by("stripe_data__unit_amount")
@@ -551,7 +622,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertIsNone(Organization.objects.get(name="Unpaid Org").billing_email)
 
     def test_seeds_projects_with_their_owner_and_shares(self):
-        with self.assertNumQueries(35):
+        with self.assertNumQueries(36):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         roadmap = Project.objects.get(name="Roadmap")
@@ -566,7 +637,7 @@ class SeedE2ECommandTests(TestCase):
         self.assertEqual(archived.visibility, "PUBLIC")
 
     def test_seeds_documents_in_projects_or_personal(self):
-        with self.assertNumQueries(35):
+        with self.assertNumQueries(36):
             call_command("seed_e2e", self.seed_path, stdout=StringIO())
 
         spec = Document.objects.get(title="Spec")

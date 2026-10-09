@@ -30,6 +30,7 @@ export function buildCurrentUser(overrides: Partial<CurrentUser> = {}): CurrentU
   return {
     id: 1,
     email: 'ada@example.com',
+    email_verified: true,
     name: '',
     org_role: 'MEMBER',
     organization: buildOrganizationSummary(),

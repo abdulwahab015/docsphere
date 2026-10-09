@@ -172,6 +172,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("users.authentication.JWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
+        "users.permissions.HasVerifiedEmail",
         "core.permissions.HasActiveSubscription",
     ),
     "DEFAULT_PAGINATION_CLASS": "core.paginations.PageNumberPagination",
@@ -190,6 +191,8 @@ REST_FRAMEWORK = {
         "billing_portal": config("BILLING_PORTAL_THROTTLE_RATE"),
         "org_signup": config("ORG_SIGNUP_THROTTLE_RATE"),
         "password_change": config("PASSWORD_CHANGE_THROTTLE_RATE"),
+        "email_verification": config("EMAIL_VERIFICATION_THROTTLE_RATE"),
+        "email_change": config("EMAIL_CHANGE_THROTTLE_RATE"),
     },
 }
 
@@ -224,6 +227,10 @@ REFRESH_COOKIE_SECURE = False
 REFRESH_COOKIE_SAMESITE = config("REFRESH_COOKIE_SAMESITE", default="Lax")
 
 INVITATION_EXPIRY = timedelta(seconds=config("INVITATION_EXPIRY_SECONDS", cast=int))
+# How long an emailed link that proves someone owns an address (verifying a
+# signup, confirming a new email) keeps working - and how long an account that
+# never verified its address keeps it from everyone else.
+EMAIL_LINK_EXPIRY = timedelta(seconds=config("EMAIL_LINK_EXPIRY_SECONDS", cast=int))
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config(
@@ -239,6 +246,10 @@ CELERY_BEAT_SCHEDULE = {
     "send-subscription-expiry-reminders": {
         "task": "subscriptions.tasks.send_expiry_reminders_task",
         "schedule": crontab(hour=0, minute=0),
+    },
+    "remove-unverified-accounts": {
+        "task": "users.tasks.remove_unverified_accounts_task",
+        "schedule": crontab(hour=1, minute=0),
     },
 }
 

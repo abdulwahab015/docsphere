@@ -325,7 +325,8 @@ export interface paths {
         put?: never;
         /**
          * @description Creates an Organization together with its first admin User, atomically,
-         *     and logs the admin in immediately with a JWT pair.
+         *     and logs the admin in immediately with a JWT pair. The admin must follow
+         *     the link emailed to them before they can do anything else.
          */
         post: operations["api_v1_organizations_signup_create"];
         delete?: never;
@@ -668,6 +669,27 @@ export interface paths {
         patch: operations["api_v1_users_role_partial_update"];
         trace?: never;
     };
+    "/api/v1/users/auth/confirm-email/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Moves an account to the address its link was emailed to. The address
+         *     is checked again - someone may have taken it since the link was sent -
+         *     every session is signed out, and the old address is told.
+         */
+        post: operations["api_v1_users_auth_confirm_email_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/auth/login/": {
         parameters: {
             query?: never;
@@ -764,6 +786,27 @@ export interface paths {
          *     cookie.
          */
         post: operations["api_v1_users_auth_refresh_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/auth/verify-email/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Marks an address verified from the link emailed to it. Works signed in
+         *     or not - the link may be opened on another device - and following it
+         *     again changes nothing.
+         */
+        post: operations["api_v1_users_auth_verify_email_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -901,7 +944,9 @@ export interface paths {
          * @description The requesting user's own profile, and changing their name (the only
          *     part they may edit). Deliberately reachable without an active
          *     subscription, so a client can tell an admin (send to billing) from a
-         *     member (ask your admin) before any gated call returns 402.
+         *     member (ask your admin) before any gated call returns 402 - and readable
+         *     before the email is verified, which is how a client learns to ask for
+         *     that.
          */
         get: operations["api_v1_users_me_retrieve"];
         put?: never;
@@ -913,9 +958,32 @@ export interface paths {
          * @description The requesting user's own profile, and changing their name (the only
          *     part they may edit). Deliberately reachable without an active
          *     subscription, so a client can tell an admin (send to billing) from a
-         *     member (ask your admin) before any gated call returns 402.
+         *     member (ask your admin) before any gated call returns 402 - and readable
+         *     before the email is verified, which is how a client learns to ask for
+         *     that.
          */
         patch: operations["api_v1_users_me_partial_update"];
+        trace?: never;
+    };
+    "/api/v1/users/me/email/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description A signed-in user asks to sign in with another address: a link to
+         *     confirm it is emailed to the new address, and nothing changes until it's
+         *     followed.
+         */
+        post: operations["api_v1_users_me_email_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/users/me/password/": {
@@ -933,6 +1001,26 @@ export interface paths {
          *     returned so the current session carries on.
          */
         post: operations["api_v1_users_me_password_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/me/verification-email/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Emails a signed-in user who hasn't verified their address a new
+         *     verification link. Earlier links keep working until they expire.
+         */
+        post: operations["api_v1_users_me_verification_email_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1003,6 +1091,7 @@ export interface components {
             readonly id: number;
             /** Format: email */
             readonly email: string;
+            readonly email_verified: boolean;
             name: string;
             readonly org_role: components["schemas"]["OrgRoleEnum"];
             readonly organization: components["schemas"]["OrganizationSummary"] | null;
@@ -1097,6 +1186,24 @@ export interface components {
             readonly user_email: string;
             readonly user_name: string;
             readonly access_level: components["schemas"]["AccessLevelEnum"];
+        };
+        /** @description The token from the link emailed to the new address. */
+        EmailChangeConfirm: {
+            token: string;
+        };
+        /**
+         * @description A signed-in user asks to move their account to another address. Their
+         *     password proves it's them; the link sent to the new address proves it's
+         *     theirs too.
+         */
+        EmailChangeRequest: {
+            /** Format: email */
+            new_email: string;
+            current_password: string;
+        };
+        /** @description The token from the link emailed to a new signup. */
+        EmailVerification: {
+            token: string;
         };
         InvitationAccept: {
             token: string;
@@ -1371,6 +1478,7 @@ export interface components {
             readonly id?: number;
             /** Format: email */
             readonly email?: string;
+            readonly email_verified?: boolean;
             name?: string;
             readonly org_role?: components["schemas"]["OrgRoleEnum"];
             readonly organization?: components["schemas"]["OrganizationSummary"] | null;
@@ -2587,6 +2695,37 @@ export interface operations {
             };
         };
     };
+    api_v1_users_auth_confirm_email_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailChangeConfirm"];
+                "application/x-www-form-urlencoded": components["schemas"]["EmailChangeConfirm"];
+                "multipart/form-data": components["schemas"]["EmailChangeConfirm"];
+            };
+        };
+        responses: {
+            /** @description The email changed; log in again. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or expired link, or the address is in use. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     api_v1_users_auth_login_create: {
         parameters: {
             query?: never;
@@ -2720,6 +2859,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TokenRefresh"];
                 };
+            };
+        };
+    };
+    api_v1_users_auth_verify_email_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailVerification"];
+                "application/x-www-form-urlencoded": components["schemas"]["EmailVerification"];
+                "multipart/form-data": components["schemas"]["EmailVerification"];
+            };
+        };
+        responses: {
+            /** @description The address is verified. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or expired link. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -2955,6 +3125,37 @@ export interface operations {
             };
         };
     };
+    api_v1_users_me_email_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailChangeRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["EmailChangeRequest"];
+                "multipart/form-data": components["schemas"]["EmailChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description A link was sent to the new address. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wrong current password, or the address is your own or already in use. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     api_v1_users_me_password_create: {
         parameters: {
             query?: never;
@@ -2979,6 +3180,31 @@ export interface operations {
                 };
             };
             /** @description Wrong current password, or new password rejected. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_users_me_verification_email_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new link was sent. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The address is already verified. */
             400: {
                 headers: {
                     [name: string]: unknown;

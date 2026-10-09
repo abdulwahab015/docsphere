@@ -1,6 +1,8 @@
 import { apiClient } from '@/api/client'
 import type {
   CurrentUser,
+  EmailChangeConfirmPayload,
+  EmailVerificationPayload,
   InvitationAcceptPayload,
   LoginPayload,
   OrganizationSignupPayload,
@@ -40,4 +42,16 @@ export async function confirmPasswordReset(payload: PasswordResetConfirmPayload)
 export async function fetchCurrentUser() {
   const { data } = await apiClient.get<CurrentUser>('/users/me/')
   return data
+}
+
+export async function verifyEmail(payload: EmailVerificationPayload) {
+  await apiClient.post('/users/auth/verify-email/', payload)
+}
+
+export async function resendVerificationEmail() {
+  await apiClient.post('/users/me/verification-email/')
+}
+
+export async function confirmEmailChange(payload: EmailChangeConfirmPayload) {
+  await apiClient.post('/users/auth/confirm-email/', payload)
 }

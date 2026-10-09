@@ -45,20 +45,6 @@ test.describe('signing in and out', () => {
     await expect(page.getByRole('heading', { name: 'Subscribe to continue' })).toBeVisible()
     await expect(page.getByRole('list', { name: 'Plans' })).toBeVisible()
   })
-
-  test('creates a new organization and signs its admin in', async ({ page }) => {
-    const email = `founder-${Date.now()}@signup.e2e.test`
-
-    await page.goto('/signup')
-    await page.getByLabel('Organization name').fill(`Signup ${Date.now()}`)
-    await page.getByLabel('Your email').fill(email)
-    await page.getByLabel('Password', { exact: true }).fill('Founder-Pass-123!')
-    await page.getByLabel('Confirm password').fill('Founder-Pass-123!')
-    await page.getByRole('button', { name: 'Create organization' }).click()
-
-    // A brand-new organization has no subscription yet: its admin picks a plan.
-    await expect(page.getByRole('heading', { name: 'Subscribe to continue' })).toBeVisible()
-  })
 })
 
 test('logging out in one tab signs the other tabs out too', async ({ context }) => {

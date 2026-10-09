@@ -25,6 +25,7 @@ from users.tasks import send_invitation_email_task
 User = get_user_model()
 
 USER_EXISTS_MESSAGE = "A user with this email already exists."
+EMAIL_IN_USE_MESSAGE = "This email address is already in use."
 NO_LONGER_ADMIN_MESSAGE = "You're no longer an admin of this organization."
 INVITATION_PENDING_MESSAGE = "This email already has a pending invitation."
 
@@ -75,7 +76,7 @@ def find_invitation_conflict(organization, email, *, renewing=None):
     already have an account, or a working invitation is already waiting for
     them - or ``None`` if it can. ``renewing`` is the invitation being resent,
     which doesn't count against itself."""
-    if User.objects.filter(email=email).exists():
+    if User.objects.holding_email().filter(email=email).exists():
         return USER_EXISTS_MESSAGE
 
     pending = Invitation.objects.for_organization(organization).pending()
@@ -84,6 +85,16 @@ def find_invitation_conflict(organization, email, *, renewing=None):
     if pending.filter(email=email).exists():
         return INVITATION_PENDING_MESSAGE
     return None
+
+
+def is_email_in_use(email):
+    """Whether an account may not move to ``email``: someone holds it, or an
+    invitation to it is waiting - an address is never both an account and a
+    live invitation."""
+    return (
+        User.objects.holding_email().filter(email=email).exists()
+        or Invitation.objects.pending().filter(email=email).exists()
+    )
 
 
 def refresh_invitation(invitation):
@@ -111,9 +122,9 @@ def bulk_create_invitations(emails, *, organization, invited_by):
 
     existing_user_emails = {
         stored.lower()
-        for stored in User.objects.filter(email__in=candidate_emails).values_list(
-            "email", flat=True
-        )
+        for stored in User.objects.holding_email()
+        .filter(email__in=candidate_emails)
+        .values_list("email", flat=True)
     }
 
     pending_invites = Invitation.objects.for_organization(organization).pending()

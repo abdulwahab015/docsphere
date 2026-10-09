@@ -5,6 +5,10 @@ from users.api.v1.views import (
     CurrentUserAPIView,
     DeactivatedUserListAPIView,
     DeactivateUserAPIView,
+    EmailChangeConfirmAPIView,
+    EmailChangeRequestAPIView,
+    EmailVerificationConfirmAPIView,
+    EmailVerificationResendAPIView,
     InvitationAcceptAPIView,
     InvitationBulkCreateAPIView,
     InvitationListCreateAPIView,
@@ -24,6 +28,12 @@ urlpatterns = [
     path("", UserListAPIView.as_view(), name="user_list"),
     path("me/", CurrentUserAPIView.as_view(), name="user_me"),
     path("me/password/", PasswordChangeAPIView.as_view(), name="user_password_change"),
+    path("me/email/", EmailChangeRequestAPIView.as_view(), name="user_email_change"),
+    path(
+        "me/verification-email/",
+        EmailVerificationResendAPIView.as_view(),
+        name="user_verification_email_resend",
+    ),
     path(
         "deactivated/",
         DeactivatedUserListAPIView.as_view(),
@@ -41,6 +51,16 @@ urlpatterns = [
         "auth/password-reset/confirm/",
         PasswordResetConfirmAPIView.as_view(),
         name="auth_password_reset_confirm",
+    ),
+    path(
+        "auth/verify-email/",
+        EmailVerificationConfirmAPIView.as_view(),
+        name="auth_verify_email",
+    ),
+    path(
+        "auth/confirm-email/",
+        EmailChangeConfirmAPIView.as_view(),
+        name="auth_confirm_email",
     ),
     path(
         "invitations/",

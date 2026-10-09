@@ -57,7 +57,8 @@ Open **http://localhost:3000**, not `127.0.0.1`. The refresh-token cookie is onl
 between the app and the API when both are on the same site.
 
 To get accounts and data to sign in with, seed the database (see
-[Seeded accounts](#seeded-accounts)), or sign up a new organization from the app.
+[Seeded accounts](#seeded-accounts)), or sign up a new organization from the app. A new
+signup must verify its email first: the link is printed in the `runserver` terminal.
 
 Install the pre-commit hooks once, so black, ruff, Prettier and oxlint run on every commit:
 
@@ -250,6 +251,14 @@ still pass, so a change that touches them needs a test that pins them down.
 - **Deactivating a user** (`is_active=False`) is how people are removed. Deactivated users
   can't sign in, be shared with, or receive emails. Nothing is hard-deleted, and every
   project and document keeps its creator.
+- **A new signup verifies its email before anything else.** Until they open the emailed
+  link, the API refuses them everywhere with **403** `email_unverified` (checked before the
+  subscription), except to verify, ask for a new link, read `/users/me/` and log out.
+  Invited members start verified: their invitation link proves the address. A signup that
+  hasn't verified within `EMAIL_LINK_EXPIRY_SECONDS` loses its address, so whoever owns it
+  can sign up or be invited with it, which removes the old account and its empty
+  organization; a daily task removes the rest. Changing an email works the same way: a
+  link to the new address, which signs the account out everywhere when opened.
 
 ### Subscriptions
 
@@ -314,8 +323,11 @@ still pass, so a change that touches them needs a test that pins them down.
 1. Serializer and view in `<app>/api/v1/`, route in its `urls.py` (`name=` with
    underscores). Scope the queryset to the organization, and check access with the existing
    helpers (`projects/permissions.py`).
-2. If it must work without a subscription, set `permission_classes` without
-   `HasActiveSubscription`; otherwise leave the defaults.
+2. Leave the default permissions where you can. A view that sets its own
+   `permission_classes` lists `HasVerifiedEmail` after the authentication check, and
+   `HasActiveSubscription` unless it must work without a subscription.
+   `users.tests.EmailVerificationGateTests` checks every endpoint, and fails for one that
+   lets an unverified signup through.
 3. A bare `APIView` needs `@extend_schema(...)`, or the schema can't describe it.
 4. Tests: the happy path, each refusal (404 for things the caller can't see), another
    organization's data, all with `assertNumQueries`.
