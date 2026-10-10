@@ -1,0 +1,7 @@
+Hi there,
+
+The DocSphere subscription for {{ organization_name }} has been cancelled and ends on {{ period_end }}. After that, your team can't open its projects and documents until you subscribe again.
+
+To keep it going, renew it from billing:
+
+{{ billing_url }}

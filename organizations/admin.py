@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Organization
+from .models import Organization, OrganizationExport
 
 
 @admin.register(Organization)
@@ -10,6 +10,7 @@ class OrganizationAdmin(admin.ModelAdmin):
         "billing_email",
         "is_active",
         "last_expiry_reminder_sent_at",
+        "deletion_requested_at",
         "created",
     )
     list_filter = ("is_active",)
@@ -23,3 +24,9 @@ class OrganizationAdmin(admin.ModelAdmin):
     @admin.action(description="Activate selected organizations")
     def activate_organizations(self, request, queryset):
         queryset.update(is_active=True)
+
+
+@admin.register(OrganizationExport)
+class OrganizationExportAdmin(admin.ModelAdmin):
+    list_display = ("organization", "requested_by", "file", "created")
+    list_filter = ("organization",)

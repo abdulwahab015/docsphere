@@ -1,0 +1,5 @@
+We couldn't build the export you asked for of {{ organization_name }}, even after trying again.
+
+You can ask for a new one from the Organization page:
+
+{{ settings_url }}

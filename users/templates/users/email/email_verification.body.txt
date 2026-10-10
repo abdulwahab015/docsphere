@@ -1,0 +1,5 @@
+Confirm that this is your email address to start using {{ organization_name }} on DocSphere:
+
+{{ verify_url }}
+
+If you didn't sign up for DocSphere, ignore this email.

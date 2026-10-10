@@ -1,0 +1,154 @@
+import { InboxIcon } from 'lucide-react'
+import { Link } from 'react-router'
+import { toast } from 'sonner'
+
+import { documentPath } from '@/app/paths'
+import { actionErrorMessage } from '@/api/errors'
+import type { AccessRequest } from '@/api/types'
+import { EmptyState } from '@/components/EmptyState'
+import { ErrorState } from '@/components/ErrorState'
+import { Pagination } from '@/components/Pagination'
+import { PersonLabel } from '@/components/PersonLabel'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { AccessRequestDecision } from '@/features/sharing/api'
+import { useIncomingAccessRequests, useReviewAccessRequest } from '@/features/sharing/hooks'
+import { formatDate } from '@/lib/format'
+import { displayName } from '@/lib/people'
+import { SECONDARY_COLUMN } from '@/lib/table-columns'
+import { cn } from '@/lib/utils'
+
+const LOADING_ROWS = 3
+const COLUMN_COUNT = 4
+
+interface IncomingRequestsProps {
+  page: number
+  onPageChange: (page: number) => void
+}
+
+/** Pending requests on documents the signed-in user owns, to approve or deny. */
+export function IncomingRequests({ page, onPageChange }: IncomingRequestsProps) {
+  const requests = useIncomingAccessRequests(page)
+  const review = useReviewAccessRequest()
+
+  const decide = (accessRequest: AccessRequest, decision: AccessRequestDecision) => {
+    const requester = displayName({
+      name: accessRequest.requested_by_name,
+      email: accessRequest.requested_by_email,
+    })
+    const title = accessRequest.document_title
+    review.mutate(
+      { accessRequest, decision },
+      {
+        onSuccess: () =>
+          toast.success(
+            decision === 'approve'
+              ? `${requester} can now edit "${title}".`
+              : `Denied ${requester}'s request for "${title}".`,
+          ),
+        onError: (error) =>
+          toast.error(actionErrorMessage(error, `Couldn't answer ${requester}'s request.`)),
+      },
+    )
+  }
+
+  const isDeciding = (accessRequest: AccessRequest, decision: AccessRequestDecision) =>
+    review.isPending &&
+    review.variables.accessRequest.id === accessRequest.id &&
+    review.variables.decision === decision
+
+  if (requests.isError) {
+    return <ErrorState error={requests.error} onRetry={() => void requests.refetch()} />
+  }
+  if (requests.data && !requests.data.count) {
+    return (
+      <EmptyState
+        icon={InboxIcon}
+        title="Nothing to answer"
+        description="When someone asks to edit a document you own, their request shows up here."
+      />
+    )
+  }
+  return (
+    <>
+      <div className="rounded-lg border">
+        <Table aria-busy={requests.isFetching}>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Document</TableHead>
+              <TableHead>Requested by</TableHead>
+              <TableHead className={SECONDARY_COLUMN}>Requested</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {requests.data
+              ? requests.data.results.map((accessRequest) => (
+                  <TableRow key={accessRequest.id}>
+                    <TableCell className="font-medium">
+                      <Link to={documentPath(accessRequest.document)} className="hover:underline">
+                        {accessRequest.document_title}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <PersonLabel
+                        person={{
+                          name: accessRequest.requested_by_name,
+                          email: accessRequest.requested_by_email,
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell className={cn(SECONDARY_COLUMN, 'text-muted-foreground')}>
+                      {formatDate(accessRequest.created)}
+                    </TableCell>
+                    <TableCell>
+                      {/* Stacked while the table is narrow, side by side once it has room. */}
+                      <div className="flex flex-col items-end gap-2 @md/table:flex-row @md/table:justify-end">
+                        <Button
+                          size="sm"
+                          disabled={review.isPending}
+                          onClick={() => decide(accessRequest, 'approve')}
+                        >
+                          {isDeciding(accessRequest, 'approve') && <Spinner aria-hidden />}
+                          Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={review.isPending}
+                          onClick={() => decide(accessRequest, 'deny')}
+                        >
+                          {isDeciding(accessRequest, 'deny') && <Spinner aria-hidden />}
+                          Deny
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              : Array.from({ length: LOADING_ROWS }, (_unused, index) => (
+                  <TableRow key={index}>
+                    <TableCell colSpan={COLUMN_COUNT}>
+                      <Skeleton className="h-5 w-full" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+          </TableBody>
+        </Table>
+      </div>
+      {requests.data && (
+        <Pagination page={page} count={requests.data.count} onPageChange={onPageChange} />
+      )}
+    </>
+  )
+}

@@ -47,6 +47,19 @@ class VisibilityScopedQuerySet(models.QuerySet):
             )
         )
 
+    def solely_owned_by(self, user):
+        """Rows where ``user`` holds the Owner level and no other active user
+        does - the ones nobody could manage if ``user`` were deactivated."""
+        permissions = self.model.permissions
+        other_active_owners = permissions.rel.related_model.objects.filter(
+            models.Q(**{permissions.field.name: models.OuterRef("pk")}),
+            access_level=AccessLevel.OWNER,
+            user__is_active=True,
+        ).exclude(user=user)
+        return self.filter(
+            permissions__user=user, permissions__access_level=AccessLevel.OWNER
+        ).exclude(models.Exists(other_active_owners))
+
     def visible_to(self, user):
         """The list/detail chokepoint: active rows in the user's organization
         they have any resolvable access to, annotated by
@@ -58,10 +71,50 @@ class VisibilityScopedQuerySet(models.QuerySet):
         )
 
 
+def outside_trashed_projects(prefix=""):
+    """Matches documents that are personal or whose project isn't in the trash.
+    ``prefix`` reaches documents through a relation, e.g. ``"document__"``."""
+    return models.Q(**{f"{prefix}project__isnull": True}) | models.Q(
+        **{f"{prefix}project__is_active": True}
+    )
+
+
 class DocumentQuerySet(VisibilityScopedQuerySet):
     """Documents are scoped directly to their organization, not through the
     optional parent project."""
 
+    def for_organization(self, organization):
+        """Also hides documents filed under a project that's in the trash:
+        they leave and return with their project. The documents' own
+        ``is_active`` is untouched, so restoring the project brings back
+        exactly the documents that were live, and the document trash still
+        holds only documents deleted on their own."""
+        return super().for_organization(organization).filter(outside_trashed_projects())
+
     def for_project(self, project):
         """Convenience narrowing to a single project's active documents."""
         return self.filter(project=project, is_active=True)
+
+
+class DocumentVersionManager(models.Manager):
+    def record(self, document, user):
+        """Keeps ``document``'s title and content as they are now, as the
+        version at its current revision, saved by ``user``. Called in the same
+        transaction as the save that made that revision, so a document always
+        has exactly one version per revision."""
+        return self.create(
+            document=document,
+            revision=document.revision,
+            title=document.title,
+            content=document.content,
+            created_by=user,
+        )
+
+
+class AttachmentQuerySet(models.QuerySet):
+    def bytes_used_by(self, organization):
+        """How much ``organization``'s attached files take up, in bytes -
+        including those of documents in the trash, which are still stored."""
+        return self.filter(document__organization=organization).aggregate(
+            total=Coalesce(models.Sum("size"), 0)
+        )["total"]

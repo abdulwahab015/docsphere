@@ -1,8 +1,6 @@
-from celery import shared_task
-
-from core.email import send_templated_mail
-from projects.choices import AccessLevel
+from core.email import email_task, send_templated_mail
 from projects.models import DocumentAccessRequest, DocumentPermission, ProjectPermission
+from projects.permissions import active_owners
 
 
 def _send_share_notification(
@@ -28,7 +26,7 @@ def _send_share_notification(
     )
 
 
-@shared_task
+@email_task
 def send_project_shared_email_task(permission_id):
     _send_share_notification(
         ProjectPermission,
@@ -40,7 +38,7 @@ def send_project_shared_email_task(permission_id):
     )
 
 
-@shared_task
+@email_task
 def send_document_shared_email_task(permission_id):
     _send_share_notification(
         DocumentPermission,
@@ -52,15 +50,13 @@ def send_document_shared_email_task(permission_id):
     )
 
 
-@shared_task
+@email_task
 def send_access_request_created_email_task(access_request_id):
     access_request = DocumentAccessRequest.objects.select_related(
         "document", "requested_by"
     ).get(pk=access_request_id)
     owner_emails = list(
-        DocumentPermission.objects.filter(
-            document=access_request.document, access_level=AccessLevel.OWNER
-        ).values_list("user__email", flat=True)
+        active_owners(access_request.document).values_list("email", flat=True)
     )
     if not owner_emails:
         return
@@ -69,13 +65,13 @@ def send_access_request_created_email_task(access_request_id):
         "projects/email/access_request_created",
         {
             "document_title": access_request.document.title,
-            "requested_by": access_request.requested_by.email,
+            "requested_by": access_request.requested_by.name_and_email,
         },
         owner_emails,
     )
 
 
-@shared_task
+@email_task
 def send_access_request_approved_email_task(access_request_id):
     access_request = DocumentAccessRequest.objects.select_related(
         "document", "requested_by"
@@ -87,7 +83,7 @@ def send_access_request_approved_email_task(access_request_id):
     )
 
 
-@shared_task
+@email_task
 def send_access_request_denied_email_task(access_request_id):
     access_request = DocumentAccessRequest.objects.select_related(
         "document", "requested_by"

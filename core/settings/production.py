@@ -16,6 +16,11 @@ if not CORS_ALLOWED_ORIGINS:
 
 REQUEST_LOG_TRUST_FORWARDED_FOR = True
 
+# Sent through the EMAIL_HOST server; the development default only prints them.
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend"
+)
+
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
@@ -26,7 +31,12 @@ SECURE_HSTS_PRELOAD = True
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
+# Setting STORAGES replaces Django's default for every entry, so "default"
+# (where attached files are stored, in MEDIA_ROOT) has to be named too.
 STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },

@@ -1,5 +1,7 @@
 import factory
+import pyotp
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 from organizations.factories import OrganizationFactory
 from users.choices import InvitationStatus, OrganizationRole
@@ -18,6 +20,15 @@ class UserFactory(factory.django.DjangoModelFactory):
     email = factory.Sequence(lambda n: f"user{n}@example.com")
     organization = factory.SubFactory(OrganizationFactory)
     org_role = OrganizationRole.MEMBER
+    # Verified unless a test says otherwise (``email_verified_at=None``).
+    email_verified_at = factory.LazyFunction(timezone.now)
+
+    class Params:
+        # Signs in with a code from an authenticator app too.
+        two_factor = factory.Trait(
+            totp_secret=factory.LazyFunction(pyotp.random_base32),
+            two_factor_enabled_at=factory.LazyFunction(timezone.now),
+        )
 
     @classmethod
     def _create(cls, model_class, *args, **kwargs):

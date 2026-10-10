@@ -1,35 +1,127 @@
+import contextlib
+import threading
+import time
 from datetime import timedelta
 from io import BytesIO
 from unittest.mock import patch
 
+import pyotp
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, TestCase, override_settings
-from django.urls import reverse
+from django.db import connection
+from django.test import (
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+    skipUnlessDBFeature,
+)
+from django.urls import URLPattern, URLResolver, get_resolver, reverse
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from openpyxl import Workbook
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from audit.choices import AuditVerb
+from audit.models import AuditEvent
 from core.tests import AssumeActiveSubscription
+from notifications.factories import NotificationFactory
 from organizations.factories import OrganizationFactory, StripeSubscriptionFactory
-from users.choices import InvitationStatus
-from users.constants import MAX_BULK_INVITE_ROWS
-from users.factories import AdminUserFactory, InvitationFactory, UserFactory
+from organizations.models import Organization
+from projects.choices import AccessLevel, AccessRequestStatus
+from projects.factories import (
+    DocumentAccessRequestFactory,
+    DocumentFactory,
+    DocumentPermissionFactory,
+)
+from projects.models import DocumentAccessRequest, DocumentPermission
+from users import services as user_services
+from users import two_factor
+from users.api.v1 import views as user_views
+from users.choices import InvitationStatus, OrganizationRole
+from users.constants import (
+    MAX_BULK_INVITE_ROWS,
+    MAX_NAME_LENGTH,
+    TWO_FACTOR_LOGIN_TIMEOUT,
+)
+from users.email_links import (
+    INVALID_EMAIL_LINK_MESSAGE,
+    make_email_change_token,
+    make_verification_token,
+)
+from users.factories import (
+    DEFAULT_TEST_PASSWORD,
+    AdminUserFactory,
+    InvitationFactory,
+    UserFactory,
+)
 from users.models import Invitation
 from users.password_validation import ComplexityValidator, MaximumLengthValidator
+from users.services import (
+    EMAIL_IN_USE_MESSAGE,
+    LAST_ADMIN_LEAVING_MESSAGE,
+    NO_LONGER_ADMIN_MESSAGE,
+    sole_owner_message,
+)
+from users.tasks import remove_unverified_accounts_task
 
 User = get_user_model()
 
 XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def lapse_verification(user):
+    """Backdates an unverified signup past ``EMAIL_LINK_EXPIRY``, after which
+    it no longer holds its address."""
+    User.objects.filter(pk=user.pk).update(
+        created=timezone.now() - settings.EMAIL_LINK_EXPIRY - timedelta(minutes=1)
+    )
+
+
+def after_links_expire():
+    """Moves the clock the email links are signed with past their expiry."""
+    return patch(
+        "django.core.signing.time.time",
+        return_value=time.time() + settings.EMAIL_LINK_EXPIRY.total_seconds() + 1,
+    )
+
+
+def api_endpoints():
+    """Every named API route, with a placeholder id in its URL, and the
+    methods its view answers."""
+
+    def walk(patterns, prefix):
+        for pattern in patterns:
+            route = prefix + str(pattern.pattern)
+            if isinstance(pattern, URLResolver):
+                yield from walk(pattern.url_patterns, route)
+            elif isinstance(pattern, URLPattern) and route.startswith("api/v1/"):
+                yield pattern
+
+    for pattern in walk(get_resolver().url_patterns, ""):
+        view_class = pattern.callback.view_class
+        url = reverse(pattern.name, kwargs=dict.fromkeys(pattern.pattern.converters, 1))
+        for method in view_class.http_method_names:
+            if method not in ("head", "options") and hasattr(view_class, method):
+                yield pattern.name, method, url
+
+
+def app_code(user, steps_ahead=0):
+    """The code ``user``'s authenticator app shows now, or that many time
+    steps (30 seconds each) from now - a code not used yet, when one from
+    this step already was."""
+    totp = pyotp.TOTP(user.totp_secret)
+    return totp.at(timezone.now() + timedelta(seconds=totp.interval * steps_ahead))
 
 
 def build_xlsx_upload(values, filename="invitees.xlsx"):
@@ -54,7 +146,7 @@ class JWTAuthTests(APITestCase):
         )
 
     def test_login_succeeds_with_correct_credentials(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -70,7 +162,7 @@ class JWTAuthTests(APITestCase):
         )
         self.assertEqual(user.email, "mixed.case@example.com")
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("auth_login"),
                 {"email": "MIXED.CASE@EXAMPLE.COM", "password": self.password},
@@ -114,7 +206,7 @@ class JWTAuthTests(APITestCase):
             self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
     def test_refresh_returns_new_access_token(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             login_response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -130,7 +222,7 @@ class JWTAuthTests(APITestCase):
         self.assertIn("access", response.data)
 
     def test_logout_blacklists_refresh_token(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             login_response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -175,7 +267,7 @@ class RefreshCookieTests(APITestCase):
         self.cookie_name = settings.REFRESH_COOKIE_NAME
 
     def test_login_sets_an_httponly_refresh_cookie_scoped_to_auth(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             response = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": self.password},
@@ -249,6 +341,20 @@ class PasswordResetTests(APITestCase):
         mock_send_mail.assert_called_once()
 
     @patch("core.email.send_mail")
+    def test_a_deactivated_user_is_sent_no_reset_link(self, mock_send_mail):
+        # They couldn't log in with a new password anyway.
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset"), {"email": self.user.email}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
     def test_password_reset_request_with_unknown_email_still_returns_200(
         self, mock_send_mail
     ):
@@ -294,13 +400,15 @@ class PasswordResetTests(APITestCase):
         self.assertTrue(self.user.check_password(new_password))
 
     def test_password_reset_confirm_revokes_existing_refresh_tokens(self):
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             login = self.client.post(
                 reverse("auth_login"),
                 {"email": self.user.email, "password": "Old-Pass-123!"},
             )
         old_refresh = login.data["refresh"]
 
+        # The login recorded last_login, which reset tokens include.
+        self.user.refresh_from_db()
         uid = urlsafe_base64_encode(force_bytes(self.user.pk))
         token = default_token_generator.make_token(self.user)
         with self.assertNumQueries(9):
@@ -312,6 +420,25 @@ class PasswordResetTests(APITestCase):
         with self.assertNumQueries(1):
             reuse = self.client.post(reverse("auth_refresh"), {"refresh": old_refresh})
         self.assertEqual(reuse.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_a_reset_link_sent_before_a_login_no_longer_works(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+        self.client.post(
+            reverse("auth_login"),
+            {"email": self.user.email, "password": "Old-Pass-123!"},
+        )
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset_confirm"),
+                {"uid": uid, "token": token, "new_password": "New-Strong-Pass!456"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.last_login)
+        self.assertTrue(self.user.check_password("Old-Pass-123!"))
 
     def test_password_reset_confirm_fails_with_invalid_token(self):
         uid = urlsafe_base64_encode(force_bytes(self.user.pk))
@@ -356,6 +483,22 @@ class PasswordResetTests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_password_reset_confirm_reports_a_weak_password_on_its_field(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(
+                reverse("auth_password_reset_confirm"),
+                {"uid": uid, "token": token, "new_password": "alllowercase1"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("Old-Pass-123!"))
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
@@ -411,6 +554,8 @@ class PasswordChangeTests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password(self.password))
 
@@ -436,6 +581,372 @@ class PasswordChangeTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class EmailVerificationTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = AdminUserFactory(email="admin@acme.test", email_verified_at=None)
+        self.verify_url = reverse("auth_verify_email")
+        self.resend_url = reverse("user_verification_email_resend")
+
+    def test_the_emailed_link_verifies_the_address(self):
+        token = make_verification_token(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.email_verified)
+
+    def test_following_the_link_again_changes_nothing(self):
+        token = make_verification_token(self.user)
+        self.client.post(self.verify_url, {"token": token})
+        self.user.refresh_from_db()
+        verified_at = self.user.email_verified_at
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email_verified_at, verified_at)
+
+    def test_an_expired_link_is_refused(self):
+        token = make_verification_token(self.user)
+
+        with after_links_expire(), self.assertNumQueries(0):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], [INVALID_EMAIL_LINK_MESSAGE])
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.email_verified)
+
+    def test_a_forged_link_is_refused(self):
+        token = make_verification_token(self.user)
+        forged = token[:-1] + ("A" if token[-1] != "A" else "B")
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.verify_url, {"token": forged})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], [INVALID_EMAIL_LINK_MESSAGE])
+
+    def test_a_link_for_another_address_of_the_account_is_refused(self):
+        token = make_verification_token(self.user)
+        User.objects.filter(pk=self.user.pk).update(email="moved@acme.test")
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.email_verified)
+
+    def test_an_email_change_link_is_refused(self):
+        # An email-change link must not double as a verification link.
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.verify_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_resend_emails_a_new_link(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["admin@acme.test"])
+        self.assertIn(
+            f"{settings.FRONTEND_URL}/verify-email?token=", mail.outbox[0].body
+        )
+
+    def test_resend_is_refused_once_verified(self):
+        verified = UserFactory()
+        self.client.force_authenticate(verified)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_resend_needs_a_signed_in_user(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_resend_is_rate_limited(self):
+        self.client.force_authenticate(self.user)
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"email_verification": "1/min"}
+        ):
+            with self.assertNumQueries(1):
+                self.client.post(self.resend_url)
+            with self.assertNumQueries(0):
+                response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(len(mail.outbox), 1)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class EmailChangeTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.password = "S0me-Strong-Pass!"
+        self.user = UserFactory(email="old@acme.test", password=self.password)
+        self.request_url = reverse("user_email_change")
+        self.confirm_url = reverse("auth_confirm_email")
+
+    def request_change(self, new_email, password=None):
+        return self.client.post(
+            self.request_url,
+            {"new_email": new_email, "current_password": password or self.password},
+        )
+
+    def test_request_emails_a_link_to_the_new_address_and_changes_nothing_yet(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(3):
+            response = self.request_change("New@Acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["New@Acme.test"])
+        self.assertIn("old@acme.test", message.body)
+        self.assertIn(f"{settings.FRONTEND_URL}/confirm-email?token=", message.body)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "old@acme.test")
+
+    def test_confirming_moves_the_account_signs_out_everywhere_and_tells_the_old_address(
+        self,
+    ):
+        old_refresh = str(RefreshToken.for_user(self.user))
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        with self.assertNumQueries(12):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "new@acme.test")
+        self.assertTrue(self.user.email_verified)
+        refreshed = self.client.post(reverse("auth_refresh"), {"refresh": old_refresh})
+        self.assertEqual(refreshed.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["old@acme.test"])
+        self.assertIn("new@acme.test", mail.outbox[0].body)
+
+    def test_after_the_change_only_the_new_address_logs_in(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        self.client.post(self.confirm_url, {"token": token})
+        login_url = reverse("auth_login")
+
+        old = self.client.post(
+            login_url, {"email": "old@acme.test", "password": self.password}
+        )
+        new = self.client.post(
+            login_url, {"email": "new@acme.test", "password": self.password}
+        )
+
+        self.assertEqual(old.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(new.status_code, status.HTTP_200_OK)
+
+    def test_confirming_takes_the_address_from_an_account_that_never_verified_it(self):
+        squatter = AdminUserFactory(email="new@acme.test", email_verified_at=None)
+        lapse_verification(squatter)
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(
+            Organization.objects.filter(pk=squatter.organization_id).exists()
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "new@acme.test")
+
+    def test_request_refuses_a_wrong_current_password(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.request_change("new@acme.test", password="Wr0ng-Pass!")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", response.data)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_request_refuses_the_current_address(self):
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(0):
+            response = self.request_change("OLD@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["new_email"], ["This is already your email address."]
+        )
+
+    def test_request_refuses_an_address_another_account_holds(self):
+        UserFactory(email="taken@acme.test", organization=None)
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(1):
+            response = self.request_change("taken@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["new_email"], [EMAIL_IN_USE_MESSAGE])
+
+    def test_request_refuses_an_address_with_a_pending_invitation(self):
+        InvitationFactory(email="invited@acme.test")
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(2):
+            response = self.request_change("invited@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["new_email"], [EMAIL_IN_USE_MESSAGE])
+
+    def test_request_needs_a_verified_address(self):
+        unverified = AdminUserFactory(email_verified_at=None)
+        self.client.force_authenticate(unverified)
+
+        with self.assertNumQueries(0):
+            response = self.request_change("new@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["code"], "email_unverified")
+
+    def test_request_needs_a_signed_in_user(self):
+        with self.assertNumQueries(0):
+            response = self.request_change("new@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_request_is_rate_limited(self):
+        self.client.force_authenticate(self.user)
+
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"email_change": "1/min"}
+        ):
+            self.request_change("new@acme.test")
+            with self.assertNumQueries(0):
+                response = self.request_change("other@acme.test")
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_confirm_refuses_a_link_already_used(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        self.client.post(self.confirm_url, {"token": token})
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], [INVALID_EMAIL_LINK_MESSAGE])
+
+    def test_confirm_refuses_an_address_taken_since_the_link_was_sent(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        UserFactory(email="new@acme.test", organization=None)
+
+        with self.assertNumQueries(5):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], EMAIL_IN_USE_MESSAGE)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "old@acme.test")
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_confirm_refuses_an_expired_link(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+
+        with after_links_expire(), self.assertNumQueries(0):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, "old@acme.test")
+
+    def test_confirm_refuses_a_verification_link(self):
+        token = make_verification_token(self.user)
+
+        with self.assertNumQueries(0):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_confirm_refuses_a_deactivated_account(self):
+        token = make_email_change_token(self.user, "new@acme.test")
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.confirm_url, {"token": token})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class EmailVerificationGateTests(APITestCase):
+    """Until a new signup verifies their address, every endpoint refuses them
+    except the few that let them verify, sign in and out, and see why."""
+
+    # (URL name, method) pairs an unverified signup may still use.
+    OPEN_TO_UNVERIFIED = frozenset(
+        {
+            ("auth_login", "post"),
+            ("auth_login_two_factor", "post"),
+            ("auth_refresh", "post"),
+            ("auth_logout", "post"),
+            ("auth_password_reset", "post"),
+            ("auth_password_reset_confirm", "post"),
+            ("auth_verify_email", "post"),
+            ("auth_confirm_email", "post"),
+            ("invitation_accept", "post"),
+            ("organization_signup", "post"),
+            ("user_me", "get"),
+            ("user_verification_email_resend", "post"),
+        }
+    )
+
+    def setUp(self):
+        # An organization that hasn't subscribed yet, like every new signup:
+        # the refusal must say "verify" before it says "pay".
+        self.user = AdminUserFactory(email_verified_at=None)
+        self.client.force_authenticate(self.user)
+
+    def test_every_other_endpoint_refuses_an_unverified_signup(self):
+        refused = []
+        for name, method, url in api_endpoints():
+            if (name, method) in self.OPEN_TO_UNVERIFIED:
+                continue
+            with self.subTest(endpoint=name, method=method):
+                with self.assertNumQueries(0):
+                    response = getattr(self.client, method)(url)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.data["code"], "email_unverified")
+                refused.append(name)
+
+        # The walk found the API: every app's endpoints were checked.
+        self.assertIn("project_list_create", refused)
+        self.assertIn("subscriptions_checkout", refused)
+        self.assertIn("organization_profile", refused)
+
+    def test_the_open_endpoints_exist(self):
+        endpoints = {(name, method) for name, method, _ in api_endpoints()}
+
+        self.assertLessEqual(self.OPEN_TO_UNVERIFIED, endpoints)
+
+
 class InvitationTests(AssumeActiveSubscription, APITestCase):
     def setUp(self):
         super().setUp()
@@ -456,7 +967,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
     def test_admin_can_create_invitation_for_own_organization(self, mock_send_mail):
         self.client.force_authenticate(self.admin_a)
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_list_create"), {"email": "invitee@example.com"}
             )
@@ -468,6 +979,97 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(invitation.status, InvitationStatus.PENDING)
         self.assertTrue(invitation.token)
         mock_send_mail.assert_called_once()
+
+    def test_invitations_are_listed_without_their_tokens(self):
+        self.admin_a.name = "Ada Admin"
+        self.admin_a.save(update_fields=["name"])
+        InvitationFactory(
+            organization=self.org_a, invited_by=self.admin_a, email="one@example.com"
+        )
+        InvitationFactory(
+            organization=self.org_a, invited_by=self.admin_a, email="two@example.com"
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("invitation_list_create"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for row in response.data["results"]:
+            self.assertNotIn("token", row)
+            self.assertEqual(row["invited_by_email"], "admin-a@example.com")
+            self.assertEqual(row["invited_by_name"], "Ada Admin")
+            self.assertEqual(row["status"], InvitationStatus.PENDING)
+
+    @patch("core.email.send_mail")
+    def test_creating_an_invitation_does_not_return_its_token(self, mock_send_mail):
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(8):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "invitee@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotIn("token", response.data)
+        invitation = Invitation.objects.get(email="invitee@example.com")
+        self.assertIn(invitation.token, mock_send_mail.call_args.kwargs["message"])
+
+    def test_a_pending_invitation_past_its_expiry_is_listed_as_expired(self):
+        invitation = InvitationFactory(organization=self.org_a, invited_by=self.admin_a)
+        Invitation.objects.filter(pk=invitation.pk).update(
+            sent_at=timezone.now() - settings.INVITATION_EXPIRY - timedelta(seconds=1)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("invitation_list_create"))
+
+        self.assertEqual(
+            response.data["results"][0]["status"], InvitationStatus.EXPIRED
+        )
+
+    @patch("core.email.send_mail")
+    def test_an_expired_invitation_does_not_block_inviting_the_email_again(
+        self, mock_send_mail
+    ):
+        expired = InvitationFactory(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="again@example.com",
+        )
+        Invitation.objects.filter(pk=expired.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(8):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "again@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], InvitationStatus.PENDING)
+
+    @patch("core.email.send_mail")
+    def test_expired_invitations_do_not_count_toward_the_pending_cap(
+        self, mock_send_mail
+    ):
+        expired = InvitationFactory(organization=self.org_a, invited_by=self.admin_a)
+        Invitation.objects.filter(pk=expired.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with (
+            patch("users.api.v1.serializers.MAX_PENDING_INVITATIONS_PER_ORG", 1),
+            self.assertNumQueries(8),
+        ):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "extra@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_non_admin_cannot_create_invitation(self):
         self.client.force_authenticate(self.member_a)
@@ -504,6 +1106,22 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Invitation.objects.filter(email=self.member_a.email).exists())
+
+    @patch("core.email.send_mail")
+    def test_can_invite_an_address_its_unverified_account_has_lost(
+        self, mock_send_mail
+    ):
+        lapse_verification(
+            AdminUserFactory(email="squatted@example.com", email_verified_at=None)
+        )
+        self.client.force_authenticate(self.admin_a)
+
+        with self.assertNumQueries(8):
+            response = self.client.post(
+                reverse("invitation_list_create"), {"email": "squatted@example.com"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_cannot_invite_an_email_with_an_existing_pending_invitation(self):
         InvitationFactory(
@@ -548,7 +1166,7 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             token="valid-token",
         )
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(10):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {"token": "valid-token", "password": "Str0ng-New-Pass!"},
@@ -564,10 +1182,32 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
         user = User.objects.get(email="new-user@example.com")
         self.assertEqual(user.organization, self.org_a)
         self.assertTrue(user.check_password("Str0ng-New-Pass!"))
+        self.assertEqual(user.name, "")
+        # The link was emailed to this address: following it proves it's theirs.
+        self.assertTrue(user.email_verified)
 
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, InvitationStatus.ACCEPTED)
         self.assertIsNotNone(invitation.accepted_at)
+
+    def test_accept_invitation_records_the_name_given(self):
+        InvitationFactory(
+            organization=self.org_a, email="new-user@example.com", token="valid-token"
+        )
+
+        with self.assertNumQueries(10):
+            response = self.client.post(
+                reverse("invitation_accept"),
+                {
+                    "token": "valid-token",
+                    "password": "Str0ng-New-Pass!",
+                    "name": " Grace Hopper ",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email="new-user@example.com")
+        self.assertEqual(user.name, "Grace Hopper")
 
     def test_accept_invitation_twice_fails(self):
         InvitationFactory(
@@ -603,13 +1243,15 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             token="valid-token",
         )
 
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             response = self.client.post(
                 reverse("invitation_accept"),
                 {"token": "valid-token", "password": "alllowercase1"},
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertNotIn("non_field_errors", response.data)
         self.assertFalse(User.objects.filter(email="new-user@example.com").exists())
 
     def test_accept_invitation_fails_once_expired(self):
@@ -626,6 +1268,49 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_accept_invitation_fails_once_its_email_has_an_account(self):
+        """e.g. the invitee signed up an organization of their own meanwhile:
+        a refusal, not a clash creating a second user with the same email."""
+        InvitationFactory(
+            organization=self.org_a,
+            invited_by=self.admin_a,
+            email="taken@example.com",
+            token="valid-token",
+        )
+        UserFactory(email="taken@example.com", organization=self.org_b)
+
+        with self.assertNumQueries(2):
+            response = self.client.post(
+                reverse("invitation_accept"),
+                {"token": "valid-token", "password": "Str0ng-New-Pass!"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["token"], ["This invitation link is invalid or has expired."]
+        )
+        self.assertEqual(User.objects.filter(email="taken@example.com").count(), 1)
+
+    def test_accepting_takes_over_an_address_its_unverified_account_has_lost(self):
+        squatter = AdminUserFactory(email="taken@example.com", email_verified_at=None)
+        lapse_verification(squatter)
+        InvitationFactory(
+            organization=self.org_a, email="taken@example.com", token="valid-token"
+        )
+
+        response = self.client.post(
+            reverse("invitation_accept"),
+            {"token": "valid-token", "password": "Str0ng-New-Pass!"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(
+            Organization.objects.filter(pk=squatter.organization_id).exists()
+        )
+        self.assertEqual(
+            User.objects.get(email="taken@example.com").organization, self.org_a
+        )
 
     def test_accept_invitation_is_rate_limited(self):
         cache.clear()
@@ -677,7 +1362,9 @@ class InvitationTests(AssumeActiveSubscription, APITestCase):
 class CurrentUserAPITests(APITestCase):
     def setUp(self):
         self.org = OrganizationFactory(name="Acme")
-        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.admin = AdminUserFactory(
+            email="admin@example.com", name="Ada Admin", organization=self.org
+        )
         self.member = UserFactory(email="member@example.com", organization=self.org)
         self.url = reverse("user_me")
 
@@ -694,14 +1381,31 @@ class CurrentUserAPITests(APITestCase):
             {
                 "id": self.admin.pk,
                 "email": "admin@example.com",
+                "email_verified": True,
+                "two_factor_enabled": False,
+                "name": "Ada Admin",
                 "org_role": "ADMIN",
                 "organization": {
                     "id": self.org.pk,
                     "name": "Acme",
                     "has_active_subscription": True,
+                    "payment_failed": False,
+                    "deletion_scheduled_for": None,
+                    "require_two_factor": False,
                 },
             },
         )
+
+    def test_says_when_a_renewal_payment_failed_and_access_continues(self):
+        StripeSubscriptionFactory(customer__subscriber=self.org, status="past_due")
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["organization"]["has_active_subscription"])
+        self.assertTrue(response.data["organization"]["payment_failed"])
 
     def test_member_of_an_unpaid_organization_is_not_blocked_with_402(self):
         self.client.force_authenticate(self.member)
@@ -722,6 +1426,16 @@ class CurrentUserAPITests(APITestCase):
 
         self.assertFalse(response.data["organization"]["has_active_subscription"])
 
+    def test_an_unverified_signup_can_read_their_account(self):
+        unverified = AdminUserFactory(organization=self.org, email_verified_at=None)
+        self.client.force_authenticate(unverified)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["email_verified"])
+
     def test_user_without_an_organization_gets_a_null_organization(self):
         rootless_admin = AdminUserFactory(organization=None)
         self.client.force_authenticate(rootless_admin)
@@ -732,9 +1446,96 @@ class CurrentUserAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data["organization"])
 
+    def test_schema_documents_the_organization_as_nullable(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        organization = response.data["components"]["schemas"]["CurrentUser"][
+            "properties"
+        ]["organization"]
+        self.assertTrue(organization["nullable"])
+
+    def test_schema_always_includes_the_name_in_the_response(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        current_user = response.data["components"]["schemas"]["CurrentUser"]
+        self.assertIn("name", current_user["required"])
+
+    def test_changes_own_name_without_needing_a_subscription(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(self.url, {"name": "  Grace Hopper "})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["name"], "Grace Hopper")
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.name, "Grace Hopper")
+
+    def test_clears_own_name(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(self.url, {"name": ""})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.name, "")
+
+    def test_only_the_name_can_be_changed(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.patch(
+                self.url,
+                {"name": "Grace", "email": "taken@example.com", "org_role": "ADMIN"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.name, "Grace")
+        self.assertEqual(self.member.email, "member@example.com")
+        self.assertEqual(self.member.org_role, "MEMBER")
+
+    def test_refuses_a_name_over_the_length_limit(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(
+                self.url, {"name": "x" * (MAX_NAME_LENGTH + 1)}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data)
+
+    def test_an_unverified_signup_cannot_change_their_name(self):
+        unverified = AdminUserFactory(organization=self.org, email_verified_at=None)
+        self.client.force_authenticate(unverified)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(self.url, {"name": "Grace"})
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["code"], "email_unverified")
+
+    def test_a_full_replace_is_not_offered(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(0):
+            response = self.client.put(self.url, {"name": "Grace"})
+
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
     def test_anonymous_request_is_rejected(self):
         with self.assertNumQueries(0):
             response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_anonymous_name_change_is_rejected(self):
+        with self.assertNumQueries(0):
+            response = self.client.patch(self.url, {"name": "Grace"})
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
@@ -760,13 +1561,14 @@ class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
         Invitation.objects.filter(pk=self.invitation.pk).update(sent_at=stale)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(8):
             response = self.client.post(self.resend_url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.invitation.refresh_from_db()
         self.assertNotEqual(self.invitation.token, "first-token")
-        self.assertEqual(response.data["token"], self.invitation.token)
+        self.assertNotIn("token", response.data)
+        self.assertEqual(response.data["status"], InvitationStatus.PENDING)
         self.assertGreater(self.invitation.sent_at, stale)
         mock_send_mail.assert_called_once()
         self.assertIn(self.invitation.token, mock_send_mail.call_args.kwargs["message"])
@@ -794,10 +1596,41 @@ class InvitationRevokeResendTests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_revoke_marks_the_invitation_revoked_and_kills_its_link(self):
+    def test_resend_refuses_an_expired_invitation_replaced_by_a_newer_one(self):
+        Invitation.objects.filter(pk=self.invitation.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        InvitationFactory(
+            organization=self.org, invited_by=self.admin, email=self.invitation.email
+        )
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"], "This email already has a pending invitation."
+        )
+        self.invitation.refresh_from_db()
+        self.assertEqual(self.invitation.token, "first-token")
+
+    def test_resend_refuses_once_the_email_has_an_account(self):
+        UserFactory(email=self.invitation.email)
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(2):
+            response = self.client.post(self.resend_url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"], "A user with this email already exists."
+        )
+
+    def test_revoke_marks_the_invitation_revoked_and_kills_its_link(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(5):
             response = self.client.delete(self.revoke_url)
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
@@ -850,7 +1683,9 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
         super().setUp()
         self.org = OrganizationFactory(name="Org A")
         self.other_org = OrganizationFactory(name="Org B")
-        self.admin = AdminUserFactory(email="admin@example.com", organization=self.org)
+        self.admin = AdminUserFactory(
+            email="admin@example.com", name="Grace Hopper", organization=self.org
+        )
         self.member = UserFactory(email="member@example.com", organization=self.org)
         self.url = reverse("user_list")
 
@@ -864,23 +1699,45 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
         emails = [row["email"] for row in response.data["results"]]
         self.assertEqual(emails, ["admin@example.com", "member@example.com"])
 
-    def test_member_only_sees_id_and_email(self):
+    def test_member_only_sees_id_email_and_name(self):
         self.client.force_authenticate(self.member)
 
         with self.assertNumQueries(2):
             response = self.client.get(self.url)
 
+        self.assertEqual(
+            [(row["email"], row["name"]) for row in response.data["results"]],
+            [("admin@example.com", "Grace Hopper"), ("member@example.com", "")],
+        )
         for row in response.data["results"]:
-            self.assertEqual(set(row.keys()), {"id", "email"})
+            self.assertEqual(set(row.keys()), {"id", "email", "name"})
 
-    def test_admin_also_sees_role_and_join_date(self):
+    def test_admin_also_sees_role_join_date_and_two_factor(self):
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(2):
             response = self.client.get(self.url)
 
         for row in response.data["results"]:
-            self.assertEqual(set(row.keys()), {"id", "email", "org_role", "created"})
+            self.assertEqual(
+                set(row.keys()),
+                {"id", "email", "name", "org_role", "created", "two_factor_enabled"},
+            )
+
+    def test_schema_documents_both_the_admin_and_member_shapes(self):
+        with self.assertNumQueries(0):
+            response = self.client.get(reverse("schema"), {"format": "json"})
+
+        schemas = response.data["components"]["schemas"]
+        rows = schemas["PaginatedRosterUserList"]["properties"]["results"]["items"]
+        self.assertEqual(rows["$ref"], "#/components/schemas/RosterUser")
+        self.assertEqual(
+            schemas["RosterUser"]["oneOf"],
+            [
+                {"$ref": "#/components/schemas/UserDetail"},
+                {"$ref": "#/components/schemas/User"},
+            ],
+        )
 
     def test_excludes_users_from_other_organizations(self):
         UserFactory(email="outsider@example.com", organization=self.other_org)
@@ -907,6 +1764,15 @@ class UserListAPITests(AssumeActiveSubscription, APITestCase):
 
         with self.assertNumQueries(2):
             response = self.client.get(self.url, {"search": "admin"})
+
+        emails = [row["email"] for row in response.data["results"]]
+        self.assertEqual(emails, ["admin@example.com"])
+
+    def test_search_also_matches_names(self):
+        self.client.force_authenticate(self.member)
+
+        with self.assertNumQueries(2):
+            response = self.client.get(self.url, {"search": "hopper"})
 
         emails = [row["email"] for row in response.data["results"]]
         self.assertEqual(emails, ["admin@example.com"])
@@ -950,12 +1816,23 @@ class DeactivateUserTests(AssumeActiveSubscription, APITestCase):
     def test_admin_deactivates_a_user_in_their_own_organization(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(7):
             response = self.client.delete(self._url(self.member))
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.member.refresh_from_db()
         self.assertFalse(self.member.is_active)
+
+    def test_an_admin_demoted_meanwhile_can_no_longer_deactivate_anyone(self):
+        User.objects.filter(pk=self.admin.pk).update(org_role=OrganizationRole.MEMBER)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(6):
+            response = self.client.delete(self._url(self.member))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_active)
 
     def test_admin_cannot_deactivate_a_user_in_another_organization(self):
         self.client.force_authenticate(self.admin)
@@ -1015,10 +1892,26 @@ class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
     def _url(self, user):
         return reverse("user_role_update", args=[user.pk])
 
+    def test_an_admin_demoted_meanwhile_can_no_longer_change_roles(self):
+        # The request was authenticated as an admin, but by the time it holds
+        # the organization's lock, another admin has made them a member.
+        User.objects.filter(pk=self.admin.pk).update(org_role=OrganizationRole.MEMBER)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(6):
+            response = self.client.patch(
+                self._url(self.member), {"org_role": OrganizationRole.ADMIN}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["detail"], NO_LONGER_ADMIN_MESSAGE)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.org_role, OrganizationRole.MEMBER)
+
     def test_admin_promotes_a_member_to_admin(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self._url(self.member), {"org_role": "ADMIN"}, format="json"
             )
@@ -1032,7 +1925,7 @@ class OrganizationRoleUpdateTests(AssumeActiveSubscription, APITestCase):
         other_admin = AdminUserFactory(organization=self.org)
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(7):
             response = self.client.patch(
                 self._url(other_admin), {"org_role": "MEMBER"}, format="json"
             )
@@ -1106,7 +1999,7 @@ class DeactivatedUserListAndReactivateTests(AssumeActiveSubscription, APITestCas
     def test_admin_reactivates_a_deactivated_user(self):
         self.client.force_authenticate(self.admin)
 
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(5):
             response = self.client.post(
                 reverse("user_reactivate", args=[self.deactivated.pk])
             )
@@ -1153,6 +2046,8 @@ class UserManagerTests(TestCase):
 
         self.assertTrue(admin.is_staff)
         self.assertTrue(admin.is_superuser)
+        # Created from the command line, not by signing up: nothing to verify.
+        self.assertTrue(admin.email_verified)
 
     def test_create_superuser_rejects_non_staff(self):
         with self.assertNumQueries(0), self.assertRaises(ValueError):
@@ -1165,6 +2060,37 @@ class UserManagerTests(TestCase):
             User.objects.create_superuser(
                 email="root@example.com", password="R00t-Pass!", is_superuser=False
             )
+
+
+class UnverifiedAccountRemovalTests(TestCase):
+    def setUp(self):
+        self.lapsed = AdminUserFactory(email_verified_at=None)
+        lapse_verification(self.lapsed)
+
+    def test_removes_signups_that_never_verified_with_their_organizations(self):
+        waiting = AdminUserFactory(email_verified_at=None)
+        verified = AdminUserFactory()
+
+        remove_unverified_accounts_task.delay()
+
+        self.assertFalse(User.objects.filter(pk=self.lapsed.pk).exists())
+        self.assertFalse(
+            Organization.objects.filter(pk=self.lapsed.organization_id).exists()
+        )
+        self.assertTrue(User.objects.filter(pk=waiting.pk).exists())
+        self.assertTrue(User.objects.filter(pk=verified.pk).exists())
+
+    def test_leaves_an_organization_with_a_verified_member_alone(self):
+        UserFactory(organization=self.lapsed.organization)
+
+        remove_unverified_accounts_task.delay()
+
+        self.assertTrue(User.objects.filter(pk=self.lapsed.pk).exists())
+
+    def test_an_account_that_never_verified_in_time_no_longer_holds_its_address(self):
+        holders = User.objects.holding_email()
+
+        self.assertFalse(holders.filter(pk=self.lapsed.pk).exists())
 
 
 class PasswordComplexityTests(SimpleTestCase):
@@ -1205,11 +2131,69 @@ class ModelStrTests(TestCase):
         with self.assertNumQueries(0):
             self.assertEqual(str(user), "person@example.com")
 
+    def test_user_full_name_is_their_name(self):
+        user = UserFactory(name="Grace Hopper", organization=None)
+
+        with self.assertNumQueries(0):
+            self.assertEqual(user.get_full_name(), "Grace Hopper")
+            self.assertEqual(user.get_short_name(), "Grace Hopper")
+
+    def test_user_is_named_by_name_and_email_or_the_email_alone(self):
+        named = UserFactory(
+            email="grace@example.com", name="Grace Hopper", organization=None
+        )
+        unnamed = UserFactory(email="person@example.com", organization=None)
+
+        with self.assertNumQueries(0):
+            self.assertEqual(named.name_and_email, "Grace Hopper (grace@example.com)")
+            self.assertEqual(unnamed.name_and_email, "person@example.com")
+
     def test_invitation_str_includes_email_and_status(self):
         invitation = InvitationFactory(email="invitee@example.com")
 
         with self.assertNumQueries(0):
             self.assertEqual(str(invitation), "invitee@example.com (PENDING)")
+
+
+class InvitationStatusTests(TestCase):
+    """Expiry is worked out on read: a stored PENDING row past
+    INVITATION_EXPIRY reads as EXPIRED, and drops out of ``pending()``."""
+
+    def setUp(self):
+        self.fresh = InvitationFactory()
+        self.stale = InvitationFactory(organization=self.fresh.organization)
+        Invitation.objects.filter(pk=self.stale.pk).update(
+            sent_at=timezone.now() - settings.INVITATION_EXPIRY - timedelta(seconds=1)
+        )
+        self.stale.refresh_from_db()
+
+    def test_a_fresh_pending_invitation_is_pending(self):
+        self.assertFalse(self.fresh.is_expired)
+        self.assertEqual(self.fresh.current_status, InvitationStatus.PENDING)
+
+    def test_a_pending_invitation_past_its_expiry_reads_as_expired(self):
+        self.assertTrue(self.stale.is_expired)
+        self.assertEqual(self.stale.current_status, InvitationStatus.EXPIRED)
+        self.assertEqual(self.stale.status, InvitationStatus.PENDING)
+
+    def test_a_settled_invitation_keeps_its_status_however_old(self):
+        Invitation.objects.filter(pk=self.stale.pk).update(
+            status=InvitationStatus.ACCEPTED
+        )
+        self.stale.refresh_from_db()
+
+        self.assertFalse(self.stale.is_expired)
+        self.assertEqual(self.stale.current_status, InvitationStatus.ACCEPTED)
+
+    def test_pending_leaves_out_expired_and_settled_invitations(self):
+        InvitationFactory(
+            organization=self.fresh.organization, status=InvitationStatus.REVOKED
+        )
+
+        with self.assertNumQueries(1):
+            pending = list(Invitation.objects.pending())
+
+        self.assertEqual(pending, [self.fresh])
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
@@ -1229,7 +2213,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "one@example.com", "two@example.com"])
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(13):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -1246,7 +2230,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["one@example.com", "two@example.com"])
 
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(13):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -1260,7 +2244,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "dupe@example.com", "DUPE@example.com"])
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -1292,7 +2276,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.client.force_authenticate(self.admin_a)
         upload = build_xlsx_upload(["Email", "not-an-email", "valid@example.com"])
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -1318,7 +2302,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
             ["Email", "existing@example.com", "pending@example.com", "new@example.com"]
         )
 
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(8):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
             )
@@ -1330,6 +2314,25 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
         self.assertEqual(reasons["pending@example.com"], "invitation already pending")
         mock_send_mail.assert_called_once()
         self.assertTrue(Invitation.objects.filter(email="new@example.com").exists())
+
+    @patch("core.email.send_mail")
+    def test_an_expired_invitation_does_not_block_its_row(self, mock_send_mail):
+        expired = InvitationFactory(
+            organization=self.org_a, invited_by=self.admin_a, email="late@example.com"
+        )
+        Invitation.objects.filter(pk=expired.pk).update(
+            sent_at=timezone.now() - timedelta(days=999)
+        )
+        self.client.force_authenticate(self.admin_a)
+        upload = build_xlsx_upload(["late@example.com"])
+
+        with self.assertNumQueries(8):
+            response = self.client.post(
+                reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data, {"created": 1, "skipped": []})
 
     @patch("core.email.send_mail")
     def test_a_user_from_another_organization_is_skipped_not_invited(
@@ -1361,7 +2364,7 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
 
         with (
             patch("users.services.MAX_PENDING_INVITATIONS_PER_ORG", 1),
-            self.assertNumQueries(5),
+            self.assertNumQueries(8),
         ):
             response = self.client.post(
                 reverse("invitation_bulk_create"), {"file": upload}, format="multipart"
@@ -1432,3 +2435,917 @@ class InvitationBulkCreateTests(AssumeActiveSubscription, APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(Invitation.objects.exists())
+
+
+# How long a request waits for the other one at the point where, without the
+# lock, both would have passed their check. With the lock the other request is
+# still waiting for it, so this times out and the first carries on alone.
+RACE_WAIT_SECONDS = 2
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentAdminChangeTests(AssumeActiveSubscription, TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    def test_two_admins_demoting_each_other_at_once_leave_one_admin(self):
+        organization = OrganizationFactory()
+        first, second = AdminUserFactory.create_batch(2, organization=organization)
+        both_checked = threading.Barrier(2)
+        save_role = user_views.OrganizationRoleSerializer.save
+        responses = []
+
+        def save_after_the_other_checked(serializer, **kwargs):
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return save_role(serializer, **kwargs)
+
+        def demote(admin, other_admin):
+            client = APIClient()
+            client.force_authenticate(admin)
+            try:
+                responses.append(
+                    client.patch(
+                        reverse("user_role_update", args=[other_admin.pk]),
+                        {"org_role": OrganizationRole.MEMBER},
+                    )
+                )
+            finally:
+                connection.close()
+
+        with patch.object(
+            user_views.OrganizationRoleSerializer,
+            "save",
+            autospec=True,
+            side_effect=save_after_the_other_checked,
+        ):
+            requests = [
+                threading.Thread(target=demote, args=(first, second)),
+                threading.Thread(target=demote, args=(second, first)),
+            ]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_200_OK, status.HTTP_403_FORBIDDEN],
+        )
+        self.assertEqual(
+            User.objects.filter(
+                organization=organization, org_role=OrganizationRole.ADMIN
+            ).count(),
+            1,
+        )
+
+
+class AccountDeletionTests(AssumeActiveSubscription, APITestCase):
+    url = reverse("user_account_delete")
+
+    def setUp(self):
+        super().setUp()
+        self.org = OrganizationFactory()
+        self.admin = AdminUserFactory(organization=self.org)
+        self.member = UserFactory(
+            organization=self.org, name="Mia", email="mia@example.com"
+        )
+        self.document = DocumentFactory(
+            project=None, organization=self.org, created_by=self.admin
+        )
+        DocumentPermissionFactory(
+            document=self.document, user=self.admin, access_level=AccessLevel.OWNER
+        )
+        self.client.force_authenticate(self.member)
+
+    def delete_account(self, password=DEFAULT_TEST_PASSWORD, queries=0):
+        with self.assertNumQueries(queries):
+            return self.client.post(self.url, {"current_password": password})
+
+    def test_a_member_deletes_their_account_which_is_anonymised(self):
+        written = DocumentFactory(
+            project=None, organization=self.org, created_by=self.member
+        )
+        for user in (self.admin, self.member):
+            DocumentPermissionFactory(
+                document=written, user=user, access_level=AccessLevel.OWNER
+            )
+        DocumentPermissionFactory(
+            document=self.document, user=self.member, access_level=AccessLevel.EDITOR
+        )
+        pending = DocumentAccessRequestFactory(
+            document=self.document, requested_by=self.member
+        )
+        answered = DocumentAccessRequestFactory(
+            document=written,
+            requested_by=self.member,
+            status=AccessRequestStatus.DENIED,
+        )
+        NotificationFactory(recipient=self.member)
+        RefreshToken.for_user(self.member)
+
+        response = self.delete_account(queries=18)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.cookies[settings.REFRESH_COOKIE_NAME].value, "")
+        self.member.refresh_from_db()
+        self.assertEqual(
+            (
+                self.member.email,
+                self.member.name,
+                self.member.is_active,
+                self.member.has_usable_password(),
+                bool(self.member.deleted_at),
+            ),
+            (
+                f"deleted-{self.member.pk}@deleted.invalid",
+                "Deleted user",
+                False,
+                False,
+                True,
+            ),
+        )
+        # What they wrote keeps its (now anonymous) author; their access,
+        # pending request and notifications are gone, answered requests kept.
+        written.refresh_from_db()
+        self.assertEqual(written.created_by, self.member)
+        self.assertFalse(DocumentPermission.objects.filter(user=self.member).exists())
+        self.assertFalse(DocumentAccessRequest.objects.filter(pk=pending.pk).exists())
+        self.assertTrue(DocumentAccessRequest.objects.filter(pk=answered.pk).exists())
+        self.assertFalse(self.member.notifications.exists())
+        self.assertFalse(
+            OutstandingToken.objects.filter(user=self.member)
+            .exclude(blacklistedtoken__isnull=False)
+            .exists()
+        )
+        self.assertEqual(
+            list(AuditEvent.objects.values_list("actor", "verb")),
+            [(self.member.pk, AuditVerb.ACCOUNT_DELETED)],
+        )
+
+    def test_the_old_address_can_no_longer_sign_in_and_is_free_again(self):
+        self.delete_account(queries=14)
+        self.client.force_authenticate(None)
+
+        with self.assertNumQueries(1):
+            login = self.client.post(
+                reverse("auth_login"),
+                {"email": "mia@example.com", "password": DEFAULT_TEST_PASSWORD},
+            )
+        self.client.force_authenticate(self.admin)
+        with self.assertNumQueries(8):
+            invite = self.client.post(
+                reverse("invitation_list_create"), {"email": "mia@example.com"}
+            )
+
+        self.assertEqual(login.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(invite.status_code, status.HTTP_201_CREATED)
+
+    def test_a_deleted_account_is_neither_deactivated_nor_reactivatable(self):
+        self.delete_account(queries=14)
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            listed = self.client.get(reverse("user_deactivated_list"))
+        with self.assertNumQueries(1):
+            reactivated = self.client.post(
+                reverse("user_reactivate", args=[self.member.pk])
+            )
+
+        self.assertEqual(listed.data["count"], 0)
+        self.assertEqual(reactivated.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_a_wrong_password_changes_nothing(self):
+        response = self.delete_account(password="Wrong-Pass-123!", queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", response.data)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.is_active)
+
+    def test_the_only_owner_of_something_is_refused(self):
+        sole = DocumentFactory(
+            project=None, organization=self.org, created_by=self.member
+        )
+        DocumentPermissionFactory(
+            document=sole, user=self.member, access_level=AccessLevel.OWNER
+        )
+
+        response = self.delete_account(queries=6)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            str(response.data["detail"]), sole_owner_message(projects=0, documents=1)
+        )
+        self.member.refresh_from_db()
+        self.assertEqual(
+            (self.member.is_active, self.member.email), (True, "mia@example.com")
+        )
+
+    def test_the_organizations_only_admin_is_refused(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.delete_account(queries=5)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(str(response.data["detail"]), LAST_ADMIN_LEAVING_MESSAGE)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_an_admin_may_leave_while_another_admin_remains(self):
+        leaving = AdminUserFactory(organization=self.org)
+        self.client.force_authenticate(leaving)
+
+        response = self.delete_account(queries=15)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_in_a_deleted_organization_even_its_last_admin_and_only_owner_may_leave(
+        self,
+    ):
+        # The admin is the organization's only admin and the document's only
+        # Owner - but nobody can use either while it waits to be purged.
+        self.org.deletion_requested_at = timezone.now()
+        self.org.save()
+        self.client.force_authenticate(self.admin)
+
+        response = self.delete_account(queries=12)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.deleted_at)
+
+    def test_signing_in_is_required(self):
+        self.client.force_authenticate(None)
+
+        response = self.delete_account(queries=0)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+@skipUnlessDBFeature("has_select_for_update")
+class ConcurrentAccountDeletionTests(AssumeActiveSubscription, TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    def test_two_admins_leaving_at_once_leave_one_admin(self):
+        organization = OrganizationFactory()
+        admins = AdminUserFactory.create_batch(2, organization=organization)
+        both_checked = threading.Barrier(2)
+        revoke_sessions = user_services.blacklist_outstanding_tokens
+        responses = []
+
+        def revoke_after_the_other_checked(user):
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_checked.wait(timeout=RACE_WAIT_SECONDS)
+            return revoke_sessions(user)
+
+        def leave(admin):
+            client = APIClient()
+            client.force_authenticate(admin)
+            try:
+                responses.append(
+                    client.post(
+                        reverse("user_account_delete"),
+                        {"current_password": DEFAULT_TEST_PASSWORD},
+                    )
+                )
+            finally:
+                connection.close()
+
+        with patch.object(
+            user_services,
+            "blacklist_outstanding_tokens",
+            side_effect=revoke_after_the_other_checked,
+        ):
+            requests = [
+                threading.Thread(target=leave, args=(admin,)) for admin in admins
+            ]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_204_NO_CONTENT, status.HTTP_400_BAD_REQUEST],
+        )
+        self.assertEqual(
+            User.objects.filter(
+                organization=organization,
+                org_role=OrganizationRole.ADMIN,
+                is_active=True,
+            ).count(),
+            1,
+        )
+
+
+class TwoFactorSetupTests(APITestCase):
+    def setUp(self):
+        self.user = UserFactory(email="setup@example.com")
+        self.client.force_authenticate(self.user)
+
+    def start_setup(self):
+        response = self.client.post(reverse("user_two_factor_setup"))
+        self.user.refresh_from_db()
+        return response
+
+    def test_starting_gives_a_key_for_the_app_without_turning_it_on(self):
+        with self.assertNumQueries(1):
+            response = self.client.post(reverse("user_two_factor_setup"))
+        self.user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["secret"], self.user.totp_secret)
+        self.assertEqual(
+            response.data["otpauth_uri"],
+            pyotp.TOTP(self.user.totp_secret).provisioning_uri(
+                name="setup@example.com", issuer_name="DocSphere"
+            ),
+        )
+        self.assertFalse(self.user.two_factor_enabled)
+
+    def test_a_code_from_the_app_turns_it_on_and_gives_recovery_codes(self):
+        self.start_setup()
+
+        with self.assertNumQueries(9):
+            response = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": app_code(self.user)}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        codes = response.data["recovery_codes"]
+        self.assertEqual(len(set(codes)), 10)
+        for code in codes:
+            self.assertRegex(code, r"^[a-z2-9]{5}-[a-z2-9]{5}$")
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.two_factor_enabled)
+        # Only hashes are kept.
+        stored = set(self.user.recovery_codes.values_list("code_hash", flat=True))
+        self.assertEqual(len(stored), 10)
+        self.assertFalse(stored & {code.replace("-", "") for code in codes})
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                actor=self.user, verb=AuditVerb.TWO_FACTOR_ENABLED
+            ).exists()
+        )
+
+    def test_the_status_says_whether_it_is_on_and_how_many_codes_are_left(self):
+        with self.assertNumQueries(1):
+            off = self.client.get(reverse("user_two_factor"))
+        self.assertEqual(off.data, {"enabled": False, "recovery_codes_left": 0})
+
+        self.start_setup()
+        self.client.post(
+            reverse("user_two_factor_confirm"), {"otp": app_code(self.user)}
+        )
+        self.user.refresh_from_db()
+        self.client.force_authenticate(self.user)
+
+        with self.assertNumQueries(1):
+            on = self.client.get(reverse("user_two_factor"))
+        self.assertEqual(on.data, {"enabled": True, "recovery_codes_left": 10})
+
+    def test_a_wrong_code_turns_nothing_on(self):
+        self.start_setup()
+        wrong = f"{(int(app_code(self.user)) + 1) % 1_000_000:06d}"
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": wrong}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("otp", response.data)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.two_factor_enabled)
+        self.assertFalse(AuditEvent.objects.exists())
+
+    def test_starting_again_replaces_an_unconfirmed_key(self):
+        self.start_setup()
+        first = self.user.totp_secret
+
+        self.start_setup()
+
+        self.assertNotEqual(self.user.totp_secret, first)
+
+    def test_confirming_needs_a_started_setup(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": "123456"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_setup_and_confirm_are_refused_once_it_is_on(self):
+        user = UserFactory(two_factor=True)
+        self.client.force_authenticate(user)
+
+        with self.assertNumQueries(0):
+            setup = self.client.post(reverse("user_two_factor_setup"))
+        with self.assertNumQueries(0):
+            confirm = self.client.post(
+                reverse("user_two_factor_confirm"), {"otp": app_code(user)}
+            )
+
+        self.assertEqual(setup.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(confirm.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class TwoFactorLoginTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.user = UserFactory(two_factor=True)
+        self.recovery_codes = two_factor.issue_recovery_codes(self.user)
+
+    def log_in_with_password(self):
+        return self.client.post(
+            reverse("auth_login"),
+            {"email": self.user.email, "password": DEFAULT_TEST_PASSWORD},
+        )
+
+    def send_code(self, otp, token=None, **extra):
+        return self.client.post(
+            reverse("auth_login_two_factor"),
+            {
+                "two_factor_token": token
+                or self.log_in_with_password().data["two_factor_token"],
+                "otp": otp,
+            },
+            **extra,
+        )
+
+    def test_the_password_alone_signs_nobody_in(self):
+        with self.assertNumQueries(1):
+            response = self.log_in_with_password()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(response.data), {"two_factor_token"})
+        self.assertNotIn(settings.REFRESH_COOKIE_NAME, response.cookies)
+        self.assertFalse(OutstandingToken.objects.exists())
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.last_login)
+
+    def test_a_code_from_the_app_finishes_signing_in(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+
+        with self.assertNumQueries(4):
+            response = self.send_code(app_code(self.user), token)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(response.data), {"access", "refresh"})
+        self.assertIn(settings.REFRESH_COOKIE_NAME, response.cookies)
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.last_login)
+
+    def test_a_recovery_code_works_once_however_it_is_typed(self):
+        code = self.recovery_codes[0]
+        typed = f"  {code.upper().replace('-', ' ')} "
+        token = self.log_in_with_password().data["two_factor_token"]
+
+        with self.assertNumQueries(4):
+            first = self.send_code(typed, token)
+        with self.assertNumQueries(2):
+            again = self.send_code(code, token)
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(again.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.user.recovery_codes.unused().count(), 9)
+
+    def test_an_app_code_works_only_once(self):
+        code = app_code(self.user)
+        self.assertEqual(self.send_code(code).status_code, status.HTTP_200_OK)
+
+        response = self.send_code(code)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["otp"], [two_factor.INVALID_CODE_MESSAGE])
+        # The next one still works.
+        next_code = self.send_code(app_code(self.user, steps_ahead=1))
+        self.assertEqual(next_code.status_code, status.HTTP_200_OK)
+
+    def test_a_wrong_code_is_refused(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        wrong = f"{(int(app_code(self.user)) + 1) % 1_000_000:06d}"
+
+        with self.assertNumQueries(1):
+            response = self.send_code(wrong, token)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["otp"], [two_factor.INVALID_CODE_MESSAGE])
+        self.assertFalse(OutstandingToken.objects.exists())
+
+    def test_a_code_from_too_long_ago_is_refused(self):
+        response = self.send_code(app_code(self.user, steps_ahead=-2))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_the_sign_in_expires(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        later = time.time() + TWO_FACTOR_LOGIN_TIMEOUT.total_seconds() + 1
+
+        with (
+            patch("django.core.signing.time.time", return_value=later),
+            self.assertNumQueries(0),
+        ):
+            response = self.send_code(app_code(self.user), token)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["two_factor_token"], [two_factor.EXPIRED_SIGN_IN_MESSAGE]
+        )
+
+    def test_a_forged_token_is_refused(self):
+        with self.assertNumQueries(0):
+            response = self.send_code(app_code(self.user), "not-a-real-token")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("two_factor_token", response.data)
+
+    def test_the_sign_in_ends_if_two_factor_is_reset_or_the_account_deactivated(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        two_factor.clear_two_factor(self.user)
+        reset = self.send_code(self.recovery_codes[0], token)
+
+        other = UserFactory(two_factor=True)
+        other_token = two_factor.make_login_token(other)
+        User.objects.filter(pk=other.pk).update(is_active=False)
+        deactivated = self.send_code(app_code(other), other_token)
+
+        self.assertEqual(reset.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("two_factor_token", reset.data)
+        self.assertEqual(deactivated.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("two_factor_token", deactivated.data)
+
+    def test_codes_are_rate_limited_per_account_not_per_address(self):
+        token = self.log_in_with_password().data["two_factor_token"]
+        wrong = f"{(int(app_code(self.user)) + 1) % 1_000_000:06d}"
+        with patch.object(
+            ScopedRateThrottle, "THROTTLE_RATES", {"two_factor_login": "1/min"}
+        ):
+            first = self.send_code(wrong, token, REMOTE_ADDR="10.0.0.1")
+            with self.assertNumQueries(0):
+                second = self.send_code(
+                    app_code(self.user), token, REMOTE_ADDR="10.0.0.2"
+                )
+
+        self.assertEqual(first.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(second.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_an_account_without_two_factor_signs_in_with_its_password(self):
+        user = UserFactory()
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                reverse("auth_login"),
+                {"email": user.email, "password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(set(response.data), {"access", "refresh"})
+
+
+class TwoFactorManagementTests(APITestCase):
+    def setUp(self):
+        self.user = UserFactory(two_factor=True)
+        self.recovery_codes = two_factor.issue_recovery_codes(self.user)
+        self.client.force_authenticate(self.user)
+
+    def test_new_recovery_codes_replace_the_old_ones(self):
+        with self.assertNumQueries(4):
+            response = self.client.post(
+                reverse("user_two_factor_recovery_codes"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["recovery_codes"]), 10)
+        self.assertFalse(
+            two_factor.use_recovery_code(self.user, self.recovery_codes[0])
+        )
+        self.assertTrue(
+            two_factor.use_recovery_code(self.user, response.data["recovery_codes"][0])
+        )
+
+    def test_new_recovery_codes_need_the_password_and_two_factor_on(self):
+        with self.assertNumQueries(0):
+            wrong = self.client.post(
+                reverse("user_two_factor_recovery_codes"),
+                {"current_password": "Wrong-Pass-1!"},
+            )
+        self.client.force_authenticate(UserFactory())
+        with self.assertNumQueries(0):
+            off = self.client.post(
+                reverse("user_two_factor_recovery_codes"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(wrong.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", wrong.data)
+        self.assertEqual(off.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(two_factor.use_recovery_code(self.user, self.recovery_codes[0]))
+
+    def test_turning_it_off_forgets_the_key_and_codes(self):
+        with self.assertNumQueries(5):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.two_factor_enabled)
+        self.assertEqual(self.user.totp_secret, "")
+        self.assertFalse(self.user.recovery_codes.exists())
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                actor=self.user, verb=AuditVerb.TWO_FACTOR_DISABLED
+            ).exists()
+        )
+
+    def test_turning_it_off_needs_the_password(self):
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": "Wrong-Pass-1!"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.two_factor_enabled)
+
+    def test_it_cannot_be_turned_off_while_the_organization_requires_it(self):
+        Organization.objects.filter(pk=self.user.organization_id).update(
+            require_two_factor=True
+        )
+        self.user.organization.refresh_from_db()
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.two_factor_enabled)
+
+    def test_turning_it_off_when_it_is_off_is_refused(self):
+        self.client.force_authenticate(UserFactory())
+
+        with self.assertNumQueries(0):
+            response = self.client.post(
+                reverse("user_two_factor_disable"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_deleting_the_account_forgets_the_key_and_codes(self):
+        with self.assertNumQueries(14):
+            response = self.client.post(
+                reverse("user_account_delete"),
+                {"current_password": DEFAULT_TEST_PASSWORD},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.totp_secret, "")
+        self.assertFalse(self.user.two_factor_enabled)
+        self.assertFalse(self.user.recovery_codes.exists())
+
+
+class TwoFactorRequirementTests(APITestCase):
+    """While their organization requires two-factor sign-in and they haven't
+    set it up, every endpoint refuses them except the few that let them set
+    it up, sign in and out, and see why."""
+
+    OPEN_TO_NOT_SET_UP = EmailVerificationGateTests.OPEN_TO_UNVERIFIED | {
+        ("user_two_factor", "get"),
+        ("user_two_factor_setup", "post"),
+        ("user_two_factor_confirm", "post"),
+    }
+
+    def setUp(self):
+        self.organization = OrganizationFactory(require_two_factor=True)
+        self.user = AdminUserFactory(organization=self.organization)
+        self.client.force_authenticate(self.user)
+
+    def test_every_other_endpoint_refuses_someone_without_it(self):
+        refused = []
+        for name, method, url in api_endpoints():
+            if (name, method) in self.OPEN_TO_NOT_SET_UP:
+                continue
+            with self.subTest(endpoint=name, method=method):
+                with self.assertNumQueries(0):
+                    response = getattr(self.client, method)(url)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assertEqual(response.data["code"], "two_factor_required")
+                refused.append(name)
+
+        self.assertIn("project_list_create", refused)
+        self.assertIn("subscriptions_checkout", refused)
+        self.assertIn("organization_profile", refused)
+        self.assertIn("user_me", refused)  # PATCH
+
+    def test_the_open_endpoints_exist(self):
+        endpoints = {(name, method) for name, method, _ in api_endpoints()}
+
+        self.assertLessEqual(self.OPEN_TO_NOT_SET_UP, endpoints)
+
+    def test_setting_it_up_lets_them_in(self):
+        self.client.post(reverse("user_two_factor_setup"))
+        self.user.refresh_from_db()
+        self.client.post(
+            reverse("user_two_factor_confirm"), {"otp": app_code(self.user)}
+        )
+        self.user.refresh_from_db()
+        self.client.force_authenticate(self.user)
+
+        response = self.client.get(reverse("organization_profile"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_the_session_says_what_is_required_and_what_is_on(self):
+        with self.assertNumQueries(1):
+            response = self.client.get(reverse("user_me"))
+
+        self.assertFalse(response.data["two_factor_enabled"])
+        self.assertTrue(response.data["organization"]["require_two_factor"])
+
+    def test_an_organization_without_the_requirement_lets_everyone_in(self):
+        self.client.force_authenticate(AdminUserFactory())
+
+        response = self.client.get(reverse("organization_profile"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class RequireTwoFactorSettingTests(APITestCase):
+    def setUp(self):
+        self.admin = AdminUserFactory(two_factor=True)
+        self.client.force_authenticate(self.admin)
+        self.url = reverse("organization_profile")
+
+    def test_an_admin_with_two_factor_can_require_it(self):
+        with self.assertNumQueries(4):
+            response = self.client.patch(self.url, {"require_two_factor": True})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["require_two_factor"])
+        self.admin.organization.refresh_from_db()
+        self.assertTrue(self.admin.organization.require_two_factor)
+
+    def test_an_admin_without_it_cannot_require_it(self):
+        admin = AdminUserFactory()
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(0):
+            response = self.client.patch(self.url, {"require_two_factor": True})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("require_two_factor", response.data)
+        admin.organization.refresh_from_db()
+        self.assertFalse(admin.organization.require_two_factor)
+
+    def test_the_requirement_can_be_lifted(self):
+        Organization.objects.filter(pk=self.admin.organization_id).update(
+            require_two_factor=True
+        )
+        self.admin.organization.refresh_from_db()
+
+        response = self.client.patch(self.url, {"require_two_factor": False})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.admin.organization.refresh_from_db()
+        self.assertFalse(self.admin.organization.require_two_factor)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
+class TwoFactorResetTests(AssumeActiveSubscription, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.admin = AdminUserFactory(name="Ada Admin", email="ada@example.com")
+        self.member = UserFactory(
+            organization=self.admin.organization,
+            email="lost-phone@example.com",
+            two_factor=True,
+        )
+        two_factor.issue_recovery_codes(self.member)
+        self.client.force_authenticate(self.admin)
+
+    def reset(self, user):
+        return self.client.post(reverse("user_two_factor_reset", args=[user.pk]))
+
+    def test_an_admin_turns_off_a_members_two_factor_and_they_are_told(self):
+        with self.assertNumQueries(8):
+            response = self.reset(self.member)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.member.refresh_from_db()
+        self.assertFalse(self.member.two_factor_enabled)
+        self.assertFalse(self.member.recovery_codes.exists())
+        event = AuditEvent.objects.get(verb=AuditVerb.TWO_FACTOR_RESET)
+        self.assertEqual(event.actor, self.admin)
+        self.assertEqual(event.target_user, self.member)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["lost-phone@example.com"])
+        self.assertIn("Ada Admin (ada@example.com)", mail.outbox[0].body)
+
+        # They sign in with the password alone.
+        self.client.force_authenticate(None)
+        login = self.client.post(
+            reverse("auth_login"),
+            {"email": self.member.email, "password": DEFAULT_TEST_PASSWORD},
+        )
+        self.assertEqual(set(login.data), {"access", "refresh"})
+
+    def test_the_admin_roster_says_who_has_it_on(self):
+        response = self.client.get(reverse("user_list"))
+
+        on = {
+            row["email"]: row["two_factor_enabled"] for row in response.data["results"]
+        }
+        self.assertEqual(on, {"ada@example.com": False, "lost-phone@example.com": True})
+
+    def test_a_member_without_it_or_your_own_account_is_refused(self):
+        without = UserFactory(organization=self.admin.organization)
+        self.admin.totp_secret = pyotp.random_base32()
+        self.admin.two_factor_enabled_at = timezone.now()
+        self.admin.save()
+
+        with self.assertNumQueries(1):
+            not_on = self.reset(without)
+        with self.assertNumQueries(0):
+            own = self.reset(self.admin)
+
+        self.assertEqual(not_on.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(own.status_code, status.HTTP_400_BAD_REQUEST)
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.two_factor_enabled)
+        self.assertFalse(AuditEvent.objects.exists())
+
+    def test_another_organizations_member_is_not_found(self):
+        outsider = UserFactory(two_factor=True)
+
+        with self.assertNumQueries(1):
+            response = self.reset(outsider)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        outsider.refresh_from_db()
+        self.assertTrue(outsider.two_factor_enabled)
+
+    def test_members_cannot_reset_anyone(self):
+        self.client.force_authenticate(
+            UserFactory(organization=self.admin.organization)
+        )
+
+        with self.assertNumQueries(0):
+            response = self.reset(self.member)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.member.refresh_from_db()
+        self.assertTrue(self.member.two_factor_enabled)
+
+
+class ConcurrentTwoFactorCodeTests(TransactionTestCase):
+    """Real concurrent requests, so only on a database with row locks
+    (Postgres: CI and `make test-pg`)."""
+
+    @skipUnlessDBFeature("has_select_for_update")
+    def test_one_code_sent_twice_at_once_signs_in_once(self):
+        user = UserFactory(two_factor=True)
+        token = two_factor.make_login_token(user)
+        code = app_code(user)
+        both_matched = threading.Barrier(2)
+        find_step = two_factor._matching_step
+        responses = []
+
+        def match_then_wait(*args):
+            step = find_step(*args)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_matched.wait(timeout=RACE_WAIT_SECONDS)
+            return step
+
+        def sign_in():
+            try:
+                responses.append(
+                    APIClient().post(
+                        reverse("auth_login_two_factor"),
+                        {"two_factor_token": token, "otp": code},
+                    )
+                )
+            finally:
+                connection.close()
+
+        with patch.object(two_factor, "_matching_step", side_effect=match_then_wait):
+            requests = [threading.Thread(target=sign_in) for _ in range(2)]
+            for request in requests:
+                request.start()
+            for request in requests:
+                request.join()
+
+        self.assertEqual(
+            sorted(response.status_code for response in responses),
+            [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST],
+        )

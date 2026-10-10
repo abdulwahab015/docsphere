@@ -1,0 +1,7 @@
+Hi there,
+
+The DocSphere subscription for {{ organization_name }} renews on {{ period_end }}.
+
+To change your plan or payment details before then, visit billing:
+
+{{ billing_url }}

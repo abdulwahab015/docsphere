@@ -1,8 +1,8 @@
 from django.conf import settings
-from django.utils import timezone
 from djstripe.models import Customer
 
 from clients import stripe as stripe_client
+from subscriptions.exceptions import PaymentProviderUnavailable
 
 
 def create_checkout_session(organization, price_id):
@@ -15,14 +15,11 @@ def create_checkout_session(organization, price_id):
     """
     customer_id = stripe_client.get_or_create_customer_id(organization)
 
-    idempotency_key = f"checkout-{organization.pk}-{price_id}-{timezone.now():%Y%m%d}"
-
     session = stripe_client.create_checkout_session(
         customer_id=customer_id,
         price_id=price_id,
         success_url=f"{settings.FRONTEND_URL}/billing/success/",
         cancel_url=f"{settings.FRONTEND_URL}/billing/cancel/",
-        idempotency_key=idempotency_key,
     )
 
     return session.url
@@ -45,3 +42,42 @@ def create_billing_portal_session(organization):
         return_url=f"{settings.FRONTEND_URL}/billing/",
     )
     return session.url
+
+
+def sync_billing_email(organization):
+    """Gives the organization's Stripe customer its current billing email, so
+    receipts and invoices go there. An organization that has never been
+    through checkout has no customer yet - checkout creates one with the
+    email it has then. Raises ``PaymentProviderUnavailable`` if Stripe can't
+    be updated, so the caller can keep the two from disagreeing."""
+    customer = Customer.objects.filter(subscriber=organization).first()
+    if not customer:
+        return
+
+    try:
+        stripe_client.update_customer_email(
+            customer_id=customer.id, email=organization.billing_email
+        )
+    except stripe_client.StripeError as error:
+        raise PaymentProviderUnavailable() from error
+
+
+def cancel_subscription(organization):
+    """Cancels the organization's subscription at once, if it has one, and
+    records the new status locally so access ends now rather than when the
+    webhook arrives (which brings the rest). Raises
+    ``PaymentProviderUnavailable`` if Stripe can't do it."""
+    subscription = organization.active_subscription
+    if not subscription:
+        return
+
+    try:
+        cancelled = stripe_client.cancel_subscription(subscription.id)
+    except stripe_client.StripeError as error:
+        raise PaymentProviderUnavailable() from error
+
+    subscription.stripe_data = {
+        **subscription.stripe_data,
+        "status": cancelled["status"],
+    }
+    subscription.save(update_fields=["stripe_data"])

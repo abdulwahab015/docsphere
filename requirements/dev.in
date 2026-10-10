@@ -3,9 +3,10 @@
 
 -r base.in
 
-black==26.5.*
+black==26.10.*
 coverage==7.16.*
 factory-boy==3.3.*
+pip-audit==2.10.*
 pip-tools==7.6.*
 pre-commit==4.6.*
 ruff==0.16.*

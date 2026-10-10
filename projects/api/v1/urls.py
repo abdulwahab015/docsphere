@@ -4,12 +4,17 @@ from projects.api.v1.views import (
     DocumentAccessRequestApproveAPIView,
     DocumentAccessRequestDenyAPIView,
     DocumentAccessRequestListCreateAPIView,
+    DocumentAttachmentDestroyAPIView,
+    DocumentAttachmentDownloadAPIView,
+    DocumentAttachmentListCreateAPIView,
     DocumentListCreateAPIView,
     DocumentRestoreAPIView,
     DocumentRetrieveUpdateDestroyAPIView,
     DocumentShareAPIView,
     DocumentShareRevokeAPIView,
     DocumentTrashListAPIView,
+    DocumentVersionListAPIView,
+    DocumentVersionRetrieveAPIView,
     IncomingDocumentAccessRequestListAPIView,
     MyDocumentAccessRequestListAPIView,
     ProjectListCreateAPIView,
@@ -18,11 +23,17 @@ from projects.api.v1.views import (
     ProjectShareAPIView,
     ProjectShareRevokeAPIView,
     ProjectTrashListAPIView,
+    SoleOwnershipAPIView,
 )
 
 urlpatterns = [
     path("", ProjectListCreateAPIView.as_view(), name="project_list_create"),
     path("trash/", ProjectTrashListAPIView.as_view(), name="project_trash"),
+    path(
+        "sole-ownership/<int:user_id>/",
+        SoleOwnershipAPIView.as_view(),
+        name="sole_ownership",
+    ),
     path(
         "<int:pk>/",
         ProjectRetrieveUpdateDestroyAPIView.as_view(),
@@ -59,6 +70,31 @@ document_urlpatterns = [
         "<int:pk>/restore/",
         DocumentRestoreAPIView.as_view(),
         name="document_restore",
+    ),
+    path(
+        "<int:pk>/attachments/",
+        DocumentAttachmentListCreateAPIView.as_view(),
+        name="document_attachment_list_create",
+    ),
+    path(
+        "<int:pk>/attachments/<int:attachment_id>/",
+        DocumentAttachmentDestroyAPIView.as_view(),
+        name="document_attachment_detail",
+    ),
+    path(
+        "<int:pk>/attachments/<int:attachment_id>/download/",
+        DocumentAttachmentDownloadAPIView.as_view(),
+        name="document_attachment_download",
+    ),
+    path(
+        "<int:pk>/versions/",
+        DocumentVersionListAPIView.as_view(),
+        name="document_version_list",
+    ),
+    path(
+        "<int:pk>/versions/<int:revision>/",
+        DocumentVersionRetrieveAPIView.as_view(),
+        name="document_version_detail",
     ),
     path("<int:pk>/share/", DocumentShareAPIView.as_view(), name="document_share"),
     path(

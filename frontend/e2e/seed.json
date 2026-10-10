@@ -1,0 +1,549 @@
+{
+  "password": "E2e-Pass-123!",
+  "prices": [
+    {
+      "nickname": "Monthly",
+      "unit_amount": 1500,
+      "interval": "month"
+    },
+    {
+      "nickname": "Yearly",
+      "unit_amount": 15000,
+      "interval": "year"
+    }
+  ],
+  "organizations": [
+    {
+      "name": "Acme E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@acme.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@acme.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "extra_members": 22
+    },
+    {
+      "name": "Settings E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@settings.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
+    },
+    {
+      "name": "Lapsed E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@lapsed.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@lapsed.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Projects E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@projects.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "editor@projects.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "viewer@projects.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "outsider@projects.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Roadmap",
+          "description": "Where the team is headed.",
+          "visibility": "PRIVATE",
+          "owner": "admin@projects.e2e.test",
+          "shared_with": {
+            "editor@projects.e2e.test": "EDITOR",
+            "viewer@projects.e2e.test": "VIEWER"
+          }
+        },
+        {
+          "name": "Handbook",
+          "visibility": "PUBLIC",
+          "owner": "admin@projects.e2e.test"
+        },
+        {
+          "name": "Secret plans",
+          "visibility": "PRIVATE",
+          "owner": "admin@projects.e2e.test"
+        },
+        {
+          "name": "Archived launch",
+          "visibility": "PRIVATE",
+          "owner": "admin@projects.e2e.test",
+          "in_trash": true
+        }
+      ]
+    },
+    {
+      "name": "Documents E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@docs.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "writer@docs.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "reader@docs.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "stranger@docs.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Research",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "shared_with": {
+            "writer@docs.e2e.test": "EDITOR",
+            "reader@docs.e2e.test": "VIEWER"
+          }
+        }
+      ],
+      "documents": [
+        {
+          "title": "Findings",
+          "content": "Early results look promising.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "project": "Research",
+          "shared_with": {
+            "writer@docs.e2e.test": "EDITOR",
+            "reader@docs.e2e.test": "VIEWER"
+          },
+          "attachments": ["results.pdf"]
+        },
+        {
+          "title": "Draft notes",
+          "content": "Not ready to share.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "project": "Research"
+        },
+        {
+          "title": "Shared brief",
+          "content": "For your eyes only.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "project": "Research",
+          "shared_with": {
+            "stranger@docs.e2e.test": "VIEWER"
+          }
+        },
+        {
+          "title": "Team guide",
+          "content": "Welcome aboard.",
+          "visibility": "PUBLIC",
+          "owner": "admin@docs.e2e.test"
+        },
+        {
+          "title": "Meeting notes",
+          "content": "Agenda to follow.",
+          "visibility": "PRIVATE",
+          "owner": "admin@docs.e2e.test",
+          "shared_with": {
+            "writer@docs.e2e.test": "EDITOR"
+          }
+        },
+        {
+          "title": "Old memo",
+          "content": "Outdated.",
+          "visibility": "PRIVATE",
+          "owner": "writer@docs.e2e.test",
+          "in_trash": true
+        }
+      ]
+    },
+    {
+      "name": "Sharing E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "owner@sharing.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "alex@sharing.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "blair@sharing.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "casey@sharing.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Atlas",
+          "visibility": "PRIVATE",
+          "owner": "owner@sharing.e2e.test"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Plan",
+          "content": "Shared, re-levelled, then revoked.",
+          "visibility": "PRIVATE",
+          "owner": "owner@sharing.e2e.test"
+        },
+        {
+          "title": "Solo",
+          "content": "Only one Owner.",
+          "visibility": "PRIVATE",
+          "owner": "owner@sharing.e2e.test"
+        },
+        {
+          "title": "Policy",
+          "content": "Requested and approved.",
+          "visibility": "PUBLIC",
+          "owner": "owner@sharing.e2e.test"
+        },
+        {
+          "title": "Notice",
+          "content": "Requested and denied.",
+          "visibility": "PUBLIC",
+          "owner": "owner@sharing.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Team E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@team.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "promote@team.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "leaver@team.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "forgetful@team.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Leaving notes",
+          "content": "Only the leaver owns this.",
+          "visibility": "PRIVATE",
+          "owner": "leaver@team.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Unpaid E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@unpaid.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
+    },
+    {
+      "name": "Paid E2E",
+      "billing_email": "billing@paid.e2e.test",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@paid.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
+    },
+    {
+      "name": "Overdue E2E",
+      "billing_email": "billing@overdue.e2e.test",
+      "subscribed": true,
+      "subscription_status": "past_due",
+      "users": [
+        {
+          "email": "admin@overdue.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@overdue.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Account E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "member@account.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "mover@account.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Names E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@names.e2e.test",
+          "role": "ADMIN",
+          "name": "Ada Admin"
+        },
+        {
+          "email": "member@names.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "projects": [
+        {
+          "name": "Launch",
+          "visibility": "PRIVATE",
+          "owner": "admin@names.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Verify E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@verify.e2e.test",
+          "role": "ADMIN",
+          "email_verified": false
+        }
+      ]
+    },
+    {
+      "name": "Activity E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@activity.e2e.test",
+          "role": "ADMIN",
+          "name": "Avery Admin"
+        },
+        {
+          "email": "member@activity.e2e.test",
+          "role": "MEMBER",
+          "name": "Morgan Member"
+        },
+        {
+          "email": "colleague@activity.e2e.test",
+          "role": "MEMBER",
+          "name": "Casey Colleague"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Charter",
+          "content": "Shared during the test, then found in Activity.",
+          "visibility": "PRIVATE",
+          "owner": "admin@activity.e2e.test"
+        },
+        {
+          "title": "Diary",
+          "content": "Private to its owner and the person it's shared with.",
+          "visibility": "PRIVATE",
+          "owner": "member@activity.e2e.test",
+          "shared_with": {
+            "colleague@activity.e2e.test": "VIEWER"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notify E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "owner@notify.e2e.test",
+          "role": "ADMIN",
+          "name": "Olive Owner"
+        },
+        {
+          "email": "member@notify.e2e.test",
+          "role": "MEMBER",
+          "name": "Max Member"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Bulletin",
+          "content": "Asked about, approved, and announced through the bell.",
+          "visibility": "PUBLIC",
+          "owner": "owner@notify.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Leaving E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@leaving.e2e.test",
+          "role": "ADMIN",
+          "name": "Lane Admin"
+        },
+        {
+          "email": "member@leaving.e2e.test",
+          "role": "MEMBER",
+          "name": "Lee Leaving"
+        }
+      ]
+    },
+    {
+      "name": "Closing E2E",
+      "subscribed": false,
+      "users": [
+        {
+          "email": "admin@closing.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@closing.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Export E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@export.e2e.test",
+          "role": "ADMIN"
+        },
+        {
+          "email": "member@export.e2e.test",
+          "role": "MEMBER"
+        }
+      ],
+      "documents": [
+        {
+          "title": "Handbook",
+          "content": "Exported, with its file.",
+          "visibility": "PUBLIC",
+          "owner": "member@export.e2e.test",
+          "attachments": ["policies.pdf"]
+        },
+        {
+          "title": "Secret diary",
+          "content": "Counted, never exported.",
+          "visibility": "PRIVATE",
+          "owner": "member@export.e2e.test"
+        }
+      ]
+    },
+    {
+      "name": "Deleted E2E",
+      "subscribed": false,
+      "deleted": true,
+      "users": [
+        {
+          "email": "admin@deleted.e2e.test",
+          "role": "ADMIN"
+        }
+      ]
+    },
+    {
+      "name": "Two-Factor E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@twofactor.e2e.test",
+          "role": "ADMIN",
+          "two_factor_secret": "T2GSU2G4A56GZWPAGAZNB6KKHBRUMQTG"
+        },
+        {
+          "email": "phone@twofactor.e2e.test",
+          "role": "MEMBER",
+          "two_factor_secret": "QCZ5AEYYFVW7MRQ7DTXEHFUR7SVTHZDQ"
+        },
+        {
+          "email": "setup@twofactor.e2e.test",
+          "role": "MEMBER"
+        },
+        {
+          "email": "codes@twofactor.e2e.test",
+          "role": "MEMBER",
+          "two_factor_secret": "ZLO555PHF7UC7JTPHSCBE55UUXQ2NUVS"
+        }
+      ]
+    },
+    {
+      "name": "Required E2E",
+      "subscribed": true,
+      "users": [
+        {
+          "email": "admin@required.e2e.test",
+          "role": "ADMIN",
+          "two_factor_secret": "HWXROCBKIY57FGY4JIOMWLYR24M7OSYC"
+        },
+        {
+          "email": "member@required.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    },
+    {
+      "name": "Held E2E",
+      "subscribed": true,
+      "require_two_factor": true,
+      "users": [
+        {
+          "email": "admin@held.e2e.test",
+          "role": "ADMIN",
+          "two_factor_secret": "JO3JM6QKRBTEW6JYS6KENN5BMZW3AQ5F"
+        },
+        {
+          "email": "member@held.e2e.test",
+          "role": "MEMBER"
+        }
+      ]
+    }
+  ]
+}

@@ -5,33 +5,56 @@ on:
     branches: [develop, main]
   pull_request:
 
+# Dummy-but-valid backend settings, shared by every job that runs Django.
+env:
+  DJANGO_SETTINGS_MODULE: core.settings.test
+  SECRET_KEY: ci-test-secret-key-not-for-production
+  ALLOWED_HOSTS: localhost
+  ACCESS_TOKEN_LIFETIME_SECONDS: "900"
+  REFRESH_TOKEN_LIFETIME_SECONDS: "604800"
+  INVITATION_EXPIRY_SECONDS: "604800"
+  EMAIL_LINK_EXPIRY_SECONDS: "86400"
+  SUBSCRIPTION_EXPIRY_REMINDER_DAYS: "7"
+  ANON_THROTTLE_RATE: "100000/min"
+  USER_THROTTLE_RATE: "100000/min"
+  LOGIN_THROTTLE_RATE: "100000/min"
+  TWO_FACTOR_LOGIN_THROTTLE_RATE: "100000/min"
+  INVITE_ACCEPT_THROTTLE_RATE: "100000/min"
+  PASSWORD_RESET_THROTTLE_RATE: "100000/min"
+  BILLING_CHECKOUT_THROTTLE_RATE: "100000/min"
+  BILLING_PORTAL_THROTTLE_RATE: "100000/min"
+  ORG_SIGNUP_THROTTLE_RATE: "100000/min"
+  PASSWORD_CHANGE_THROTTLE_RATE: "100000/min"
+  EMAIL_VERIFICATION_THROTTLE_RATE: "100000/min"
+  EMAIL_CHANGE_THROTTLE_RATE: "100000/min"
+  ORGANIZATION_EXPORT_THROTTLE_RATE: "100000/min"
+  STRIPE_PRODUCT_ID: prod_ci_docsphere
+
 jobs:
   test:
     runs-on: ubuntu-latest
 
-    env:
-      DJANGO_SETTINGS_MODULE: core.settings.test
-      SECRET_KEY: ci-test-secret-key-not-for-production
-      ALLOWED_HOSTS: localhost
-      ACCESS_TOKEN_LIFETIME_SECONDS: "900"
-      REFRESH_TOKEN_LIFETIME_SECONDS: "604800"
-      INVITATION_EXPIRY_SECONDS: "604800"
-      SUBSCRIPTION_EXPIRY_REMINDER_DAYS: "7"
-      ANON_THROTTLE_RATE: "100000/min"
-      USER_THROTTLE_RATE: "100000/min"
-      LOGIN_THROTTLE_RATE: "100000/min"
-      INVITE_ACCEPT_THROTTLE_RATE: "100000/min"
-      PASSWORD_RESET_THROTTLE_RATE: "100000/min"
-      BILLING_CHECKOUT_THROTTLE_RATE: "100000/min"
-      BILLING_PORTAL_THROTTLE_RATE: "100000/min"
-      ORG_SIGNUP_THROTTLE_RATE: "100000/min"
-      PASSWORD_CHANGE_THROTTLE_RATE: "100000/min"
-      DJSTRIPE_WEBHOOK_SECRET: whsec_ci_dummy_secret
+    # Production's database, so behaviour SQLite doesn't share (JSON lookups,
+    # row locks, ordering) is what gets tested.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: docsphere
+          POSTGRES_PASSWORD: docsphere
+          POSTGRES_DB: docsphere
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username docsphere"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -45,14 +68,159 @@ jobs:
       - name: Check for missing migrations
         run: python manage.py makemigrations --check --dry-run
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Check frontend API types match the backend schema
+        run: make fe-api-types-check
+
       - name: black
         run: black --check .
 
       - name: ruff
         run: ruff check .
 
-      - name: Test suite
-        run: coverage run manage.py test
+      # In a random order each run, to catch tests that depend on another
+      # having run first; the log prints the seed, and `manage.py test
+      # --shuffle <seed>` repeats that order.
+      - name: Test suite on Postgres
+        run: coverage run manage.py test --shuffle
+        env:
+          DATABASE_URL: postgres://docsphere:docsphere@localhost:5432/docsphere
 
       - name: Coverage report (fails under threshold)
         run: coverage report
+
+      # What `make test` and the end-to-end API run on.
+      - name: Test suite on SQLite
+        run: python manage.py test
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: prettier
+        run: npm run format:check
+
+      - name: oxlint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test suite (fails under coverage threshold)
+        run: npm run test:cov
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: http://localhost:8000
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements/dev.txt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Install Playwright's Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests (real API + production build)
+        run: make fe-e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7
+
+  # The production images and stack (docker-compose.yml), checked from outside
+  # through nginx: catches a Dockerfile that no longer builds or a proxy route
+  # that no longer reaches Django.
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use the example settings
+        run: cp .env.example .env
+
+      - name: Build the stack and smoke-test it
+        run: make docker-smoke
+
+  # Known vulnerabilities: in anything production runs, they fail the build;
+  # in development tooling, they're reported as a warning.
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements/dev.txt
+
+      # npm audits the lockfile, so the frontend needs no install.
+      - name: Runtime dependencies
+        run: make audit
+
+      - name: Development tooling (reported, doesn't fail)
+        run: make audit-dev || echo "::warning title=Dependency audit::Development tooling has known vulnerabilities - see this step's log."
+
+  # The workflows themselves and the deploy and smoke-test scripts.
+  scripts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: actionlint + shellcheck
+        run: make lint-scripts

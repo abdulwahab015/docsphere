@@ -16,3 +16,7 @@ htmlcov/
 .DS_Store
 .pre-commit-config.yaml
 *.md
+frontend/
+scripts/
+# Celery beat's local schedule file (make beat).
+celerybeat-schedule*

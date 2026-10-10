@@ -1,19 +1,24 @@
 from django.contrib import admin
 
-from .models import Invitation, User
+from .models import Invitation, RecoveryCode, User
 
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     list_display = (
         "email",
+        "name",
         "organization",
         "org_role",
+        "email_verified_at",
+        "two_factor_enabled_at",
         "is_active",
         "is_staff",
     )
     list_filter = ("organization", "org_role", "is_active")
-    search_fields = ("email",)
+    search_fields = ("email", "name")
+    # The authenticator key would let anyone who reads it make codes.
+    exclude = ("totp_secret",)
 
 
 @admin.register(Invitation)
@@ -28,3 +33,11 @@ class InvitationAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "organization")
     search_fields = ("email",)
+
+
+@admin.register(RecoveryCode)
+class RecoveryCodeAdmin(admin.ModelAdmin):
+    list_display = ("user", "used_at", "created")
+    list_filter = ("used_at",)
+    search_fields = ("user__email",)
+    exclude = ("code_hash",)

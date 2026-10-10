@@ -1,14 +1,25 @@
+import io
 import json
 import logging
+import smtplib
 from unittest.mock import PropertyMock, patch
 
+import sentry_sdk
 import stripe
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
-from django.test import SimpleTestCase, TestCase
+from django.core.mail import send_mail
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from django.utils.module_loading import autodiscover_modules
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
+from sentry_sdk.transport import Transport
 
+from core.celery import app as celery_app
+from core.email import EMAIL_MAX_RETRIES, ConsoleEmailBackend
+from core.error_tracking import init_error_tracking, scrub_event
 from core.logging.formatters import JSONFormatter
 from core.middleware.logging import _redact
 from core.permissions import HasActiveSubscription, SubscriptionRequired
@@ -18,7 +29,16 @@ from organizations.factories import (
     WebhookEndpointFactory,
 )
 from organizations.models import Organization
+from projects.tasks import (
+    send_access_request_approved_email_task,
+    send_access_request_created_email_task,
+    send_access_request_denied_email_task,
+    send_document_shared_email_task,
+    send_project_shared_email_task,
+)
+from subscriptions.tasks import send_expiry_reminder_email_task
 from users.factories import AdminUserFactory, InvitationFactory, UserFactory
+from users.tasks import send_invitation_email_task, send_password_reset_email_task
 
 
 class RedactTests(SimpleTestCase):
@@ -124,7 +144,7 @@ class RequestLoggingMiddlewareTests(APITestCase):
 
         with (
             self.assertLogs("core.request", level="INFO") as captured,
-            self.assertNumQueries(2),
+            self.assertNumQueries(3),
         ):
             response = self.client.post(
                 reverse("auth_login"),
@@ -249,11 +269,31 @@ class HasActiveSubscriptionUnitTests(TestCase):
         with self.assertNumQueries(2):
             self.assertIs(self._check(user), True)
 
+    def test_user_whose_renewal_payment_is_being_retried_passes(self):
+        user = UserFactory()
+        StripeSubscriptionFactory(
+            customer__subscriber=user.organization, status="past_due"
+        )
+
+        with self.assertNumQueries(2):
+            self.assertIs(self._check(user), True)
+
     def test_user_without_an_active_subscription_raises_402(self):
         user = UserFactory()
 
         with self.assertNumQueries(1), self.assertRaises(SubscriptionRequired):
             self._check(user)
+
+    def test_user_whose_subscription_stripe_gave_up_on_raises_402(self):
+        for status_name in ("unpaid", "canceled", "incomplete_expired"):
+            with self.subTest(status_name):
+                user = UserFactory()
+                StripeSubscriptionFactory(
+                    customer__subscriber=user.organization, status=status_name
+                )
+
+                with self.assertNumQueries(2), self.assertRaises(SubscriptionRequired):
+                    self._check(user)
 
 
 class HasActiveSubscriptionEndpointTests(APITestCase):
@@ -417,3 +457,231 @@ class StripeWebhookEndpointTests(APITestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+EAGER_PROPAGATES_SETTING = "CELERY_TASK_EAGER_PROPAGATES"
+
+
+class CeleryBeatScheduleTests(SimpleTestCase):
+    def test_every_scheduled_task_is_registered_with_the_celery_app(self):
+        # What the Celery app's autodiscovery does when a worker or beat starts.
+        autodiscover_modules("tasks")
+
+        for entry_name, entry in settings.CELERY_BEAT_SCHEDULE.items():
+            with self.subTest(entry_name):
+                self.assertIn(entry["task"], celery_app.tasks)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+class EmailTaskRetryTests(TestCase):
+    def setUp(self):
+        self.user = UserFactory()
+        # Eager, but without the test settings' CELERY_TASK_EAGER_PROPAGATES:
+        # with it, Celery raises its internal Retry exception instead of
+        # running the retry. The Celery app has already read its settings, so
+        # it's changed on the app itself; the outcome is read from the result.
+        propagates = celery_app.conf[EAGER_PROPAGATES_SETTING]
+        celery_app.conf[EAGER_PROPAGATES_SETTING] = False
+        self.addCleanup(
+            celery_app.conf.__setitem__, EAGER_PROPAGATES_SETTING, propagates
+        )
+
+    @patch("core.email.send_mail")
+    def test_a_failed_send_is_retried_until_it_goes_through(self, mock_send_mail):
+        mock_send_mail.side_effect = [
+            smtplib.SMTPServerDisconnected("Connection unexpectedly closed"),
+            None,
+        ]
+
+        with self.assertNumQueries(2):
+            result = send_password_reset_email_task.delay(self.user.pk)
+
+        self.assertTrue(result.successful())
+        self.assertEqual(mock_send_mail.call_count, 2)
+
+    @patch("core.email.send_mail")
+    def test_gives_up_after_the_retry_limit(self, mock_send_mail):
+        mock_send_mail.side_effect = ConnectionRefusedError()
+
+        with self.assertNumQueries(EMAIL_MAX_RETRIES + 1):
+            result = send_password_reset_email_task.delay(self.user.pk)
+
+        self.assertIsInstance(result.result, ConnectionRefusedError)
+        self.assertEqual(mock_send_mail.call_count, EMAIL_MAX_RETRIES + 1)
+
+    @patch("core.email.send_mail")
+    def test_an_error_that_retrying_cannot_fix_fails_at_once(self, mock_send_mail):
+        mock_send_mail.side_effect = ValueError("Invalid address")
+
+        with self.assertNumQueries(1):
+            result = send_password_reset_email_task.delay(self.user.pk)
+
+        self.assertIsInstance(result.result, ValueError)
+        mock_send_mail.assert_called_once()
+
+    def test_every_email_task_retries_failed_sends(self):
+        email_tasks = [
+            send_invitation_email_task,
+            send_password_reset_email_task,
+            send_project_shared_email_task,
+            send_document_shared_email_task,
+            send_access_request_created_email_task,
+            send_access_request_approved_email_task,
+            send_access_request_denied_email_task,
+            send_expiry_reminder_email_task,
+        ]
+
+        for task in email_tasks:
+            with self.subTest(task.name):
+                self.assertEqual(task.autoretry_for, (OSError,))
+                self.assertEqual(task.max_retries, EMAIL_MAX_RETRIES)
+
+
+class ConsoleEmailBackendTests(SimpleTestCase):
+    def test_prints_an_email_as_written_so_its_link_can_be_copied(self):
+        # Long enough that the encoded message would be quoted-printable.
+        link = "http://localhost:3000/reset-password?uid=Mg&token=" + "a1b2" * 15
+        stream = io.StringIO()
+
+        send_mail(
+            subject="Reset your DocSphere password",
+            message=f"Use the link below to reset your password:\n\n{link}\n",
+            from_email="DocSphere <no-reply@example.com>",
+            recipient_list=["member@example.com"],
+            connection=ConsoleEmailBackend(stream=stream),
+        )
+
+        output = stream.getvalue()
+        self.assertIn("To: member@example.com\n", output)
+        self.assertIn("Subject: Reset your DocSphere password\n", output)
+        self.assertIn(f"\n{link}\n", output)
+
+
+DSN = "https://public@errors.example.com/1"
+
+
+class ErrorTrackingSetupTests(SimpleTestCase):
+    @override_settings(SENTRY_DSN="")
+    @patch("core.error_tracking.sentry_sdk.init")
+    def test_stays_off_without_a_dsn(self, mock_init):
+        self.assertIs(init_error_tracking(), False)
+
+        mock_init.assert_not_called()
+
+    @override_settings(
+        SENTRY_DSN=DSN, SENTRY_ENVIRONMENT="staging", SENTRY_RELEASE="abc123"
+    )
+    @patch("core.error_tracking.sentry_sdk.init")
+    def test_starts_with_a_dsn_without_sending_personal_data(self, mock_init):
+        self.assertIs(init_error_tracking(), True)
+
+        options = mock_init.call_args.kwargs
+        self.assertEqual(options["dsn"], DSN)
+        self.assertEqual(options["environment"], "staging")
+        self.assertEqual(options["release"], "abc123")
+        self.assertIs(options["send_default_pii"], False)
+        self.assertIs(options["include_local_variables"], False)
+        self.assertEqual(options["max_request_body_size"], "never")
+        self.assertIs(options["before_send"], scrub_event)
+
+    def test_scrubbing_keeps_only_the_request_method_path_and_user_id(self):
+        event = {
+            "request": {
+                "method": "POST",
+                "url": "https://docsphere.example.com/api/v1/documents/",
+                "query_string": "search=secret",
+                "headers": {"Authorization": "Bearer abc"},
+                "cookies": {"refresh_token": "xyz"},
+                "data": {"content": "Private notes"},
+                "env": {"REMOTE_ADDR": "203.0.113.7"},
+            },
+            "user": {
+                "id": "7",
+                "email": "ada@example.com",
+                "ip_address": "203.0.113.7",
+            },
+        }
+
+        self.assertEqual(
+            scrub_event(event, hint={}),
+            {
+                "request": {
+                    "method": "POST",
+                    "url": "https://docsphere.example.com/api/v1/documents/",
+                },
+                "user": {"id": "7"},
+            },
+        )
+
+
+class ErrorTrackingScrubbingTests(SimpleTestCase):
+    def test_an_error_outside_any_request_passes_through_unchanged(self):
+        # e.g. a Celery task's: no request, and nobody signed in.
+        event = {"exception": {"values": [{"type": "OSError"}]}}
+
+        self.assertEqual(scrub_event(dict(event), hint={}), event)
+
+
+class _CapturingTransport(Transport):
+    """Keeps the events the SDK would have sent."""
+
+    def __init__(self, options=None):
+        super().__init__(options)
+        self.events = []
+
+    def capture_envelope(self, envelope):
+        event = envelope.get_event()
+        if event:
+            self.events.append(event)
+
+
+@override_settings(SENTRY_DSN=DSN)
+class ErrorReportTests(AssumeActiveSubscription, APITestCase):
+    """A real failing request, reported through the real SDK."""
+
+    def setUp(self):
+        super().setUp()
+        self.transport = _CapturingTransport()
+        start = sentry_sdk.init
+        with patch(
+            "core.error_tracking.sentry_sdk.init",
+            side_effect=lambda **options: start(transport=self.transport, **options),
+        ):
+            init_error_tracking()
+        self.addCleanup(lambda: sentry_sdk.get_client().close())
+        self.client.raise_request_exception = False
+
+    @patch(
+        "projects.api.v1.views.ProjectListCreateAPIView.perform_create",
+        side_effect=RuntimeError("Something broke"),
+    )
+    def test_says_whose_request_failed_by_id_and_nothing_more(self, _mock_create):
+        admin = AdminUserFactory()
+        token = str(RefreshToken.for_user(admin).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        with self.assertNumQueries(3):
+            response = self.client.post(
+                f"{reverse('project_list_create')}?from=secret-search-term",
+                {"name": "Secret plans", "description": "Private notes"},
+                format="json",
+            )
+        sentry_sdk.flush()
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        (event,) = self.transport.events
+        self.assertEqual(event["exception"]["values"][-1]["type"], "RuntimeError")
+        self.assertEqual(event["user"], {"id": str(admin.pk)})
+        self.assertEqual(event["tags"]["organization_id"], str(admin.organization_id))
+        # Under gunicorn the method and URL are there too: the SDK adds them as
+        # the request passes Django's WSGI handler, which the test client skips.
+        self.assertLessEqual(set(event["request"]), {"method", "url"})
+        reported = json.dumps(event)
+        for private in (
+            token,
+            admin.email,
+            "Secret plans",
+            "Private notes",
+            "secret-search-term",
+        ):
+            self.assertNotIn(private, reported)

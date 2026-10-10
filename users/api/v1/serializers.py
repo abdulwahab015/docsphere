@@ -1,19 +1,41 @@
-from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
-from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenObtainSerializer
 
 from organizations.api.v1.serializers import OrganizationSummarySerializer
 from users.choices import InvitationStatus
-from users.constants import MAX_PASSWORD_LENGTH, MAX_PENDING_INVITATIONS_PER_ORG
+from users.constants import (
+    MAX_NAME_LENGTH,
+    MAX_PASSWORD_LENGTH,
+    MAX_PENDING_INVITATIONS_PER_ORG,
+    MAX_TWO_FACTOR_CODE_LENGTH,
+)
+from users.email_links import (
+    INVALID_EMAIL_LINK_MESSAGE,
+    InvalidEmailLinkError,
+    read_email_change_token,
+    read_verification_token,
+)
 from users.models import Invitation
-from users.services import create_invitation
+from users.services import (
+    EMAIL_IN_USE_MESSAGE,
+    create_invitation,
+    find_invitation_conflict,
+    is_email_in_use,
+)
+from users.two_factor import (
+    EXPIRED_SIGN_IN_MESSAGE,
+    INVALID_CODE_MESSAGE,
+    InvalidTwoFactorLoginError,
+    read_login_token,
+    verify_app_code,
+    verify_second_factor,
+)
+from users.validators import validate_current_password, validate_password_for_field
 
 User = get_user_model()
 
@@ -26,29 +48,53 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email"]
+        fields = ["id", "email", "name"]
         read_only_fields = fields
 
 
 class UserDetailSerializer(UserSerializer):
-    """Adds role and join-date - admin-only, for actual user management
-    rather than picking a share target."""
+    """Adds role, join date and whether they sign in with two-factor -
+    admin-only, for actual user management rather than picking a share
+    target."""
+
+    two_factor_enabled = serializers.BooleanField(read_only=True)
 
     class Meta(UserSerializer.Meta):
-        fields = [*UserSerializer.Meta.fields, "org_role", "created"]
+        fields = [
+            *UserSerializer.Meta.fields,
+            "org_role",
+            "created",
+            "two_factor_enabled",
+        ]
         read_only_fields = fields
 
 
 class CurrentUserSerializer(serializers.ModelSerializer):
     """The requesting user's own identity, role and organization - what a
-    client needs after login to decide which screens to offer."""
+    client needs after login to decide which screens to offer. The name is
+    the only part they may change themselves."""
 
-    organization = OrganizationSummarySerializer(read_only=True)
+    # Null for a superuser, who belongs to no organization.
+    organization = OrganizationSummarySerializer(read_only=True, allow_null=True)
+    # Always in the response (empty until given); only ever updated partially.
+    name = serializers.CharField(max_length=MAX_NAME_LENGTH, allow_blank=True)
+    # False until a new signup follows the link emailed to them; the API
+    # refuses almost everything until then.
+    email_verified = serializers.BooleanField(read_only=True)
+    two_factor_enabled = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "email", "org_role", "organization"]
-        read_only_fields = fields
+        fields = [
+            "id",
+            "email",
+            "email_verified",
+            "two_factor_enabled",
+            "name",
+            "org_role",
+            "organization",
+        ]
+        read_only_fields = ["id", "email", "org_role", "organization"]
 
 
 class OrganizationRoleSerializer(serializers.ModelSerializer):
@@ -67,19 +113,20 @@ class PasswordChangeSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True)
 
     def validate_current_password(self, value):
-        user = self.context["request"].user
-        if len(value) > MAX_PASSWORD_LENGTH or not user.check_password(value):
-            raise serializers.ValidationError("Current password is incorrect.")
-        return value
+        return validate_current_password(self.context["request"].user, value)
 
     def validate(self, attrs):
-        validate_password(attrs["new_password"], user=self.context["request"].user)
+        validate_password_for_field(
+            "new_password", attrs["new_password"], user=self.context["request"].user
+        )
         return attrs
 
 
-class LoginSerializer(TokenObtainPairSerializer):
-    """Adds a password-length ceiling before the (unvalidated) auth check, so an
-    oversized string can't reach the password hasher."""
+class LoginSerializer(TokenObtainSerializer):
+    """Checks an email and password, leaving the sign-in itself to the view
+    (``self.user``): it may need a code next. Adds a password-length ceiling
+    before the (unvalidated) auth check, so an oversized string can't reach
+    the password hasher."""
 
     def validate(self, attrs):
         if len(attrs.get("password") or "") > MAX_PASSWORD_LENGTH:
@@ -91,8 +138,21 @@ class LoginSerializer(TokenObtainPairSerializer):
 
 
 class InvitationCreateSerializer(serializers.ModelSerializer):
-    """Creates a pending Invitation. `organization`, `invited_by`, `token`, and
-    `status` are all set server-side — never accepted from the client."""
+    """Creates a pending Invitation, and is how invitations are listed.
+    `organization`, `invited_by` and `status` are all set server-side - never
+    accepted from the client. The token is never returned: it only travels in
+    the invitation email, so nobody but the invitee can accept it. `status`
+    reads ``EXPIRED`` once a pending link has run out."""
+
+    invited_by_email = serializers.EmailField(
+        source="invited_by.email", read_only=True, allow_null=True
+    )
+    invited_by_name = serializers.CharField(
+        source="invited_by.name", read_only=True, allow_null=True
+    )
+    status = serializers.ChoiceField(
+        source="current_status", choices=InvitationStatus.choices, read_only=True
+    )
 
     class Meta:
         model = Invitation
@@ -101,7 +161,8 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "email",
             "organization",
             "invited_by",
-            "token",
+            "invited_by_email",
+            "invited_by_name",
             "status",
             "created",
             "sent_at",
@@ -111,32 +172,22 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             "id",
             "organization",
             "invited_by",
-            "token",
-            "status",
             "created",
             "sent_at",
             "accepted_at",
         ]
 
     def validate_email(self, value):
-        org = self.context["request"].user.organization
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        if (
-            Invitation.objects.for_organization(org)
-            .filter(email=value, status=InvitationStatus.PENDING)
-            .exists()
-        ):
-            raise serializers.ValidationError(
-                "This email already has a pending invitation."
-            )
+        conflict = find_invitation_conflict(
+            self.context["request"].user.organization, value
+        )
+        if conflict:
+            raise serializers.ValidationError(conflict)
         return value
 
     def validate(self, attrs):
         org = self.context["request"].user.organization
-        pending = Invitation.objects.for_organization(org).filter(
-            status=InvitationStatus.PENDING
-        )
+        pending = Invitation.objects.for_organization(org).pending()
         if pending.count() >= MAX_PENDING_INVITATIONS_PER_ORG:
             raise serializers.ValidationError(
                 "This organization has too many pending invitations."
@@ -155,6 +206,10 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 class InvitationAcceptSerializer(serializers.Serializer):
     token = serializers.CharField()
     password = serializers.CharField(write_only=True)
+    # Optional: it can be added later from the account settings.
+    name = serializers.CharField(
+        max_length=MAX_NAME_LENGTH, allow_blank=True, default=""
+    )
 
     def validate(self, attrs):
         try:
@@ -166,16 +221,153 @@ class InvitationAcceptSerializer(serializers.Serializer):
                 {"token": INVALID_INVITATION_MESSAGE}
             ) from None
 
-        if invitation.status != InvitationStatus.PENDING:
+        # Accepted, revoked or expired - or the address has an account by now
+        # (e.g. it signed up a new organization), which a new user would clash with.
+        if (
+            invitation.current_status != InvitationStatus.PENDING
+            or User.objects.holding_email().filter(email=invitation.email).exists()
+        ):
             raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
 
-        if timezone.now() - invitation.sent_at > settings.INVITATION_EXPIRY:
-            raise serializers.ValidationError({"token": INVALID_INVITATION_MESSAGE})
-
-        validate_password(attrs["password"])
+        validate_password_for_field("password", attrs["password"])
 
         attrs["invitation"] = invitation
         return attrs
+
+
+class EmailVerificationSerializer(serializers.Serializer):
+    """The token from the link emailed to a new signup."""
+
+    token = serializers.CharField()
+
+    def validate(self, attrs):
+        try:
+            attrs["user"] = read_verification_token(attrs["token"])
+        except InvalidEmailLinkError:
+            raise serializers.ValidationError(
+                {"token": INVALID_EMAIL_LINK_MESSAGE}
+            ) from None
+        return attrs
+
+
+class CurrentPasswordSerializer(serializers.Serializer):
+    """A sensitive change to your own account: your password proves it's
+    really you."""
+
+    current_password = serializers.CharField(write_only=True)
+
+    def validate_current_password(self, value):
+        return validate_current_password(self.context["request"].user, value)
+
+
+class AccountDeletionSerializer(CurrentPasswordSerializer):
+    """Deleting your own account: your password proves it's really you."""
+
+
+class TwoFactorChallengeSerializer(serializers.Serializer):
+    """The password was right and the account signs in with two-factor:
+    send this token back with a code to finish signing in."""
+
+    two_factor_token = serializers.CharField()
+
+
+class TwoFactorLoginSerializer(serializers.Serializer):
+    """The code step of signing in: a code from the authenticator app, or a
+    recovery code, for the account the token was issued to."""
+
+    two_factor_token = serializers.CharField()
+    otp = serializers.CharField(max_length=MAX_TWO_FACTOR_CODE_LENGTH)
+
+    def validate_two_factor_token(self, value):
+        try:
+            self.user = read_login_token(value)
+        except InvalidTwoFactorLoginError:
+            raise serializers.ValidationError(EXPIRED_SIGN_IN_MESSAGE) from None
+        return value
+
+    def validate(self, attrs):
+        if not verify_second_factor(self.user, attrs["otp"]):
+            raise serializers.ValidationError({"otp": INVALID_CODE_MESSAGE})
+        return attrs
+
+
+class TwoFactorStatusSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    recovery_codes_left = serializers.IntegerField()
+
+
+class TwoFactorSetupSerializer(serializers.Serializer):
+    """A new authenticator key: the app reads ``otpauth_uri`` from a QR code,
+    or the person types ``secret`` in."""
+
+    secret = serializers.CharField()
+    otpauth_uri = serializers.CharField()
+
+
+class TwoFactorConfirmSerializer(serializers.Serializer):
+    """A code from the app, proving it holds the new key."""
+
+    otp = serializers.CharField(max_length=MAX_TWO_FACTOR_CODE_LENGTH)
+
+    def validate_otp(self, value):
+        if not verify_app_code(self.context["request"].user, value.strip()):
+            raise serializers.ValidationError(
+                "That code didn't work. Enter the code your app shows now."
+            )
+        return value
+
+
+class RecoveryCodesSerializer(serializers.Serializer):
+    """Shown once: only their hashes are kept."""
+
+    recovery_codes = serializers.ListField(child=serializers.CharField())
+
+
+class EmailChangeRequestSerializer(serializers.Serializer):
+    """A signed-in user asks to move their account to another address. Their
+    password proves it's them; the link sent to the new address proves it's
+    theirs too."""
+
+    new_email = serializers.EmailField()
+    current_password = serializers.CharField(write_only=True)
+
+    def validate_new_email(self, value):
+        if value.lower() == self.context["request"].user.email:
+            raise serializers.ValidationError("This is already your email address.")
+        if is_email_in_use(value):
+            raise serializers.ValidationError(EMAIL_IN_USE_MESSAGE)
+        return value
+
+    def validate_current_password(self, value):
+        return validate_current_password(self.context["request"].user, value)
+
+
+class EmailChangeConfirmSerializer(serializers.Serializer):
+    """The token from the link emailed to the new address."""
+
+    token = serializers.CharField()
+
+    def validate(self, attrs):
+        try:
+            attrs["user"], attrs["new_email"] = read_email_change_token(attrs["token"])
+        except InvalidEmailLinkError:
+            raise serializers.ValidationError(
+                {"token": INVALID_EMAIL_LINK_MESSAGE}
+            ) from None
+        return attrs
+
+
+class InvitationBulkSkipSerializer(serializers.Serializer):
+    email = serializers.CharField(help_text="The row as it appeared in the file.")
+    reason = serializers.CharField()
+
+
+class InvitationBulkResultSerializer(serializers.Serializer):
+    """What a bulk upload did: how many invitations were sent, and every row
+    that wasn't, with why."""
+
+    created = serializers.IntegerField()
+    skipped = InvitationBulkSkipSerializer(many=True)
 
 
 class TokenPairSerializer(serializers.Serializer):
@@ -214,7 +406,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         if not default_token_generator.check_token(user, attrs["token"]):
             raise serializers.ValidationError("Invalid or expired reset link.")
 
-        validate_password(attrs["new_password"], user=user)
+        validate_password_for_field("new_password", attrs["new_password"], user=user)
 
         attrs["user"] = user
         return attrs

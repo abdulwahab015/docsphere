@@ -1,0 +1,90 @@
+name: Deploy
+
+# Deploys a published release to one environment's server over SSH, then
+# checks it from outside. Called by the Release workflow for every merge to
+# main; run it by hand (Actions -> Deploy -> Run workflow) with an earlier
+# commit to roll back.
+#
+# Each GitHub environment (staging, production) holds its server's details:
+#   variables  DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, DEPLOY_KNOWN_HOSTS
+#              (the server's `ssh-keyscan` line) and BASE_URL (the app's URL)
+#   secret     DEPLOY_SSH_KEY (a private key the server's DEPLOY_USER accepts)
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        required: true
+      tag:
+        description: The release's full commit SHA (an earlier one rolls back)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+# One deploy at a time per environment; a later one waits rather than
+# cancelling a deploy halfway.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.BASE_URL }}
+
+    steps:
+      # Images are tagged with the full commit SHA they were built from.
+      - name: Check the release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Give the release's full 40-character commit SHA, not '$TAG'."
+            exit 1
+          fi
+
+      # The release's own compose file and scripts, matching its images.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host *\n  IdentityFile ~/.ssh/deploy_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
+
+      # The workflow's own token lets the server pull the images for this
+      # deploy only; it stops working when the job ends.
+      - name: Deploy
+        env:
+          TARGET: ${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          TAG: ${{ inputs.tag }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | scripts/deploy-remote.sh "$TARGET" "$DEPLOY_PATH" "$TAG" "$GITHUB_ACTOR"
+
+      - name: Check the app from outside
+        env:
+          BASE_URL: ${{ vars.BASE_URL }}
+        run: scripts/smoke-test.sh "$BASE_URL"

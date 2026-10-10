@@ -1,0 +1,5 @@
+{{ admin_name }} turned off two-factor sign-in for your DocSphere account ({{ email }}). You can now log in with your password alone.
+
+To turn it on again, open your account settings: {{ account_url }}
+
+If you didn't ask for this, contact your organization's admin straight away.

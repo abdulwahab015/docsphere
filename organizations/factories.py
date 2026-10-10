@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import factory
+from django.conf import settings
 from django.utils import timezone
 from djstripe.models import Customer, Price, Product, Subscription, WebhookEndpoint
 
@@ -30,7 +31,8 @@ class StripeCustomerFactory(factory.django.DjangoModelFactory):
 class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
     """A dj-stripe Subscription. ``status`` (default ``"active"``) is written
     into ``stripe_data`` where dj-stripe's managers read it from - pass
-    ``status="canceled"`` (or any non-active value) for an expired one. The
+    ``status="canceled"`` (or any non-active value) for an expired one, and
+    ``cancel_at_period_end=True`` for one that ends rather than renews. The
     billing period end lives on the subscription item, as in current Stripe
     API versions."""
 
@@ -40,6 +42,7 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
     class Params:
         status = "active"
         days_until_renewal = 30
+        cancel_at_period_end = False
 
     id = factory.Sequence(lambda n: f"sub_test{n}")
     customer = factory.SubFactory(StripeCustomerFactory)
@@ -47,7 +50,7 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
         lambda subscription: {
             "id": subscription.id,
             "status": subscription.status,
-            "cancel_at_period_end": False,
+            "cancel_at_period_end": subscription.cancel_at_period_end,
             "plan": {"interval": "month"},
             "items": {
                 "data": [
@@ -66,14 +69,17 @@ class StripeSubscriptionFactory(factory.django.DjangoModelFactory):
 
 
 class StripeProductFactory(factory.django.DjangoModelFactory):
-    """A dj-stripe Product backing a Price. For local/dev/test only - real
-    products are created in Stripe and synced via the webhook or a sync
-    command."""
+    """A dj-stripe Product backing a Price - by default the configured
+    DocSphere product (``STRIPE_PRODUCT_ID``), reused if it already exists;
+    pass another ``id`` for a product the app doesn't sell. For local/dev/test
+    only - real products are created in Stripe and synced via the webhook or a
+    sync command."""
 
     class Meta:
         model = Product
+        django_get_or_create = ("id",)
 
-    id = factory.Sequence(lambda n: f"prod_test{n}")
+    id = factory.LazyFunction(lambda: settings.STRIPE_PRODUCT_ID)
     name = "DocSphere Subscription"
     active = True
     stripe_data = factory.LazyAttribute(
@@ -90,6 +96,7 @@ class StripePriceFactory(factory.django.DjangoModelFactory):
 
     class Params:
         interval = "month"
+        unit_amount = 1000
 
     id = factory.Sequence(lambda n: f"price_test{n}")
     product = factory.SubFactory(StripeProductFactory)
@@ -100,7 +107,7 @@ class StripePriceFactory(factory.django.DjangoModelFactory):
             "id": price.id,
             "type": "recurring",
             "currency": price.currency,
-            "unit_amount": 1000,
+            "unit_amount": price.unit_amount,
             "recurring": {"interval": price.interval},
         }
     )

@@ -3,9 +3,11 @@ import factory
 from organizations.factories import OrganizationFactory
 from projects.choices import AccessLevel
 from projects.models import (
+    Attachment,
     Document,
     DocumentAccessRequest,
     DocumentPermission,
+    DocumentVersion,
     Project,
     ProjectPermission,
 )
@@ -35,6 +37,36 @@ class DocumentFactory(factory.django.DjangoModelFactory):
         UserFactory, organization=factory.SelfAttribute("..organization")
     )
     title = factory.Sequence(lambda n: f"Document {n}")
+
+
+class DocumentVersionFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = DocumentVersion
+
+    document = factory.SubFactory(DocumentFactory)
+    created_by = factory.SubFactory(
+        UserFactory, organization=factory.SelfAttribute("..document.organization")
+    )
+    revision = 1
+    title = factory.LazyAttribute(lambda version: version.document.title)
+    content = factory.LazyAttribute(lambda version: version.document.content)
+
+
+class AttachmentFactory(factory.django.DjangoModelFactory):
+    """A small PDF attached to a document. Stores a real file: use it with a
+    temporary ``MEDIA_ROOT``."""
+
+    class Meta:
+        model = Attachment
+
+    document = factory.SubFactory(DocumentFactory)
+    uploaded_by = factory.SubFactory(
+        UserFactory, organization=factory.SelfAttribute("..document.organization")
+    )
+    file = factory.django.FileField(data=b"%PDF-1.7 attached", filename="notes.pdf")
+    name = "notes.pdf"
+    content_type = "application/pdf"
+    size = factory.LazyAttribute(lambda attachment: attachment.file.size)
 
 
 class ProjectPermissionFactory(factory.django.DjangoModelFactory):

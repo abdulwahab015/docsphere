@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "09c4bb9c-31a2-448e-9c65-6a213c102b95",
     "name": "DocSphere \u2014 Full Demo Flow",
-    "description": "End-to-end walkthrough of DocSphere: org self-signup, invitations (single + bulk), projects, documents (including personal, project-less documents), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
+    "description": "End-to-end walkthrough of DocSphere: org self-signup (with email verification), invitations (single + bulk), projects, documents (including personal, project-less documents, their version history and attached files), public/private visibility, sharing/permissions, access requests, Stripe subscription checkout, billing portal, admin member management (roles, deactivate/reactivate, invitation resend/revoke), trash lists, and the HttpOnly refresh-token cookie. Run top-to-bottom against a local server with the `DocSphere Demo` environment selected.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -69,7 +69,7 @@
                 "signup"
               ]
             },
-            "description": "AllowAny. Creates the Organization + first admin User in one call and logs them in. Throttled at ORG_SIGNUP_THROTTLE_RATE (5/hour) \u2014 don't spam this one during rehearsal.",
+            "description": "AllowAny. Creates the Organization + first admin User in one call and logs them in - unverified: until the link emailed to the admin is opened, everything except reading `me`, verifying, asking for a new link and logging out answers 403 `email_unverified`. The link is printed in the `runserver` console. Throttled at ORG_SIGNUP_THROTTLE_RATE (5/hour) \u2014 don't spam this one during rehearsal.",
             "auth": {
               "type": "noauth"
             },
@@ -112,7 +112,7 @@
           ]
         },
         {
-          "name": "Get Current User (me) - before subscribing",
+          "name": "Get Current User (me) - before verifying and subscribing",
           "request": {
             "method": "GET",
             "header": [],
@@ -128,7 +128,7 @@
                 "me"
               ]
             },
-            "description": "Any signed-in user, reachable WITHOUT an active subscription (unlike almost everything else, which returns 402). A frontend calls this right after login to learn its role and whether the org has paid - here has_active_subscription is false until checkout completes.",
+            "description": "Any signed-in user, reachable before verifying the email and WITHOUT an active subscription (unlike almost everything else, which returns 403 or 402). A frontend calls this right after login to learn whether the email is verified, its role and whether the org has paid - here email_verified and has_active_subscription are both false.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -150,8 +150,145 @@
                   "pm.test('current user returned', () => pm.response.to.have.status(200));",
                   "const data = pm.response.json();",
                   "pm.test('is the org admin', () => pm.expect(data.org_role).to.eql('ADMIN'));",
+                  "pm.test('email not yet verified', () => pm.expect(data.email_verified).to.be.false);",
                   "pm.test('org not yet subscribed', () => pm.expect(data.organization.has_active_subscription).to.be.false);",
                   "pm.environment.set('admin_user_id', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Org Profile - Before Verifying the Email (expect 403)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/profile/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "profile"
+              ]
+            },
+            "description": "A new signup can't do anything until their email is verified: 403 with code `email_unverified`, before the subscription is even checked.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused until the email is verified', () => pm.response.to.have.status(403));",
+                  "pm.test('says why', () => pm.expect(pm.response.json().code).to.eql('email_unverified'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend the Verification Email",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/verification-email/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "verification-email"
+              ]
+            },
+            "description": "Emails the signed-in, unverified user a new link (printed in the `runserver` console). Throttled at EMAIL_VERIFICATION_THROTTLE_RATE.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a new link was sent', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify the Admin's Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/auth/verify-email/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "verify-email"
+              ]
+            },
+            "description": "AllowAny - the link may be opened on another device. Before running it, set `verification_token` from the latest emailed link (`/verify-email?token=...`, printed in the `runserver` console). Opening the same link again changes nothing.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verification_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('email verified', () => pm.response.to.have.status(204));"
                 ]
               }
             }
@@ -633,7 +770,7 @@
                 "invitations"
               ]
             },
-            "description": "Admin-only. Response includes the raw invitation token directly (no need to read email) \u2014 handy for a live demo. In real usage the token is emailed to the invitee.",
+            "description": "Admin-only. The API never returns the token: it only travels in the invitation email. Locally the email is printed in the `runserver` console - copy the token from its `/accept-invite?token=...` link into the `invitation_token` environment variable before running \"Accept Invite\".",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -663,7 +800,7 @@
                 "exec": [
                   "pm.test('invitation created', () => pm.response.to.have.status(201));",
                   "const data = pm.response.json();",
-                  "pm.environment.set('invitation_token', data.token);"
+                  "pm.test('the token is never returned - it only travels in the email', () => pm.expect(data).to.not.have.property('token'));"
                 ]
               }
             }
@@ -722,7 +859,7 @@
                 "invitations"
               ]
             },
-            "description": "A throwaway invitation, so resending and revoking don't touch the member's real invite.",
+            "description": "A throwaway invitation, so resending and revoking don't touch the member's real invite. To see the old link fail after the resend, copy its token from the console email into `spare_invitation_token`.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -752,8 +889,7 @@
                 "exec": [
                   "pm.test('spare invitation created', () => pm.response.to.have.status(201));",
                   "const data = pm.response.json();",
-                  "pm.environment.set('spare_invitation_id', data.id);",
-                  "pm.environment.set('spare_invitation_token', data.token);"
+                  "pm.environment.set('spare_invitation_id', data.id);"
                 ]
               }
             }
@@ -799,8 +935,7 @@
                 "exec": [
                   "pm.test('invitation resent', () => pm.response.to.have.status(200));",
                   "const data = pm.response.json();",
-                  "pm.test('token was rotated', () => pm.expect(data.token).to.not.eql(pm.environment.get('spare_invitation_token')));",
-                  "pm.environment.set('spare_invitation_token', data.token);"
+                  "pm.test('the token is never returned - it only travels in the email', () => pm.expect(data).to.not.have.property('token'));"
                 ]
               }
             }
@@ -1019,7 +1154,7 @@
                 "accept"
               ]
             },
-            "description": "AllowAny. This is the ONLY way a member User row gets created \u2014 invitations never create a User directly. Creates the User (org_role=MEMBER) and logs them in.",
+            "description": "AllowAny. This is the ONLY way a member User row gets created \u2014 invitations never create a User directly. Creates the User (org_role=MEMBER) and logs them in. Before running it, set `invitation_token` from the emailed link (printed in the `runserver` console).",
             "auth": {
               "type": "noauth"
             },
@@ -1550,6 +1685,64 @@
           ]
         },
         {
+          "name": "Change Email with a Wrong Current Password (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/email/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "email"
+              ]
+            },
+            "description": "Changing the sign-in email takes the current password, then a link sent to the NEW address (confirmed at /api/v1/users/auth/confirm-email/, which signs the account out everywhere). Shown here only with a wrong password, so the rest of the walkthrough keeps the admin's address.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_email\": \"renamed-{{admin_email}}\",\n  \"current_password\": \"Not-The-Password-1!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wrong current password is refused', () => pm.response.to.have.status(400));",
+                  "pm.test('reported on that field', () => pm.expect(pm.response.json()).to.have.property('current_password'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Logout (blacklist refresh token)",
           "request": {
             "method": "POST",
@@ -1850,7 +2043,7 @@
                 }
               ]
             },
-            "description": "?search matches title. Add &project={{project_id}} to narrow to one project. Only returns documents you have an explicit DocumentPermission on, plus any PUBLIC document in your organization (Document.objects.visible_to) - having access to the parent project grants nothing here.",
+            "description": "?search matches title and content (case-insensitive; every word must appear in one or the other, \"quoted phrases\" stay together). Rows leave out the content; while searching, `excerpt` shows where the content matched (null for a title-only match). Add &project={{project_id}} to narrow to one project. Only returns documents you have an explicit DocumentPermission on, plus any PUBLIC document in your organization (Document.objects.visible_to) - having access to the parent project grants nothing here.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -1939,6 +2132,283 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Document History (versions, newest first)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/versions/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "versions"
+              ]
+            },
+            "description": "Editors and Owners only. One version per revision - creating the document, then every save that changes its title or content - newest first, without content. Restore one by updating the document with that version's title and content (plus base_revision), which saves it as a new version.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('history listed', () => pm.response.to.have.status(200));",
+                  "const results = pm.response.json().results;",
+                  "pm.test('created, then updated: two versions, newest first', () => pm.expect(results.map((version) => version.revision)).to.eql([2, 1]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the First Version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/versions/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "versions",
+                "1"
+              ]
+            },
+            "description": "One version in full, with its content - how the document was when it was created.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('version read', () => pm.response.to.have.status(200));",
+                  "pm.test('has its content', () => pm.expect(pm.response.json()).to.have.property('content'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Attach a File (pick a PDF in the Body tab)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments"
+              ]
+            },
+            "description": "Editors and Owners. Before sending, choose a file for the `file` field in the Body tab: a PDF, PNG, JPEG, GIF, WebP, text, CSV, Word, Excel or PowerPoint file, up to 10 MB. The type is checked from the file's content, not its name, and an organization's files may take up 1 GB in all.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('file attached', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('attachment_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Attachments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments"
+              ]
+            },
+            "description": "Anyone who can open the document. Newest first.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('attachments listed', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download the Attachment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/{{attachment_id}}/download/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments",
+                "{{attachment_id}}",
+                "download"
+              ]
+            },
+            "description": "Anyone who can open the document. Always a download (Content-Disposition: attachment, nosniff), never shown in the browser.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('file downloaded', () => pm.response.to.have.status(200));",
+                  "pm.test('as a download', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the Attachment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/attachments/{{attachment_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "attachments",
+                "{{attachment_id}}"
+              ]
+            },
+            "description": "Editors and Owners. The stored file goes too.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('file deleted', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
         }
       ],
       "description": ""
@@ -2267,6 +2737,49 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('member can view document', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member/Viewer] Cannot See Document History (expect 403)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/documents/{{document_id}}/versions/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{document_id}}",
+                "versions"
+              ]
+            },
+            "description": "Viewers see only the current document: past versions may hold text that was removed.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('history is for Editors and Owners', () => pm.response.to.have.status(403));"
                 ]
               }
             }
@@ -4505,7 +5018,7 @@
           ]
         },
         {
-          "name": "Checkout Before Billing Email Is Set (expect 400)",
+          "name": "Checkout Before the Email Is Verified (expect 403)",
           "request": {
             "method": "POST",
             "header": [
@@ -4526,7 +5039,7 @@
                 "checkout"
               ]
             },
-            "description": "Uses the temp org from the previous request, which has no billing_email set.",
+            "description": "Uses the temp org from the previous request, whose admin hasn't verified their email: refused before anything else is checked, even the missing billing email.",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -4554,7 +5067,8 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('checkout refuses an org with no billing email', () => pm.response.to.have.status(400));"
+                  "pm.test('refused until the email is verified', () => pm.response.to.have.status(403));",
+                  "pm.test('says why', () => pm.expect(pm.response.json().code).to.eql('email_unverified'));"
                 ]
               }
             }
@@ -5517,7 +6031,801 @@
       "description": ""
     },
     {
-      "name": "13. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
+      "name": "13. Activity (audit log, admins only)",
+      "description": "Who changed access and membership, deleted and restored things, and attached files - newest first, kept for a year. Run after the folders above, which make plenty of it.",
+      "item": [
+        {
+          "name": "Activity - Everything",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ]
+            },
+            "description": "The organization's activity, newest first. A private project or document the admin can't open is listed with resource_name null (and no file name).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('activity listed', () => pm.response.to.have.status(200));",
+                  "pm.test('earlier steps were recorded', () => pm.expect(pm.response.json().count).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activity - Only Access Changes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/?kind=ACCESS",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "kind",
+                  "value": "ACCESS"
+                }
+              ]
+            },
+            "description": "kind is ACCESS, MEMBERSHIP, TRASH or ATTACHMENTS. after/before take ISO 8601 times.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('activity listed', () => pm.response.to.have.status(200));",
+                  "const accessVerbs = ['ACCESS_GRANTED', 'ACCESS_CHANGED', 'ACCESS_REVOKED', 'VISIBILITY_CHANGED', 'ACCESS_REQUEST_APPROVED', 'ACCESS_REQUEST_DENIED'];",
+                  "pm.test('only access changes', () => pm.response.json().results.forEach(event => pm.expect(accessVerbs).to.include(event.verb)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activity - About One Person",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/?search={{member_email}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "{{member_email}}"
+                }
+              ]
+            },
+            "description": "search matches the name or email of who did it, who it was about, or the address an invitation went to.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('activity listed', () => pm.response.to.have.status(200));",
+                  "pm.test('found the member', () => pm.expect(pm.response.json().count).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] Activity (expect 403)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/audit/events/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "audit",
+                "events",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('members cannot read the activity', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "14. Notifications (what the bell shows)",
+      "description": "Each person's own notifications: shared with them, their level changed, a request to edit their document, their request answered. Kept 90 days; the app polls the unread count every 30 seconds. Run after Sharing and Access Requests, which make some for the member.",
+      "item": [
+        {
+          "name": "[As Member] Unread Count",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/unread-count/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "unread-count",
+                ""
+              ]
+            },
+            "description": "What the app polls for the bell's badge.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('count returned', () => pm.response.to.have.status(200));",
+                  "pm.test('the shares made earlier are unread', () => pm.expect(pm.response.json().count).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] My Notifications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                ""
+              ]
+            },
+            "description": "Newest first. A project or document the member can no longer open comes back with resource_id and resource_name null.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('notifications listed', () => pm.response.to.have.status(200));",
+                  "pm.test('someone shared something with the member', () => pm.expect(pm.response.json().results.map(n => n.verb)).to.include('ACCESS_GRANTED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] Mark All as Read",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/read-all/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "read-all",
+                ""
+              ]
+            },
+            "description": "Marking one read is POST /api/v1/notifications/<id>/read/; anyone else's is a 404.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('all marked read', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] Unread Count After Reading",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/unread-count/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "unread-count",
+                ""
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('nothing unread', () => pm.expect(pm.response.json().count).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "15. Leaving: export, account and organization deletion",
+      "description": "Export runs in the background and emails the admin a link (printed in the runserver console) to /settings/organization/export?token=..., downloaded through GET /api/v1/organizations/exports/download/?token=... . The deletions here are refused on purpose, so the demo data survives: deleting your account is POST /api/v1/users/me/delete/ with current_password; deleting the organization is POST /api/v1/organizations/delete/ with its exact name (restorable for 30 days via /delete/cancel/).",
+      "item": [
+        {
+          "name": "Export the Organization",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/exports/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "exports",
+                ""
+              ]
+            },
+            "description": "Holds only what the admin can open; private things are counted, not included. The link works for 7 days. One export at a time per organization (a second request while one is building is a 400) and ORGANIZATION_EXPORT_THROTTLE_RATE a day for the whole organization (429 after that). A failed build is retried, then the admin is emailed that it failed. Asking and downloading both show in the Activity log.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('export started', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the Organization With the Wrong Name (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations/delete/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations",
+                "delete",
+                ""
+              ]
+            },
+            "description": "Confirmed by typing the organization's name exactly.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"not the organization's name\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('under the name', () => pm.expect(pm.response.json()).to.have.property('name'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "[As Member] Delete Own Account With a Wrong Password (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/delete/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "delete",
+                ""
+              ]
+            },
+            "description": "With the right password the account is anonymised and signed out everywhere; refused for the only admin or the only Owner of anything.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_member}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"not-the-password\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('under the password', () => pm.expect(pm.response.json()).to.have.property('current_password'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "16. Two-factor sign-in",
+      "description": "Optional per person, or required for the whole organization by an admin (PATCH /api/v1/organizations/profile/ with require_two_factor, once the admin has it on). Turning it on: POST /api/v1/users/me/two-factor/setup/ (a key and an otpauth:// address for the authenticator app), then POST .../confirm/ with a code from the app (otp) -> 10 recovery codes, shown once. From then on POST /api/v1/users/auth/login/ answers {two_factor_token} instead of tokens, and POST /api/v1/users/auth/login/two-factor/ with that token and a code (or a recovery code) signs in. These requests change nothing that sticks: setup only starts (nothing is on until confirmed), and the rest are refused on purpose.",
+      "item": [
+        {
+          "name": "Two-factor Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/two-factor/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "two-factor",
+                ""
+              ]
+            },
+            "description": "Whether it's on, and how many recovery codes are left.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('read', () => pm.response.to.have.status(200));",
+                  "pm.test('says whether it is on', () => pm.expect(pm.response.json()).to.have.property('enabled'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Start Setting Up Two-factor",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/two-factor/setup/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "two-factor",
+                "setup",
+                ""
+              ]
+            },
+            "description": "A new key for the authenticator app (the app reads otpauth_uri from a QR code). Nothing changes at sign-in until a code confirms it; starting again replaces an unconfirmed key. 400 if it's already on.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a key for the app', () => pm.response.to.have.status(200));",
+                  "pm.test('as an otpauth address', () => pm.expect(pm.response.json().otpauth_uri).to.match(/^otpauth:\\/\\/totp\\//));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm With a Wrong Code (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/me/two-factor/confirm/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "two-factor",
+                "confirm",
+                ""
+              ]
+            },
+            "description": "With the code the app shows, this turns it on and returns the recovery codes.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"otp\": \"000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('under the code', () => pm.expect(pm.response.json()).to.have.property('otp'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Code Step With a Made-up Sign-in (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/auth/login/two-factor/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "auth",
+                "login",
+                "two-factor",
+                ""
+              ]
+            },
+            "description": "two_factor_token comes from the password step and lasts 5 minutes. Rate limited per account (TWO_FACTOR_LOGIN_THROTTLE_RATE).",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"two_factor_token\": \"not-a-real-token\",\n  \"otp\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused', () => pm.response.to.have.status(400));",
+                  "pm.test('the sign-in is the problem', () => pm.expect(pm.response.json()).to.have.property('two_factor_token'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reset a Member Without Two-factor (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/{{member_user_id}}/two-factor/reset/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{member_user_id}}",
+                "two-factor",
+                "reset",
+                ""
+              ]
+            },
+            "description": "Admins only. For a member who lost their phone and recovery codes: turns it off, emails them and records it in the Activity log.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token_admin}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('refused: it is not on', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "17. Throttle Test (run via Collection Runner, 15 iterations, this request only)",
       "item": [
         {
           "name": "Repeated Login Attempt (expect 429 partway through)",

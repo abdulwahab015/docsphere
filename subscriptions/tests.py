@@ -1,6 +1,7 @@
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from django.conf import settings
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -13,6 +14,7 @@ from organizations.factories import (
     OrganizationFactory,
     StripeCustomerFactory,
     StripePriceFactory,
+    StripeProductFactory,
     StripeSubscriptionFactory,
 )
 from subscriptions.tasks import (
@@ -68,6 +70,15 @@ class PriceListAPIViewTests(APITestCase):
         one_time = StripePriceFactory()
         one_time.stripe_data["type"] = "one_time"
         one_time.save(update_fields=["stripe_data"])
+        self.client.force_authenticate(self.admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.data["results"], [])
+
+    def test_excludes_prices_of_any_other_product(self):
+        StripePriceFactory(product=StripeProductFactory(id="prod_unrelated"))
         self.client.force_authenticate(self.admin)
 
         with self.assertNumQueries(1):
@@ -170,7 +181,7 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
         price = StripePriceFactory()
         self.client.force_authenticate(admin)
 
-        with self.assertNumQueries(10):
+        with self.assertNumQueries(11):
             response = self.client.post(self.url, {"price_id": price.id})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -182,7 +193,29 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
             mock_session_create.call_args.kwargs["customer"], "cus_test123"
         )
         self.assertEqual(mock_session_create.call_args.kwargs["mode"], "subscription")
-        self.assertIn("idempotency_key", mock_session_create.call_args.kwargs)
+
+    @patch("stripe.checkout.Session.create")
+    @patch("stripe.Customer.create")
+    def test_each_checkout_is_a_new_session(
+        self, mock_customer_create, mock_session_create
+    ):
+        # Reusing a request key would hand back the earlier session - e.g. an
+        # already-completed one when the organization resubscribes that day.
+        mock_customer_create.return_value = {"id": "cus_test123", "livemode": False}
+        mock_session_create.return_value = MagicMock(
+            url="https://checkout.stripe.com/x"
+        )
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory()
+        self.client.force_authenticate(admin)
+
+        self.client.post(self.url, {"price_id": price.id})
+        self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(mock_session_create.call_count, 2)
+        for call in mock_session_create.call_args_list:
+            self.assertNotIn("idempotency_key", call.kwargs)
 
     @patch("stripe.checkout.Session.create")
     @patch("stripe.Customer.create")
@@ -200,7 +233,7 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
         with patch.object(
             ScopedRateThrottle, "THROTTLE_RATES", {"billing_checkout": "1/min"}
         ):
-            with self.assertNumQueries(10):
+            with self.assertNumQueries(11):
                 first = self.client.post(self.url, {"price_id": price.id})
             self.assertEqual(first.status_code, status.HTTP_200_OK)
 
@@ -218,6 +251,31 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
             response = self.client.post(self.url, {"price_id": price.id})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("stripe.checkout.Session.create")
+    def test_organization_with_an_active_subscription_gets_400_without_calling_stripe(
+        self, mock_session_create
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(
+            customer=StripeCustomerFactory(subscriber=organization)
+        )
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory()
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["non_field_errors"],
+            [
+                "Your organization already has an active subscription. "
+                "Manage it from the billing portal."
+            ],
+        )
+        mock_session_create.assert_not_called()
 
     def test_non_admin_gets_403(self):
         organization = OrganizationFactory(billing_email="billing@example.com")
@@ -238,6 +296,40 @@ class CheckoutSessionCreateAPIViewTests(APITestCase):
             response = self.client.post(self.url, {"price_id": "price_doesnotexist"})
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("stripe.checkout.Session.create")
+    def test_price_of_another_product_gets_400_without_calling_stripe(
+        self, mock_session_create
+    ):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory(product=StripeProductFactory(id="prod_unrelated"))
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(1):
+            response = self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("price_id", response.data)
+        mock_session_create.assert_not_called()
+
+    @patch("stripe.checkout.Session.create")
+    def test_organization_with_a_failed_renewal_gets_400_without_calling_stripe(
+        self, mock_session_create
+    ):
+        # It still has its subscription: the fix is new card details in the
+        # portal, not a second subscription.
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(customer__subscriber=organization, status="past_due")
+        admin = AdminUserFactory(organization=organization)
+        price = StripePriceFactory()
+        self.client.force_authenticate(admin)
+
+        with self.assertNumQueries(3):
+            response = self.client.post(self.url, {"price_id": price.id})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_session_create.assert_not_called()
 
     def test_inactive_price_gets_400(self):
         organization = OrganizationFactory(billing_email="billing@example.com")
@@ -272,10 +364,37 @@ class ExpiryReminderTaskTests(TestCase):
         mock_send_mail.assert_called_once()
         _, kwargs = mock_send_mail.call_args
         expected_date = (timezone.now() + timedelta(days=3)).strftime("%Y-%m-%d")
-        self.assertIn(expected_date, kwargs["message"])
+        self.assertEqual(
+            kwargs["subject"], f"Your DocSphere subscription renews on {expected_date}"
+        )
+        self.assertIn(f"renews on {expected_date}", kwargs["message"])
+        self.assertIn(f"{settings.FRONTEND_URL}/billing/", kwargs["message"])
         self.assertEqual(kwargs["recipient_list"], ["billing@example.com"])
         organization.refresh_from_db()
         self.assertIsNotNone(organization.last_expiry_reminder_sent_at)
+
+    @patch("core.email.send_mail")
+    def test_cancelled_subscription_is_reminded_that_it_ends(self, mock_send_mail):
+        organization = OrganizationFactory(billing_email="billing@example.com")
+        StripeSubscriptionFactory(
+            customer__subscriber=organization,
+            days_until_renewal=3,
+            cancel_at_period_end=True,
+        )
+
+        with self.assertNumQueries(5):
+            send_expiry_reminders_task()
+
+        _, kwargs = mock_send_mail.call_args
+        expected_date = (timezone.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+        self.assertEqual(
+            kwargs["subject"], f"Your DocSphere subscription ends on {expected_date}"
+        )
+        self.assertIn(
+            f"has been cancelled and ends on {expected_date}", kwargs["message"]
+        )
+        self.assertNotIn("renews", kwargs["message"])
+        self.assertIn(f"{settings.FRONTEND_URL}/billing/", kwargs["message"])
 
     @patch("core.email.send_mail")
     def test_org_reminded_in_a_previous_period_is_reminded_again(self, mock_send_mail):
@@ -349,6 +468,18 @@ class ExpiryReminderTaskTests(TestCase):
     @patch("core.email.send_mail")
     def test_org_without_an_active_subscription_is_skipped(self, mock_send_mail):
         OrganizationFactory(billing_email="billing@example.com")
+
+        with self.assertNumQueries(1):
+            send_expiry_reminders_task()
+
+        mock_send_mail.assert_not_called()
+
+    @patch("core.email.send_mail")
+    def test_org_without_a_billing_email_is_skipped(self, mock_send_mail):
+        organization = OrganizationFactory(billing_email=None)
+        StripeSubscriptionFactory(
+            customer__subscriber=organization, days_until_renewal=3
+        )
 
         with self.assertNumQueries(1):
             send_expiry_reminders_task()

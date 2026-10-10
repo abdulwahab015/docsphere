@@ -1,0 +1,1 @@
+Your DocSphere subscription ends on {{ period_end }}

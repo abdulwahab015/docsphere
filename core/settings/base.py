@@ -45,6 +45,8 @@ INSTALLED_APPS = [
     "organizations",
     "users",
     "projects",
+    "audit",
+    "notifications",
     "subscriptions",
     "djstripe",
     "rest_framework",
@@ -140,10 +142,14 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Where attached files are stored. Never served directly: the API checks who
+# may download each one. The stack keeps it on the `media` volume.
+MEDIA_ROOT = config("MEDIA_ROOT", default=str(BASE_DIR / "media"))
 
-EMAIL_BACKEND = config(
-    "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
-)
+
+# Development prints emails in the runserver terminal; production sends them
+# over SMTP (production.py).
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="core.email.ConsoleEmailBackend")
 EMAIL_HOST = config("EMAIL_HOST", default="")
 EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
@@ -162,16 +168,18 @@ STRIPE_TEST_SECRET_KEY = config("STRIPE_TEST_SECRET_KEY", default="")
 STRIPE_TEST_PUBLIC_KEY = config("STRIPE_TEST_PUBLIC_KEY", default="")
 STRIPE_LIVE_SECRET_KEY = config("STRIPE_LIVE_SECRET_KEY", default="")
 STRIPE_LIVE_PUBLIC_KEY = config("STRIPE_LIVE_PUBLIC_KEY", default="")
-DJSTRIPE_WEBHOOK_SECRET = config("DJSTRIPE_WEBHOOK_SECRET")
+# The Stripe product whose recurring prices are DocSphere's plans; any other
+# product in the Stripe account is neither offered nor purchasable.
+STRIPE_PRODUCT_ID = config("STRIPE_PRODUCT_ID")
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "id"
 DJSTRIPE_SUBSCRIBER_MODEL = "organizations.Organization"
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ),
+    "DEFAULT_AUTHENTICATION_CLASSES": ("users.authentication.JWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
+        "users.permissions.HasVerifiedEmail",
+        "users.permissions.MeetsTwoFactorRequirement",
         "core.permissions.HasActiveSubscription",
     ),
     "DEFAULT_PAGINATION_CLASS": "core.paginations.PageNumberPagination",
@@ -184,12 +192,16 @@ REST_FRAMEWORK = {
         "anon": config("ANON_THROTTLE_RATE"),
         "user": config("USER_THROTTLE_RATE"),
         "login": config("LOGIN_THROTTLE_RATE"),
+        "two_factor_login": config("TWO_FACTOR_LOGIN_THROTTLE_RATE"),
         "invite_accept": config("INVITE_ACCEPT_THROTTLE_RATE"),
         "password_reset": config("PASSWORD_RESET_THROTTLE_RATE"),
         "billing_checkout": config("BILLING_CHECKOUT_THROTTLE_RATE"),
         "billing_portal": config("BILLING_PORTAL_THROTTLE_RATE"),
         "org_signup": config("ORG_SIGNUP_THROTTLE_RATE"),
         "password_change": config("PASSWORD_CHANGE_THROTTLE_RATE"),
+        "email_verification": config("EMAIL_VERIFICATION_THROTTLE_RATE"),
+        "email_change": config("EMAIL_CHANGE_THROTTLE_RATE"),
+        "organization_export": config("ORGANIZATION_EXPORT_THROTTLE_RATE"),
     },
 }
 
@@ -198,6 +210,13 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "v1",
     "SERVE_INCLUDE_SCHEMA": False,
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    # Choice sets used under more than one field name keep one schema name.
+    "ENUM_NAME_OVERRIDES": {
+        "AccessLevelEnum": "projects.choices.AccessLevel",
+        "OrgRoleEnum": "users.choices.OrganizationRole",
+        "AuditVerbEnum": "audit.choices.AuditVerb",
+        "NotificationVerbEnum": "notifications.choices.NotificationVerb",
+    },
 }
 
 SIMPLE_JWT = {
@@ -209,6 +228,9 @@ SIMPLE_JWT = {
     ),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
+    # Records each login on the user; a password-reset link issued before it
+    # stops working, as Django's reset tokens include last_login.
+    "UPDATE_LAST_LOGIN": True,
 }
 
 # The refresh token also travels as an HttpOnly cookie, sent back only to the
@@ -221,6 +243,10 @@ REFRESH_COOKIE_SECURE = False
 REFRESH_COOKIE_SAMESITE = config("REFRESH_COOKIE_SAMESITE", default="Lax")
 
 INVITATION_EXPIRY = timedelta(seconds=config("INVITATION_EXPIRY_SECONDS", cast=int))
+# How long an emailed link that proves someone owns an address (verifying a
+# signup, confirming a new email) keeps working - and how long an account that
+# never verified its address keeps it from everyone else.
+EMAIL_LINK_EXPIRY = timedelta(seconds=config("EMAIL_LINK_EXPIRY_SECONDS", cast=int))
 
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config(
@@ -237,11 +263,38 @@ CELERY_BEAT_SCHEDULE = {
         "task": "subscriptions.tasks.send_expiry_reminders_task",
         "schedule": crontab(hour=0, minute=0),
     },
+    "remove-unverified-accounts": {
+        "task": "users.tasks.remove_unverified_accounts_task",
+        "schedule": crontab(hour=1, minute=0),
+    },
+    "remove-expired-audit-events": {
+        "task": "audit.tasks.remove_expired_audit_events_task",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    "remove-expired-notifications": {
+        "task": "notifications.tasks.remove_expired_notifications_task",
+        "schedule": crontab(hour=2, minute=30),
+    },
+    "remove-expired-exports": {
+        "task": "organizations.tasks.remove_expired_exports_task",
+        "schedule": crontab(hour=3, minute=0),
+    },
+    "purge-deleted-organizations": {
+        "task": "organizations.tasks.purge_deleted_organizations_task",
+        "schedule": crontab(hour=3, minute=30),
+    },
 }
 
 SUBSCRIPTION_EXPIRY_REMINDER_DAYS = config(
     "SUBSCRIPTION_EXPIRY_REMINDER_DAYS", cast=int
 )
+
+# Error tracking (core/error_tracking.py): off while SENTRY_DSN is empty.
+SENTRY_DSN = config("SENTRY_DSN", default="")
+SENTRY_ENVIRONMENT = config("SENTRY_ENVIRONMENT", default="production")
+# Which version an error happened in: the git commit a release image was built
+# from (the Dockerfile's RELEASE build argument sets it).
+SENTRY_RELEASE = config("SENTRY_RELEASE", default="")
 
 MAX_LOG_BODY_CHARS = config("MAX_LOG_BODY_CHARS", default=2048, cast=int)
 
@@ -281,3 +334,7 @@ LOGGING = {
         },
     },
 }
+
+# Whether `manage.py seed_e2e` may write fixture organizations and users into
+# the database. Off by default; only the local and test settings enable it.
+E2E_SEEDING_ENABLED = False

@@ -1,0 +1,84 @@
+# One origin for the browser: the app's files are served from here, and
+# Django's paths are forwarded to the `web` service. TLS ends at the load
+# balancer in front of this server.
+
+server {
+    listen 8080;
+    server_name _;
+
+    # Django is looked up through Docker's DNS on each request (cached briefly)
+    # rather than once at startup: a restarted or redeployed `web` container
+    # gets a new address, and nginx would otherwise keep sending to the old one.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $django http://web:8000;
+
+    root /usr/share/nginx/html;
+
+    # Everywhere but the attachment upload below: the bulk-invitation
+    # spreadsheet is the largest upload, and 500 rows of addresses is a few
+    # tens of kB.
+    client_max_body_size 5m;
+
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # The load balancer's X-Forwarded-For and X-Forwarded-Proto pass through
+    # unchanged, so Django still sees the client address as the right-most
+    # entry and knows the request arrived over HTTPS.
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+
+    # Django: the API (and its schema and docs), the admin and the static files
+    # it uses, Stripe's webhook, and the health check.
+    location /api/ {
+        proxy_pass $django;
+    }
+
+    # Attaching a file to a document: up to 10 MB (projects/constants.py), plus
+    # room for the multipart wrapping. Django checks the exact limit.
+    location ~ ^/api/v1/documents/[0-9]+/attachments/$ {
+        client_max_body_size 11m;
+        proxy_pass $django;
+    }
+
+    location /${DJANGO_ADMIN_PATH} {
+        proxy_pass $django;
+    }
+
+    location /static/ {
+        proxy_pass $django;
+    }
+
+    location /stripe/ {
+        proxy_pass $django;
+    }
+
+    location = /healthz/ {
+        proxy_pass $django;
+    }
+
+    # The app's built files have a content hash in their names, so a cached
+    # copy never goes stale.
+    location /assets/ {
+        include /etc/nginx/conf.d/app-headers.inc;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # Every other path is the app's to route (/projects/7, /billing/success,
+    # ...). index.html is always revalidated, so a release is picked up at once.
+    location / {
+        include /etc/nginx/conf.d/app-headers.inc;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+
+        # This environment's settings, written into index.html's empty <meta>
+        # tags (src/lib/runtime-config.ts), so staging and production serve
+        # the same image.
+        sub_filter '<meta name="sentry-dsn" content=""' '<meta name="sentry-dsn" content="${SENTRY_FRONTEND_DSN}"';
+        sub_filter '<meta name="sentry-environment" content=""' '<meta name="sentry-environment" content="${SENTRY_ENVIRONMENT}"';
+        sub_filter_once off;
+    }
+}

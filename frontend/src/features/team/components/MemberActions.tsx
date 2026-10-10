@@ -1,0 +1,157 @@
+import { EllipsisIcon } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+
+import { actionErrorMessage } from '@/api/errors'
+import type { SoleOwnership, UserDetail } from '@/api/types'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  useChangeRole,
+  useDeactivateUser,
+  useResetTwoFactor,
+  useSoleOwnership,
+} from '@/features/team/hooks'
+import { displayName } from '@/lib/people'
+
+type PendingAction = 'role' | 'two-factor' | 'deactivate'
+
+function countOf(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+/** Warns that what only this member owns would be left with nobody able to
+ * manage its sharing; nothing when they share ownership of everything. */
+function soleOwnershipWarning({ projects, documents }: SoleOwnership) {
+  const owned = [
+    projects && countOf(projects, 'project'),
+    documents && countOf(documents, 'document'),
+  ].filter(Boolean)
+  if (!owned.length) {
+    return null
+  }
+  return `They're the only Owner of ${owned.join(' and ')}. Nobody can change who has access to those until they're reactivated.`
+}
+
+/** An admin's menu for one member: switch them between admin and member,
+ * reset their two-factor sign-in (when it's on), or deactivate them - each
+ * confirmed first. Admins can't do either to
+ * themselves (the API refuses), so the caller leaves this out of their row. */
+export function MemberActions({ member }: { member: UserDetail }) {
+  const [confirming, setConfirming] = useState<PendingAction | null>(null)
+  const changeRole = useChangeRole()
+  const resetTwoFactor = useResetTwoFactor()
+  const deactivate = useDeactivateUser()
+  const soleOwnership = useSoleOwnership(member.id, { enabled: confirming === 'deactivate' })
+  const ownershipWarning = soleOwnership.data && soleOwnershipWarning(soleOwnership.data)
+  const who = displayName(member)
+  const isAdmin = member.org_role === 'ADMIN'
+
+  const close = () => setConfirming(null)
+  const reportFailure = (fallback: string) => (error: unknown) => {
+    toast.error(actionErrorMessage(error, fallback))
+    close()
+  }
+
+  const switchRole = () =>
+    changeRole.mutate(
+      { userId: member.id, orgRole: isAdmin ? 'MEMBER' : 'ADMIN' },
+      {
+        onSuccess: (updated) => {
+          toast.success(`${who} is now ${updated.org_role === 'ADMIN' ? 'an admin' : 'a member'}.`)
+          close()
+        },
+        onError: reportFailure(`Couldn't change ${who}'s role.`),
+      },
+    )
+
+  const resetMemberTwoFactor = () =>
+    resetTwoFactor.mutate(member.id, {
+      onSuccess: () => {
+        toast.success(`Reset ${who}'s two-factor sign-in.`)
+        close()
+      },
+      onError: reportFailure(`Couldn't reset ${who}'s two-factor sign-in.`),
+    })
+
+  const deactivateMember = () =>
+    deactivate.mutate(member.id, {
+      onSuccess: () => {
+        toast.success(`Deactivated ${who}.`)
+        close()
+      },
+      onError: reportFailure(`Couldn't deactivate ${who}.`),
+    })
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${who}`}>
+            <EllipsisIcon aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => setConfirming('role')}>
+            {isAdmin ? 'Make member' : 'Make admin'}
+          </DropdownMenuItem>
+          {member.two_factor_enabled && (
+            <DropdownMenuItem onSelect={() => setConfirming('two-factor')}>
+              Reset two-factor sign-in
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem variant="destructive" onSelect={() => setConfirming('deactivate')}>
+            Deactivate
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmDialog
+        open={confirming === 'role'}
+        onOpenChange={close}
+        title={isAdmin ? `Make ${who} a member?` : `Make ${who} an admin?`}
+        description={
+          isAdmin
+            ? "They'll no longer be able to manage people, billing or organization settings."
+            : 'Admins manage people, invitations, billing and organization settings, and create projects.'
+        }
+        confirmLabel={isAdmin ? 'Make member' : 'Make admin'}
+        onConfirm={switchRole}
+        isPending={changeRole.isPending}
+      />
+      <ConfirmDialog
+        open={confirming === 'two-factor'}
+        onOpenChange={close}
+        title={`Reset ${who}'s two-factor sign-in?`}
+        description="For someone who lost their phone and their recovery codes. They'll log in with their password alone until they set it up again, and they'll be emailed that you did this."
+        confirmLabel="Reset"
+        destructive
+        onConfirm={resetMemberTwoFactor}
+        isPending={resetTwoFactor.isPending}
+      />
+      <ConfirmDialog
+        open={confirming === 'deactivate'}
+        onOpenChange={close}
+        title={`Deactivate ${who}?`}
+        description={
+          <>
+            They&apos;ll be signed out and can&apos;t log in until an admin reactivates them. What
+            they&apos;ve created and shared stays where it is.
+            {ownershipWarning && (
+              <span className="mt-2 block font-medium text-foreground">{ownershipWarning}</span>
+            )}
+          </>
+        }
+        confirmLabel="Deactivate"
+        destructive
+        onConfirm={deactivateMember}
+        isPending={deactivate.isPending}
+      />
+    </>
+  )
+}

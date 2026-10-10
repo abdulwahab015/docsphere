@@ -7,14 +7,29 @@ services:
     ports:
       - "6379:6379"
 
+  migrate:
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
   web:
     command: python manage.py runserver 0.0.0.0:8000
+    # For the Vite dev server (make fe-dev), which calls the API directly.
+    ports:
+      - "8000:8000"
     volumes:
       - .:/app
     environment:
       DJANGO_SETTINGS_MODULE: core.settings.local
 
   worker:
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings.local
+
+  beat:
     volumes:
       - .:/app
     environment:

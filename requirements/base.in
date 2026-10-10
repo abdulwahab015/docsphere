@@ -10,10 +10,12 @@ django-extensions==4.1.*
 djangorestframework==3.18.*
 djangorestframework-simplejwt==5.5.*
 drf-spectacular==0.30.*
-flower==2.0.*
-gunicorn==23.0.*
+flower==2.2.*
+gunicorn==26.2.*
 openpyxl==3.1.*
+pyotp==2.10.*
 psycopg[binary]==3.3.*
 python-decouple==3.8.*
 redis==8.1.*
-whitenoise==6.8.*
+sentry-sdk==2.*
+whitenoise==6.12.*
