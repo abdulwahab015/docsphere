@@ -1,7 +1,7 @@
 # Runtime dependencies (top-level only). Compiled to base.txt by `make compile`.
 # What the production image installs — see Dockerfile.
 
-celery==5.6.*
+celery==5.7.*
 dj-database-url==3.1.*
 dj-stripe==2.11.*
 Django==6.1.*
