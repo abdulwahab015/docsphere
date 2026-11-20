@@ -1,7 +1,7 @@
 # Runtime dependencies (top-level only). Compiled to base.txt by `make compile`.
 # What the production image installs — see Dockerfile.
 
-celery==5.6.*
+celery==5.7.*
 dj-database-url==3.1.*
 dj-stripe==2.11.*
 Django==6.1.*
@@ -13,7 +13,7 @@ drf-spectacular==0.30.*
 flower==2.2.*
 gunicorn==26.2.*
 openpyxl==3.1.*
-pyotp==2.10.*
+pyotp==2.12.*
 psycopg[binary]==3.3.*
 python-decouple==3.8.*
 redis==8.1.*
